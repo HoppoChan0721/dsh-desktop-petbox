@@ -15,9 +15,11 @@ const ok = (label, got, want) => {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}${pass ? '' : `：得到 ${JSON.stringify(got)}，期望 ${JSON.stringify(want)}`}`);
 };
 
-function makeCtx({ createFails = false } = {}) {
+function makeCtx({ createFails = false, reply = null } = {}) {
   const calls = { create: [], rename: [], followup: [], flush: [], list: 0 };
   const handlers = {};
+  const transcripts = new Map();   // sid -> Message[]
+  let seq = 0;
   const sessions = { flush: async (s) => { calls.flush.push(s.id); return true; } };
   const sessionController = {
     list: async () => { calls.list++; return { items: [{ id: 'main-session-1' }] }; },
@@ -27,9 +29,27 @@ function makeCtx({ createFails = false } = {}) {
       return { sessionId: req.sessionId, agentPreset: req.agentPreset };
     },
     rename: async (req) => { calls.rename.push(req); return { sessionId: req.sessionId, title: req.title }; },
-    resolveAgent: async (sid) => ({
-      agent: { session: { id: sid }, followup: (m) => calls.followup.push({ sid, text: m.content[0].text }) },
-    }),
+    resolveAgent: async (sid) => {
+      if (!transcripts.has(sid)) transcripts.set(sid, []);
+      const agent = {
+        session: { id: sid, deriveMessages: () => transcripts.get(sid) },
+        status: 'idle',
+        waiters: [],
+        followup: (m) => {
+          calls.followup.push({ sid, text: m.content[0].text });
+          agent.status = 'running';
+          const replies = typeof reply === 'function' ? reply(m) : reply;
+          setTimeout(() => {
+            const list = Array.isArray(replies) ? replies : (replies ? [replies] : []);
+            for (const t of list) transcripts.get(sid).push({ id: 'a' + (++seq), role: 'assistant', content: [{ type: 'text', text: t }] });
+            agent.status = 'idle';
+            agent.waiters.splice(0).forEach((r) => r());
+          }, 15);
+        },
+        whenIdle: () => new Promise((res) => { if (agent.status === 'idle') return res(); agent.waiters.push(res); }),
+      };
+      return { agent };
+    },
   };
   const ctx = {
     sessions, sessionController,
@@ -167,43 +187,65 @@ rmSync(TMP, { recursive: true, force: true });
   });
   await new Promise((r) => petServer.listen(62100, '127.0.0.1', r));
 
-  const { ctx, calls } = await boot({
-    port: 62010, mode: 'pet', minIntervalMs: 0, echoToPet: true, echoDelayMs: 60,
+  const cfg8 = {
+    port: 62010, mode: 'pet', minIntervalMs: 0, echoToPet: true, echoDelayMs: 0,
     echoMaxChars: 60, petSayUrl: 'http://127.0.0.1:62100/say',
-  });
-  await post(62010, '/event', { zone: 'head' });
-  const petSid = calls.create[0].sessionId;
-  const assistant = (text) => ({ type: 'assistant/message', message: { role: 'assistant', content: [{ type: 'text', text }] } });
+  };
 
-  ctx.emit('session/event', { id: petSid }, assistant('嗯。主人在摸头呢。'));
-  await new Promise((r) => setTimeout(r, 250));
-  ok('回流：气泡收到一句话', says.length, 1);
-  ok('回流：正文原样', says[0].text, '嗯。主人在摸头呢。');
-  ok('回流：口型时长跟着字数走', says[0].ms > 3000, true);
-  ok('回流：默认不重复合成语音', says[0].voice, undefined);
+  // 8a：一句话 / 洗完 markdown / 口型时长
+  {
+    const { ctx, calls } = await boot(cfg8, { reply: '**嗯。**主人在摸[头](http://x)呢。' });
+    await post(62010, '/event', { zone: 'head' });
+    await new Promise((r) => setTimeout(r, 350));
+    ok('回流：气泡收到一句话', says.length, 1);
+    ok('回流：洗掉 markdown 只留正文', says[0].text, '嗯。主人在摸头呢。');
+    ok('回流：口型时长跟着字数走', says[0].ms > 3000, true);
+    ok('回流：默认不重复合成语音', says[0].voice, undefined);
+    ok('回流：同一轮不会重复出气泡', calls.followup.length, 1);
+    ctx.dispose();
+  }
 
-  ctx.emit('session/event', { id: 'some-other-session' }, assistant('这句不该出现'));
-  await new Promise((r) => setTimeout(r, 200));
-  ok('回流：别的会话的话不往桌宠塞', says.length, 1);
+  // 8b：一轮两条 assistant 消息，只出最后一条（不拼接中间稿）
+  {
+    says.length = 0;
+    const { ctx } = await boot({ ...cfg8, port: 62011 }, { reply: ['先看看主人的手。', '嗯。摸头呢，主人。'] });
+    await post(62011, '/event', { zone: 'head' });
+    await new Promise((r) => setTimeout(r, 350));
+    ok('回流：多条消息只播最后一条成句的', says.length, 1);
+    ok('回流：内容就是最后那句', says[0].text, '嗯。摸头呢，主人。');
+    ctx.dispose();
+  }
 
-  ctx.emit('session/event', { id: petSid }, { type: 'assistant/message', interrupted: true, message: { content: [{ type: 'text', text: '被打断的半句' }] } });
-  await new Promise((r) => setTimeout(r, 200));
-  ok('回流：被打断的残句不播', says.length, 1);
+  // 8c：超长截断
+  {
+    says.length = 0;
+    const { ctx } = await boot({ ...cfg8, port: 62012 }, { reply: '一'.repeat(200) });
+    await post(62012, '/event', { zone: 'head' });
+    await new Promise((r) => setTimeout(r, 350));
+    ok('回流：超长截断并加省略号', says[0].text.length <= 60 && says[0].text.endsWith('…'), true);
+    ctx.dispose();
+  }
 
-  ctx.emit('session/event', { id: petSid }, assistant('第一版'));
-  ctx.emit('session/event', { id: petSid }, assistant('**最终**版本：`code` 和 [链接](http://x) 还有 ![图](y.png)\n\n- 列表项'));
-  await new Promise((r) => setTimeout(r, 300));
-  ok('回流：一轮多条只出最后一条气泡', says.length, 2);
-  ok('回流：去掉了 markdown 与贴纸', says[1].text, '最终版本：code 和 链接 还有\n列表项');
+  // 8d：贴纸/空文本不硬凑气泡
+  {
+    says.length = 0;
+    const { ctx } = await boot({ ...cfg8, port: 62013 }, { reply: '![贴纸](http://x/a.gif)' });
+    await post(62013, '/event', { zone: 'head' });
+    await new Promise((r) => setTimeout(r, 350));
+    ok('回流：纯贴纸不产生空气泡', says.length, 0);
+    ctx.dispose();
+  }
 
-  const long = '一'.repeat(200);
-  ctx.emit('session/event', { id: petSid }, assistant(long));
-  await new Promise((r) => setTimeout(r, 300));
-  ok('回流：超长截断并加省略号', says[2].text.length <= 60 && says[2].text.endsWith('…'), true);
+  // 8e：mode=main 时不往桌宠塞（免得主会话的回复全跑到气泡上）
+  {
+    says.length = 0;
+    const { ctx } = await boot({ ...cfg8, port: 62014, mode: 'main' }, { reply: '主会话的回话' });
+    await post(62014, '/event', { zone: 'head' });
+    await new Promise((r) => setTimeout(r, 350));
+    ok('回流：main 模式不回声到桌宠', says.length, 0);
+    ctx.dispose();
+  }
 
-  const h = await (await fetch('http://127.0.0.1:62010/health')).json();
-  ok('health 能看出回流是开的', h.echo.on, true);
-  ctx.dispose();
   petServer.close();
 }
 

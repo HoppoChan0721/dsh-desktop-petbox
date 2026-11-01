@@ -139,11 +139,13 @@ export function apply(ctx, config = {}) {
 
   // ---- 回流：会话里说的话 → 桌宠气泡 ----
   // 没有这一段，点触的结果只会躺在那个会话窗口里，主人在桌面上什么都看不到。
-  let echoPending = null, echoTimer = null, echoLastAt = 0;
+  // 做法：投完消息后等这一轮跑完（agent.whenIdle），再从会话里读**本轮新增的** assistant 消息。
+  // 早先试过监听 ctx.on('session/event') 的 assistant/message，实测一条都没触发（日志里 4 次点触 0 次回流），
+  // 所以不再依赖事件派发，直接读 session.deriveMessages()。
+  let echoLastAt = 0;
 
-  function bubbleText(message) {
-    const blocks = (message && message.content) || [];
-    let t = blocks
+  function bubbleText(blocks) {
+    let t = (blocks || [])
       .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text)
       .join('\n');
@@ -161,6 +163,15 @@ export function apply(ctx, config = {}) {
       .replace(/[ \t]+\n/g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
+    return t;
+  }
+
+  // 一轮可能有好几条 assistant 消息（边说边调工具）：只用最后一条，
+  // 前面的多是「我先看看」这类过程话，拼起来气泡会变成刷屏。
+  function replyTextOf(blocksList) {
+    const texts = blocksList.map((bl) => bubbleText(bl)).filter(Boolean);
+    if (!texts.length) return '';
+    let t = texts[texts.length - 1];
     if (t.length > cfg.echoMaxChars) t = t.slice(0, Math.max(1, cfg.echoMaxChars - 1)).trimEnd() + '…';
     return t;
   }
@@ -178,43 +189,55 @@ export function apply(ctx, config = {}) {
     return true;
   }
 
-  function flushEcho() {
-    echoTimer = null;
-    const text = echoPending;
-    echoPending = null;
-    if (!text) return;
-    const wait = cfg.echoDelayMs || 0;
-    const at = Date.now();
-    if (at - echoLastAt < wait) {   // 上一句刚出过气泡，别叠着刷
-      echoPending = text;
-      echoTimer = setTimeout(flushEcho, wait - (at - echoLastAt));
-      return;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function assistantMessages(session) {
+    try {
+      const msgs = typeof session.deriveMessages === 'function' ? session.deriveMessages() : [];
+      return (msgs || []).filter((m) => m && m.role === 'assistant');
+    } catch (e) {
+      log('deriveMessages failed: ' + e.message);
+      return [];
     }
-    echoLastAt = at;
-    sayOnPet(text)
-      .then(() => log(`echoed to pet (${text.length} chars)`))
-      .catch((e) => log('echo to pet failed: ' + e.message));
   }
 
-  if (cfg.echoToPet) {
-    ctx.on('session/event', (session, event) => {
-      if (!petSid || !session || session.id !== petSid) return;
-      if (!event || event.type !== 'assistant/message' || event.interrupted) return;
-      const text = bubbleText(event.message);
-      if (!text) return;
-      echoPending = text;   // 一轮里最后一条会盖掉前面的中间稿
-      if (!echoTimer) echoTimer = setTimeout(flushEcho, cfg.echoDelayMs || 0);
-    });
-    log('echo to pet enabled -> ' + cfg.petSayUrl);
+  // 投完就挂一个「等这轮结束再出气泡」的尾巴，不阻塞投递本身
+  function scheduleEcho(agent, seenIds) {
+    if (!cfg.echoToPet) return;
+    (async () => {
+      const started = Date.now();
+      while (agent.status === 'idle' && Date.now() - started < 8000) await sleep(120);   // 等驱动真的起来
+      try {
+        if (typeof agent.whenIdle === 'function') await agent.whenIdle();
+      } catch {}
+      const fresh = assistantMessages(agent.session).filter((m) => !seenIds.has(m.id));
+      if (!fresh.length) { log('echo: idle but no new assistant message'); return; }
+      const text = replyTextOf(fresh.map((m) => m.content));
+      if (!text) { log('echo: assistant message had no text'); return; }
+      const wait = cfg.echoDelayMs || 0;
+      const gap = Date.now() - echoLastAt;
+      if (gap < wait) await sleep(wait - gap);   // 连着两轮时别把气泡叠在一起
+      echoLastAt = Date.now();
+      try {
+        await sayOnPet(text);
+        log(`echoed to pet (${text.length} chars)`);
+      } catch (e) {
+        log('echo to pet failed: ' + e.message);
+      }
+    })().catch((e) => log('echo pipeline failed: ' + e.message));
   }
+
+  if (cfg.echoToPet) log('echo to pet enabled -> ' + cfg.petSayUrl);
 
   // ---- 投递 ----
-  async function deliverTo(sid, text) {
+  async function deliverTo(sid, text, echo = false) {
     if (!sid) throw new Error('no session to wake');
     const resolved = await ctx.sessionController.resolveAgent(sid);
     if (!resolved || resolved.error) throw new Error('resolveAgent: ' + JSON.stringify((resolved && resolved.error) || null));
     const agent = resolved.agent;
     if (!agent || typeof agent.followup !== 'function') throw new Error('agent has no followup');
+    // 先把「发之前已有的回复」记下来，等这轮跑完只有新增的才算本轮的回应
+    const seen = echo ? new Set(assistantMessages(agent.session).map((m) => m.id)) : null;
     const message = {
       role: 'user',
       id: randomUUID(),
@@ -223,6 +246,7 @@ export function apply(ctx, config = {}) {
     };
     agent.followup(message);
     const flushed = await ctx.sessions.flush(agent.session);
+    if (echo) scheduleEcho(agent, seen);
     return { sessionId: sid, flushed: !!flushed };
   }
 
@@ -230,7 +254,7 @@ export function apply(ctx, config = {}) {
     if (cfg.mode === 'pet') {
       try {
         const sid = await ensurePetSession();
-        return { ...(await deliverTo(sid, text)), target: 'pet' };
+        return { ...(await deliverTo(sid, text, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
       } catch (e) {
         petReady = false;   // 下一次点触重新建
         if (!cfg.fallbackToMain) throw e;
