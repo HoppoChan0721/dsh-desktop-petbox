@@ -34,6 +34,7 @@ const DEFAULTS = {
   onTop: true,
   cursorTrack: true,
   autoMood: true,
+  spinTurns: 6,             // 绕她转几圈才算一节（2~20）：晕 → 嫌弃 → 生气
   voiceVolume: 0.5,
   bubblePos: 'bottom',
 };

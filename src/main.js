@@ -250,7 +250,11 @@ function startMoodServer() {
           const j = JSON.parse(raw || '{}');
           if (typeof j.on === 'boolean') cursorTrack = j.on;
           if (j.spin) spinAdvance();                                   // 调试：手动推一节（不转圈也能验）
-          if (j.reset) { spinStage = 0; spinHist = []; spinSuspendedUntil = 0; spinCooldownUntil = 0; }
+          if (Number.isFinite(Number(j.turns))) {                       // 调试：改「一节几圈」不用重启
+            spinTurns = Math.min(20, Math.max(2, Math.round(Number(j.turns))));
+            saveCfg({ spinTurns });
+          }
+          if (j.reset) { spinStage = 0; spinClear(); spinSuspendedUntil = 0; spinCooldownUntil = 0; }
           saveCfg({ cursorTrack });
           lastCursorKey = '';
           if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} }
@@ -270,7 +274,7 @@ function startMoodServer() {
       return send(200, { ok: true, track: cursorTrack, win: { x: wx, y: wy, w: ww, h: wh },
         cursor: p, lastKey: lastCursorKey,
         spinZone: { ...z, dx: zdx, dy: zdy, dist: Math.round(Math.hypot(zdx, zdy)), inZone: inSpinZone(zdx, zdy, ww, wh) },
-        spin: { stage: spinStage, suspendedMs: Math.max(0, spinSuspendedUntil - Date.now()), cooldownMs: Math.max(0, spinCooldownUntil - Date.now()), hist: spinHist.length },
+        spin: { stage: spinStage, suspendedMs: Math.max(0, spinSuspendedUntil - Date.now()), cooldownMs: Math.max(0, spinCooldownUntil - Date.now()), hist: spinHist.length, turns: spinTurns, accum: Number(spinAccum.toFixed(3)), dir: spinDir },
         displays: screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, work: d.workArea, scale: d.scaleFactor })) });
     }
     if (req.method === 'GET' && req.url === '/sway/plan') return send(200, swayPlan());
@@ -1037,10 +1041,13 @@ ipcMain.on('pet:need-smart', (e) => {
 let cursorTrack = true, cursorTimer = null, lastCursorKey = '', lastCursorSentAt = 0;
 
 // 绕着她转圈 → 眩晕 → 嫌弃 → 黑脸生气 → 冷却（2026-11-01 主人点的玩法）
-// 判据：以**头部**为圆心（不是模型中心：头在窗口约 22% 高处），指针到头的半径 > 55px 时累计有向转角，
-// 2.6 秒内转满一整圈记一节。范围：头周围一圈（zoneR 是窗口高度的比例），屏幕别处随手画圈不算调戏。
-const SPIN = { winMs: 2600, minR: 55, headX: 0.503, headY: 0.22, zoneR: 0.27, stageGap: 900 };
+// 判据：以**头部**为圆心（不是模型中心：头在窗口约 22% 高处），指针到头的半径 > 55px 时累计有向转角。
+// 2026-11-01 主人反馈「两圈太灵敏」→ 一节改成攒满 turnsPerStage 圈（默认 6，config.spinTurns 可调 2~20），
+// 不再用「时间窗内凑够一圈」那种判法：手一停（gapMs）、离开调戏区、或明确反向就清零重来。
+const SPIN = { gapMs: 700, minR: 55, headX: 0.503, headY: 0.22, zoneR: 0.27, stageGap: 900, turnsPerStage: 6 };
 let spinHist = [], spinStage = 0, spinSuspendedUntil = 0, spinCooldownUntil = 0, spinLastStageAt = 0;
+let spinAccum = 0, spinDir = 0, spinLastA = null, spinAccumAt = 0;
+let spinTurns = SPIN.turnsPerStage;   // 一节要转几圈：启动时从 config.spinTurns 读（2~20）
 const COOLDOWN_MS = 26000;
 
 function exprPlan(name, secs, strength) {
@@ -1071,7 +1078,7 @@ function pushPetPlan(plan, ms) {
 function spinAdvance() {
   const now = Date.now();
   if (now < spinCooldownUntil || now - spinLastStageAt < SPIN.stageGap) return;
-  spinLastStageAt = now; spinHist = []; spinStage++;
+  spinLastStageAt = now; spinStage++; spinClear();
   if (spinStage === 1) {
     // 第一节：转晕了，眼睛成漩涡，暂时不理鼠标
     spinSuspendedUntil = now + 3600;
@@ -1100,25 +1107,34 @@ function inSpinZone(dx, dy, ww, wh) {
   return Math.hypot(dx, dy) <= spinZone(ww, wh).r;
 }
 
+function spinClear() { spinAccum = 0; spinDir = 0; spinLastA = null; spinHist = []; }
+
 function spinDetect(p, wx, wy, ww, wh) {
   const now = Date.now();
-  if (spinStage >= 3 && now >= spinCooldownUntil) { spinStage = 0; spinHist = []; }
-  if (now < spinCooldownUntil || now < spinSuspendedUntil) return;
+  if (spinStage >= 3 && now >= spinCooldownUntil) { spinStage = 0; spinClear(); }
+  if (now < spinCooldownUntil || now < spinSuspendedUntil) { spinClear(); return; }
   const z = spinZone(ww, wh);
   const dx = p.x - (wx + z.cx), dy = p.y - (wy + z.cy);   // 相对头部，不是窗口中心
-  if (Math.hypot(dx, dy) < SPIN.minR) return;
-  if (Math.hypot(dx, dy) > z.r) { spinHist = []; return; }   // 圈画在别处：不记，也别攒着拼成一圈
-  spinHist.push({ t: now, a: Math.atan2(dy, dx) });
-  while (spinHist.length && now - spinHist[0].t > SPIN.winMs) spinHist.shift();
-  if (spinHist.length < 4) return;
-  let total = 0;
-  for (let i = 1; i < spinHist.length; i++) {
-    let d = spinHist[i].a - spinHist[i - 1].a;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    total += d;
-  }
-  if (Math.abs(total) >= Math.PI * 2) spinAdvance();
+  const dist = Math.hypot(dx, dy);
+  if (dist < SPIN.minR || dist > z.r) { spinClear(); return; }   // 手离开调戏区：之前的都不算
+  // 手停了：断档超过 gapMs 就作废，别让好几段零碎的转合成一节
+  if (now - spinAccumAt > SPIN.gapMs) { spinAccum = 0; spinDir = 0; spinLastA = null; }
+  const a = Math.atan2(dy, dx);
+  spinHist.push({ t: now, a });
+  if (spinHist.length > 240) spinHist.shift();   // 只留作调试回看
+  if (spinLastA === null) { spinLastA = a; spinAccumAt = now; return; }
+  let d = a - spinLastA;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  spinLastA = a;
+  if (Math.abs(d) < 0.002) return;   // 抖动/停手不算转角，也不刷新断档计时
+  spinAccumAt = now;
+  const dir = d > 0 ? 1 : -1;
+  if (spinDir === 0) { spinDir = dir; spinAccum = 0; }
+  else if (dir !== spinDir && Math.abs(d) > 0.35) { spinDir = dir; spinAccum = 0; }   // 明确反手：重新数
+  spinAccum += d;
+  const need = Math.PI * 2 * spinTurns;
+  if (Math.abs(spinAccum) >= need) spinAdvance();
 }
 
 function startCursorTrack() {
@@ -1321,6 +1337,7 @@ app.whenReady().then(() => {
   interactive = loadCfg().interactive !== false;
   autoMood = loadCfg().autoMood !== false;
   cursorTrack = loadCfg().cursorTrack !== false;
+  { const st = Number(loadCfg().spinTurns); spinTurns = Number.isFinite(st) ? Math.min(20, Math.max(2, Math.round(st))) : SPIN.turnsPerStage; }
   const vv = Number(loadCfg().voiceVolume);
   voiceVolume = Number.isFinite(vv) ? Math.max(0, Math.min(1, vv)) : 0.5;
   saveCfg({ autoMood, voiceVolume });
