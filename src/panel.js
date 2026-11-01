@@ -113,3 +113,4 @@ box('reset').onclick = () => {
   window.petSize.commit(w, h);
 };
 box('close').onclick = () => window.petSize.close();
+box('x').onclick = () => window.petSize.close();

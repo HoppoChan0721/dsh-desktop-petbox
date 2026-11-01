@@ -6,9 +6,22 @@
 <style>
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     font: 13px system-ui, "Microsoft YaHei"; -webkit-user-select: none; user-select: none; }
-  .card { box-sizing: border-box; height: 100%; padding: 13px 15px; border-radius: 14px;
+  .card { box-sizing: border-box; height: 100%; padding: 10px 12px 12px; border-radius: 14px;
     background: rgba(22, 40, 52, .95); color: #eaf4f8; box-shadow: 0 10px 28px rgba(0, 0, 0, .38);
-    display: flex; flex-direction: column; gap: 10px; -webkit-app-region: drag; overflow-y: auto; }
+    display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  /* 拖拽区只留顶栏：整张卡片做 drag 会把滚轮一起吃掉，只有按钮上能滚 */
+  .head { display: flex; align-items: center; justify-content: space-between; height: 24px;
+    padding: 0 2px; -webkit-app-region: drag; }
+  .head .title { font-size: 12px; letter-spacing: .08em; color: #8fb4c6; }
+  .head .x { -webkit-app-region: no-drag; width: 22px; height: 22px; padding: 0; line-height: 1;
+    border: 0; border-radius: 6px; background: transparent; color: #7fa9bd; font-size: 15px; cursor: pointer; }
+  .head .x:hover { background: #2f4b5c; color: #eaf4f8; }
+  .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: 10px; padding-right: 4px; -webkit-app-region: no-drag; }
+  .body::-webkit-scrollbar { width: 8px; }
+  .body::-webkit-scrollbar-track { background: transparent; }
+  .body::-webkit-scrollbar-thumb { background: #2f4b5c; border-radius: 4px; }
+  .body::-webkit-scrollbar-thumb:hover { background: #3a5c70; }
   .row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #a9c6d4; }
   .val { color: #8fe3ff; font-variant-numeric: tabular-nums; letter-spacing: .3px; }
   h3 { margin: 4px 0 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; color: #7fa9bd; }
@@ -23,7 +36,7 @@
   .field button, .btns button { padding: 5px 10px; border: 0; border-radius: 8px; background: #2f4b5c; color: #dceef7;
     font: 12px system-ui, "Microsoft YaHei"; cursor: pointer; white-space: nowrap; }
   .field button:hover, .btns button:hover { background: #3a5c70; }
-  .btns { display: flex; gap: 8px; margin-top: auto; padding-top: 6px; -webkit-app-region: no-drag; }
+  .btns { display: flex; gap: 8px; margin-top: 0; padding-top: 6px; -webkit-app-region: no-drag; }
   .btns button { flex: 1; padding: 7px 0; font-size: 13px; }
   .btns button.primary { background: #2f7f9e; }
   .btns button.primary:hover { background: #3894b8; }
@@ -36,39 +49,45 @@
 </head>
 <body>
   <div class="card">
-    <div class="row"><span>桌宠尺寸</span><span class="val" id="sizeVal">380 × 680</span></div>
-    <input id="r" type="range" min="420" max="1400" step="10" value="680">
+    <div class="head">
+      <span class="title">桌宠设置</span>
+      <button class="x" id="x" title="关闭">×</button>
+    </div>
+    <div class="body">
+      <div class="row"><span>桌宠尺寸</span><span class="val" id="sizeVal">380 × 680</span></div>
+      <input id="r" type="range" min="420" max="1400" step="10" value="680">
 
-    <h3>依赖路径</h3>
-    <div class="field">
-      <input id="jingyuRepo" type="text" placeholder="鲸语仓库目录（含 server.py）">
-      <button data-pick="jingyuRepo">浏览</button>
-    </div>
-    <div class="field">
-      <input id="modelDir" type="text" placeholder="模型目录（含 *.model3.json）">
-      <button data-pick="modelDir">浏览</button>
-    </div>
-    <div class="field">
-      <input id="pythonPath" type="text" placeholder="Python 解释器（留空自动探测）">
-      <button data-pick="pythonPath">浏览</button>
-    </div>
-    <div class="field">
-      <input id="stagePort" type="text" placeholder="鲸语端口 61942">
-      <input id="moodPort" type="text" placeholder="控制端口 61943">
-    </div>
+      <h3>依赖路径</h3>
+      <div class="field">
+        <input id="jingyuRepo" type="text" placeholder="鲸语仓库目录（含 server.py）">
+        <button data-pick="jingyuRepo">浏览</button>
+      </div>
+      <div class="field">
+        <input id="modelDir" type="text" placeholder="模型目录（含 *.model3.json）">
+        <button data-pick="modelDir">浏览</button>
+      </div>
+      <div class="field">
+        <input id="pythonPath" type="text" placeholder="Python 解释器（留空自动探测）">
+        <button data-pick="pythonPath">浏览</button>
+      </div>
+      <div class="field">
+        <input id="stagePort" type="text" placeholder="鲸语端口 61942">
+        <input id="moodPort" type="text" placeholder="控制端口 61943">
+      </div>
 
-    <h3>互动</h3>
-    <label class="check"><input id="interactive" type="checkbox"> 分区互动（点她会按部位反应，悬停时光标变软点）</label>
-    <div class="hint">关掉后点她等于点空气：不说话、不记事、不叫醒会话，Alt+拖拽和穿透照旧。</div>
+      <h3>互动</h3>
+      <label class="check"><input id="interactive" type="checkbox"> 分区互动（点她会按部位反应，悬停时光标变软点）</label>
+      <div class="hint">关掉后点她等于点空气：不说话、不记事、不叫醒会话，Alt+拖拽和穿透照旧。</div>
 
-    <h3>可选集成</h3>
-    <label class="check"><input id="dshWatch" type="checkbox"> DSH 会话联动（把会话状态演成动作）</label>
-    <div class="field">
-      <input id="dshSessionsDir" type="text" placeholder="DSH 会话目录（sessions）">
-      <button data-pick="dshSessionsDir">浏览</button>
+      <h3>可选集成</h3>
+      <label class="check"><input id="dshWatch" type="checkbox"> DSH 会话联动（把会话状态演成动作）</label>
+      <div class="field">
+        <input id="dshSessionsDir" type="text" placeholder="DSH 会话目录（sessions）">
+        <button data-pick="dshSessionsDir">浏览</button>
+      </div>
+
+      <div class="hint" id="status"></div>
     </div>
-
-    <div class="hint" id="status"></div>
 
     <div class="btns">
       <button id="reset">恢复默认尺寸</button>
