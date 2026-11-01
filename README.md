@@ -128,7 +128,24 @@ node cli/pet.mjs touches 20
 
 同一份数据也会追加进 `data/touch.jsonl`（超过 256KB 自动轮转成 `touch.jsonl.1`），随时可以 `GET /touches` 或 `node cli/pet.mjs touches` 回看主人都点了哪儿。
 
-DSH 这边的接法是 `dsh-pet-bridge` 插件：收到事件后按 `sessionController.resolveAgent → agent.followup → sessions.flush` 往当前会话投一条 user 消息，于是「摸头」真的会触发一次模型调用。它带同部位 2.5 秒合并、每分钟 8 条上限，避免连点刷屏。
+DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后按 `sessionController.resolveAgent → agent.followup → sessions.flush` 投一条 user 消息，于是「摸头」真的会触发一次模型调用。它带同部位 2.5 秒合并、每分钟 8 条上限，避免连点刷屏。
+
+**默认投专用会话，不碰主会话**（`mode: pet`）：第一次点触时它会 `sessionController.create()` 建一个固定会话（自动改名「桌宠互动」，用 `bigfish` 预设，所以人设跟主会话一致），之后所有点触都投那儿。这样正在写代码的主会话不会被「主人刚刚碰了你的胸口」插进等候区。会话 id 落在 `$DSH_HOME/pet-bridge.json`，重启沿用；`POST :61944/reset-pet-session` 换一个干净的；把 `mode` 改成 `main` 就退回旧行为（投最近活跃会话）。
+
+安装（DSH 侧）：
+
+```powershell
+# 1. 插件必须放在 profile 的 node_modules 里：cordis 以 profile 目录为基准解析包名，放别处会静默跳过
+Copy-Item -Recurse bridge/dsh-pet-bridge "$env:DSH_HOME/profiles/web/node_modules/dsh-pet-bridge"
+# 2. 用 overlay 注册（别写进会被热重载的 cordis.patch.yml），启动时加 --patch
+#    - insert:
+#        - id: pet-bridge
+#          name: dsh-pet-bridge
+#          config: { port: 61944, mode: pet }
+# 3. 重启 DSH，GET http://127.0.0.1:61944/health 应返回 mode / sessionId / petSessionId
+```
+
+自带冒烟测试（用假 ctx 跑真代码，不需要装 DSH）：`node bridge/dsh-pet-bridge/test/smoke.mjs`。
 
 ### 分区坐标怎么调
 
