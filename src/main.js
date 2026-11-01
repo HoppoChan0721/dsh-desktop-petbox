@@ -1009,7 +1009,7 @@ function setSize(w, h) { return applySize(w, h, true) || { width: w, height: h }
 function createPanel() {
   if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
   const area = screen.getPrimaryDisplay().workArea;
-  const PW = 396, PH = 588;
+  const PW = 396, PH = 430; // 高度贴着内容，不留空白
   panel = new BrowserWindow({
     width: PW, height: PH,
     x: area.x + Math.round((area.width - PW) / 2), y: area.y + Math.round((area.height - PH) / 2),
@@ -1083,8 +1083,8 @@ app.whenReady().then(() => {
   } else {
     // 第一次跑 / 配置不完整：直接开设置面板，让人填鲸语和模型目录
     plog('config incomplete: ' + R.problems.join(' | '));
+    createPanel();
   }
-  createPanel();
   tray = new Tray(trayIcon());
   tray.setToolTip('桌宠 · 右键菜单');
   tray.setContextMenu(buildMenu());
