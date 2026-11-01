@@ -34,6 +34,8 @@ const DEFAULTS = {
   onTop: true,
   cursorTrack: true,
   autoMood: true,
+  bridge: true,             // 模型桥接：点触要不要 POST 给 DSH 会话（关掉只留本地反应）
+  interactive: true,        // 分区互动总开关
   spinTurns: 6,             // 绕她转几圈才算一节（2~20）：晕 → 嫌弃 → 生气
   voiceVolume: 0.5,
   bubblePos: 'bottom',

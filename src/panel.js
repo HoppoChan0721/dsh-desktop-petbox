@@ -33,6 +33,7 @@ async function loadConfig() {
     }
     box('dshWatch').checked = !!cfg.dshWatch;
     box('interactive').checked = cfg.interactive !== false;
+    box('bridge').checked = cfg.bridge !== false;
     paintStatus(resolved);
   } catch (e) {
     statusEl.className = 'hint bad';
@@ -80,8 +81,21 @@ box('interactive').addEventListener('change', async () => {
   }
 });
 
+// 模型桥接开关：即时生效，不动她的本地反应
+box('bridge').addEventListener('change', async () => {
+  const on = box('bridge').checked;
+  try {
+    await window.petCfg.save({ bridge: on });
+    statusEl.className = 'hint good';
+    statusEl.textContent = on ? '模型桥接已开启，点她会叫醒会话。' : '模型桥接已关闭，点她只有本地反应，不会叫醒会话。';
+  } catch (e) {
+    statusEl.className = 'hint bad';
+    statusEl.textContent = '切换失败：' + e.message;
+  }
+});
+
 box('save').addEventListener('click', async () => {
-  const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked };
+  const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked, bridge: box('bridge').checked };
   for (const id of FIELDS) {
     const v = box(id).value.trim();
     if (id === 'stagePort' || id === 'moodPort') {

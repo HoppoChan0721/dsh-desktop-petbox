@@ -34,7 +34,7 @@ function plog(msg) {
 }
 
 let win = null, tray = null, panel = null, serverChild = null, spawnedServer = false;
-let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true;
+let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true;
 let watcherChild = null, autoMood = true, voicing = false;
 let voiceVolume = 0.5;   // 0..1，持久化在 config.json 的 voiceVolume
 let lastSay = null;   // 最近一次实时合成的结果（给演示脚本判断节奏用）
@@ -232,7 +232,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -416,6 +416,20 @@ function startMoodServer() {
       });
       return;
     }
+    // 模型桥接开关：点触要不要叫醒 DSH 会话
+    if (req.url === '/bridge' && (req.method === 'GET' || req.method === 'POST')) {
+      if (req.method === 'GET') return send(200, { ok: true, bridge: bridgeOn, url: String(loadCfg().bridgeUrl || '') });
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 256) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          const on = typeof j.on === 'boolean' ? j.on : !bridgeOn;
+          send(200, { ok: true, bridge: setBridge(on, true) });
+        } catch (e) { send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
     // 打开尺寸滑杆面板（托盘菜单也是走这里）
     if (req.method === 'POST' && req.url === '/panel') { createPanel(); send(200, { ok: true }); return; }
     // 全身 / 近景：换的是舞台的 fit 参数，不走窗口大小
@@ -520,6 +534,7 @@ function appendTouch(ev) {
 
 // 反向桥：把事件 POST 给 DSH 侧的 dsh-pet-bridge（fire-and-forget，失败只记一次日志）
 function forwardTouch(ev) {
+  if (!bridgeOn) return;   // 模型桥接关了：本地反应照做，只是不叫醒会话
   const url = String(loadCfg().bridgeUrl || '').trim();
   if (!url) return;
   try {
@@ -567,6 +582,15 @@ function setInteractive(on, save) {
   if (save) saveCfg({ interactive });
   if (win && !win.isDestroyed()) { try { win.webContents.send('pet:interactive', interactive); } catch {} }
   return interactive;
+}
+
+// 模型桥接开关：关掉只断「点触 → DSH 会话」那条线，本地表情/台词/记账照做。
+// 想自己逗她玩、又不想每摸一下都叫醒会话时用这个。
+function setBridge(on, save) {
+  bridgeOn = !!on;
+  bridgeWarned = false;
+  if (save) saveCfg({ bridge: bridgeOn });
+  return bridgeOn;
 }
 
 // 一次点击：去抖 → 落盘 → 反推给 DSH → 本地反应
@@ -1184,6 +1208,7 @@ ipcMain.handle('cfg:get', () => ({ cfg: loadCfg(), resolved: R }));
 ipcMain.handle('cfg:save', (_e, patch) => {
   saveCfg(patch || {});
   if (patch && typeof patch.interactive === 'boolean') setInteractive(patch.interactive, false);   // 存过了，只广播
+  if (patch && typeof patch.bridge === 'boolean') setBridge(patch.bridge, false);
   const r = refreshPaths();
   plog('config saved: ' + JSON.stringify(patch || {}));
   return r;
@@ -1289,6 +1314,7 @@ function buildMenu() {
     // 顶层只留 5 组：互动 / 外观 / 情绪 / 设置 / 更多。开关类都收进「互动」，别越铺越长。
     { label: '互动', submenu: [
       { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
+      { label: '模型桥接（点她会叫醒 DSH 会话）', type: 'checkbox', checked: bridgeOn, click: (item) => setBridge(item.checked, true) },
       { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
       { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
       { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
@@ -1344,6 +1370,7 @@ app.whenReady().then(() => {
   smart = loadCfg().smart !== false;
   alwaysOnTop = loadCfg().onTop !== false;
   interactive = loadCfg().interactive !== false;
+  bridgeOn = loadCfg().bridge !== false;
   autoMood = loadCfg().autoMood !== false;
   cursorTrack = loadCfg().cursorTrack !== false;
   { const st = Number(loadCfg().spinTurns); spinTurns = Number.isFinite(st) ? Math.min(20, Math.max(2, Math.round(st))) : SPIN.turnsPerStage; }

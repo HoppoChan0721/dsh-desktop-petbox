@@ -207,6 +207,16 @@ async function main() {
     return;
   }
 
+  if (cmd === 'bridge') {
+    // 模型桥接：点触要不要叫醒 DSH 会话。node pet.mjs bridge on|off
+    const a = String(F._[0] || '').toLowerCase();
+    const r = (a === 'on' || a === 'off')
+      ? await jpost(`${SHELL}/bridge`, { on: a === 'on' })
+      : await jget(`${SHELL}/bridge`);
+    console.log(JSON.stringify({ ok: r.status === 200, ...(r.data || {}) }, null, 2));
+    return;
+  }
+
   if (cmd === 'zones') {
     const force = !!(F.scan || F.force || F._[0] === 'scan');
     const r = await jget(`${SHELL}/zones${force ? '/scan' : ''}`);
@@ -362,6 +372,7 @@ const USAGE = `
   touches [n]                    最近 n 条点触记录（主人点了哪儿）
   zones [scan]                   量模型剪影轮廓，看分区对不对（换模型/换装后跑 scan 重标）
   interactive [on|off]           分区互动总开关（不带参数=读）
+  bridge [on|off]                模型桥接：点她要不要叫醒 DSH 会话（不带参数=读）
   expr <表情> [--strength 0.9]   24 个表情
   gesture <name>                  hand_on_chest / point / grass
   look <left|right|up|down|center>
