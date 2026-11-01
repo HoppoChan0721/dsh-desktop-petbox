@@ -32,6 +32,7 @@ async function loadConfig() {
       box(id).value = v === null || v === undefined ? '' : String(v);
     }
     box('dshWatch').checked = !!cfg.dshWatch;
+    box('interactive').checked = cfg.interactive !== false;
     paintStatus(resolved);
   } catch (e) {
     statusEl.className = 'hint bad';
@@ -66,8 +67,21 @@ for (const btn of document.querySelectorAll('[data-pick]')) {
   });
 }
 
+// 互动开关即时生效：改一下就存一下就广播，不用等「保存并重启」
+box('interactive').addEventListener('change', async () => {
+  const on = box('interactive').checked;
+  try {
+    await window.petCfg.save({ interactive: on });
+    statusEl.className = 'hint good';
+    statusEl.textContent = on ? '分区互动已开启。' : '分区互动已关闭，点她不会有反应了。';
+  } catch (e) {
+    statusEl.className = 'hint bad';
+    statusEl.textContent = '切换失败：' + e.message;
+  }
+});
+
 box('save').addEventListener('click', async () => {
-  const patch = { dshWatch: box('dshWatch').checked };
+  const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked };
   for (const id of FIELDS) {
     const v = box(id).value.trim();
     if (id === 'stagePort' || id === 'moodPort') {

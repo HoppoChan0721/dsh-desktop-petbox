@@ -34,7 +34,7 @@ function plog(msg) {
 }
 
 let win = null, tray = null, panel = null, serverChild = null, spawnedServer = false;
-let dragTimer = null, smart = true, alwaysOnTop = true;
+let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true;
 let watcherChild = null, autoMood = true, voicing = false;
 let voiceVolume = 0.5;   // 0..1，持久化在 config.json 的 voiceVolume
 let lastSay = null;   // 最近一次实时合成的结果（给演示脚本判断节奏用）
@@ -220,7 +220,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -386,6 +386,20 @@ function startMoodServer() {
       });
       return;
     }
+    // 分区互动总开关：GET 读、POST 设（不带 on 就是切换）
+    if (req.url === '/interactive' && (req.method === 'GET' || req.method === 'POST')) {
+      if (req.method === 'GET') return send(200, { ok: true, interactive });
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 256) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          const on = typeof j.on === 'boolean' ? j.on : !interactive;
+          send(200, { ok: true, interactive: setInteractive(on, true) });
+        } catch (e) { send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
     // 打开尺寸滑杆面板（托盘菜单也是走这里）
     if (req.method === 'POST' && req.url === '/panel') { createPanel(); send(200, { ok: true }); return; }
     // 全身 / 近景：换的是舞台的 fit 参数，不走窗口大小
@@ -530,8 +544,18 @@ function touchReaction(ev, now) {
   sendMood(mood, many ? 0.9 : 0.65).catch(() => {});
 }
 
+// 分区互动总开关：关掉后点她等于点空气（不写日志、不通桥、不说话），光标回系统默认。
+// 退出开关状态由 config.interactive 记住，面板 / 托盘 / CLI 都走这里，即时生效不用重启。
+function setInteractive(on, save) {
+  interactive = !!on;
+  if (save) saveCfg({ interactive });
+  if (win && !win.isDestroyed()) { try { win.webContents.send('pet:interactive', interactive); } catch {} }
+  return interactive;
+}
+
 // 一次点击：去抖 → 落盘 → 反推给 DSH → 本地反应
 function handleTouch(p) {
+  if (!interactive) return null;
   const now = Date.now();
   if (now - lastTap < 220) return null;
   lastTap = now; lastInteract = now;
@@ -989,7 +1013,12 @@ ipcMain.on('pet:drag-start', () => {
   }, 16);
 });
 ipcMain.on('pet:drag-end', stopDrag);
-ipcMain.on('pet:need-smart', (e) => { try { e.sender.send('pet:smart', smart); } catch {} });
+ipcMain.on('pet:need-smart', (e) => {
+  try {
+    e.sender.send('pet:smart', smart);
+    e.sender.send('pet:interactive', interactive);
+  } catch {}
+});
 
 // ---- 指针追踪：主进程轮询全局鼠标，窗口穿透也照样能看 ----
 // 归一化到桌宠窗口：x/y ∈ -1..1（右/上为正）；指针离开桌宠所在屏幕时送 null，模型自然回到待机
@@ -1117,6 +1146,7 @@ ipcMain.handle('size:get', () => {
 ipcMain.handle('cfg:get', () => ({ cfg: loadCfg(), resolved: R }));
 ipcMain.handle('cfg:save', (_e, patch) => {
   saveCfg(patch || {});
+  if (patch && typeof patch.interactive === 'boolean') setInteractive(patch.interactive, false);   // 存过了，只广播
   const r = refreshPaths();
   plog('config saved: ' + JSON.stringify(patch || {}));
   return r;
@@ -1212,6 +1242,7 @@ function buildMenu() {
     { type: 'separator' },
     { label: '置顶显示', type: 'checkbox', checked: alwaysOnTop, click: (item) => { alwaysOnTop = item.checked; saveCfg({ onTop: alwaysOnTop }); if (win) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver'); } },
     { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
+    { label: '分区互动（点她会有反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
     { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
     { label: '自动情绪（跟随 DSH 回复，需在设置里开联动）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
     { label: '全身 / 近景', submenu: [
@@ -1253,6 +1284,7 @@ app.whenReady().then(() => {
   refreshPaths();   // 先摊平配置，才知道鲸语在哪、模型在哪
   smart = loadCfg().smart !== false;
   alwaysOnTop = loadCfg().onTop !== false;
+  interactive = loadCfg().interactive !== false;
   autoMood = loadCfg().autoMood !== false;
   cursorTrack = loadCfg().cursorTrack !== false;
   const vv = Number(loadCfg().voiceVolume);

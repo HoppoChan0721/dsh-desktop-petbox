@@ -195,6 +195,18 @@ async function main() {
     return;
   }
 
+  if (cmd === 'interactive') {
+    const a = String(F._[0] || '').toLowerCase();
+    if (a === 'on' || a === 'off') {
+      const r = await jpost(`${SHELL}/interactive`, { on: a === 'on' });
+      console.log(JSON.stringify({ ok: r.status === 200, interactive: (r.data && r.data.interactive) }, null, 2));
+    } else {
+      const r = await jget(`${SHELL}/interactive`);
+      console.log(JSON.stringify({ ok: r.status === 200, interactive: (r.data && r.data.interactive) }, null, 2));
+    }
+    return;
+  }
+
   if (cmd === 'zones') {
     const force = !!(F.scan || F.force || F._[0] === 'scan');
     const r = await jget(`${SHELL}/zones${force ? '/scan' : ''}`);
@@ -349,6 +361,7 @@ const USAGE = `
   touch [zone]                   模拟点她一下（head/chest/waist/skirt/leg/foot/neck/hair）
   touches [n]                    最近 n 条点触记录（主人点了哪儿）
   zones [scan]                   量模型剪影轮廓，看分区对不对（换模型/换装后跑 scan 重标）
+  interactive [on|off]           分区互动总开关（不带参数=读）
   expr <表情> [--strength 0.9]   24 个表情
   gesture <name>                  hand_on_chest / point / grass
   look <left|right|up|down|center>

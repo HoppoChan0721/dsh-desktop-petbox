@@ -9,9 +9,24 @@ contextBridge.exposeInMainWorld('petCursor', {
 });
 
 let smart = true;
+let interactive = true;   // 分区互动开关：关掉后点她不会再触发反应，光标也回到系统默认
+let overNow = null;
 let ignored = null;
 let dragging = false;
 let alphaBroken = false;
+
+// 悬停在她身上时的光标：一个蓝色软点 + 白描边，热点在正中。比手型光标柔和，也不抢她。
+const PET_CURSOR_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+  + "<circle cx='16' cy='16' r='10' fill='#5aa9ff' fill-opacity='0.28'/>"
+  + "<circle cx='16' cy='16' r='5.5' fill='#2a7fff' fill-opacity='0.95' stroke='#ffffff' stroke-width='2'/></svg>";
+const PET_CURSOR = 'url("data:image/svg+xml;utf8,' + encodeURIComponent(PET_CURSOR_SVG) + '") 16 16, pointer';
+
+function applyCursor(over) {
+  if (over === overNow) return;
+  overNow = over;
+  // 互动关掉时一律默认光标；开着且压在她身上才换，离开立刻复原
+  document.documentElement.style.cursor = (interactive && over) ? PET_CURSOR : 'default';
+}
 
 function sendIgnore(v) {
   if (v === ignored) return;
@@ -54,9 +69,10 @@ function overPet(x, y) {
 
 let lastInteractSent = 0;
 document.addEventListener('mousemove', (e) => {
-  if (!smart) return;
+  if (!smart) { applyCursor(false); return; }
   const over = overPet(e.clientX, e.clientY);
   sendIgnore(!over);
+  applyCursor(over);
   const now = Date.now();
   if (over && now - lastInteractSent > 2500) { lastInteractSent = now; ipcRenderer.send('pet:interact'); }
 }, true);
@@ -156,6 +172,7 @@ function zoneOf(my, p) {
 }
 
 window.addEventListener('click', (e) => {
+  if (!interactive) return;   // 互动关掉：点她等于点空气，穿透照旧
   if (dragging || e.altKey) return;
   if (!(alphaAt(e.clientX, e.clientY) > 12)) return;
   if (!profile) { const p0 = scanProfile(); if (p0) profile = p0; }   // 没标定就先量一次，宁可慢一帧也不错判
@@ -216,7 +233,15 @@ window.addEventListener('blur', () => {
 ipcRenderer.on('pet:smart', (_e, on) => {
   smart = !!on;
   sendIgnore(true);
-  if (!smart) sendIgnore(false);
+  if (!smart) { applyCursor(false); sendIgnore(false); }
+});
+
+// 分区互动总开关：面板 / 托盘 / CLI 都能改，即时生效，不用重启
+ipcRenderer.on('pet:interactive', (_e, on) => {
+  interactive = !!on;
+  overNow = null;
+  applyCursor(false);
+  document.documentElement.style.cursor = 'default';
 });
 
 // Ctrl + 滚轮 = 微调桌宠尺寸（主进程改窗口，比例不变）
