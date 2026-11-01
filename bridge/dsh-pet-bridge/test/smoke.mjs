@@ -1,6 +1,7 @@
 // 桥的冒烟测试：不开 DSH，用假 ctx 跑真代码，验证「点触进专用会话、主会话零打扰」。
 // 跑法：node test/smoke.mjs   （临时文件落在 test/.tmp，跑完自动清）
 import { mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { apply } from '../lib/index.js';
 
@@ -33,10 +34,11 @@ function makeCtx({ createFails = false } = {}) {
   const ctx = {
     sessions, sessionController,
     logger: { info() {}, warn() {} },
-    on: (ev, fn) => { handlers[ev] = fn; },
+    on: (ev, fn) => { (handlers[ev] ||= []).push(fn); },
+    emit: (ev, ...args) => (handlers[ev] || []).forEach((fn) => fn.apply(ctx, args)),
   };
-  ctx.dispose = () => handlers.dispose && handlers.dispose();
-  return { ctx, calls };
+  ctx.dispose = () => ctx.emit('dispose');
+  return { ctx, calls, handlers };
 }
 
 async function boot(cfg, ctxOpts) {
@@ -148,6 +150,61 @@ rmSync(TMP, { recursive: true, force: true });
   ok('health 带 mode', h.mode, 'pet');
   ok('health 带 petSessionId 字段', 'petSessionId' in h, true);
   ctx.dispose();
+}
+
+// ── 场景 8：会话里说的话回流成桌宠气泡 ─────────────────
+{
+  // 假桌宠：收 /say
+  const says = [];
+  const petServer = createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      if (req.url === '/say') says.push(JSON.parse(raw || '{}'));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"ok":true}');
+    });
+  });
+  await new Promise((r) => petServer.listen(62100, '127.0.0.1', r));
+
+  const { ctx, calls } = await boot({
+    port: 62010, mode: 'pet', minIntervalMs: 0, echoToPet: true, echoDelayMs: 60,
+    echoMaxChars: 60, petSayUrl: 'http://127.0.0.1:62100/say',
+  });
+  await post(62010, '/event', { zone: 'head' });
+  const petSid = calls.create[0].sessionId;
+  const assistant = (text) => ({ type: 'assistant/message', message: { role: 'assistant', content: [{ type: 'text', text }] } });
+
+  ctx.emit('session/event', { id: petSid }, assistant('嗯。主人在摸头呢。'));
+  await new Promise((r) => setTimeout(r, 250));
+  ok('回流：气泡收到一句话', says.length, 1);
+  ok('回流：正文原样', says[0].text, '嗯。主人在摸头呢。');
+  ok('回流：口型时长跟着字数走', says[0].ms > 3000, true);
+  ok('回流：默认不重复合成语音', says[0].voice, undefined);
+
+  ctx.emit('session/event', { id: 'some-other-session' }, assistant('这句不该出现'));
+  await new Promise((r) => setTimeout(r, 200));
+  ok('回流：别的会话的话不往桌宠塞', says.length, 1);
+
+  ctx.emit('session/event', { id: petSid }, { type: 'assistant/message', interrupted: true, message: { content: [{ type: 'text', text: '被打断的半句' }] } });
+  await new Promise((r) => setTimeout(r, 200));
+  ok('回流：被打断的残句不播', says.length, 1);
+
+  ctx.emit('session/event', { id: petSid }, assistant('第一版'));
+  ctx.emit('session/event', { id: petSid }, assistant('**最终**版本：`code` 和 [链接](http://x) 还有 ![图](y.png)\n\n- 列表项'));
+  await new Promise((r) => setTimeout(r, 300));
+  ok('回流：一轮多条只出最后一条气泡', says.length, 2);
+  ok('回流：去掉了 markdown 与贴纸', says[1].text, '最终版本：code 和 链接 还有\n列表项');
+
+  const long = '一'.repeat(200);
+  ctx.emit('session/event', { id: petSid }, assistant(long));
+  await new Promise((r) => setTimeout(r, 300));
+  ok('回流：超长截断并加省略号', says[2].text.length <= 60 && says[2].text.endsWith('…'), true);
+
+  const h = await (await fetch('http://127.0.0.1:62010/health')).json();
+  ok('health 能看出回流是开的', h.echo.on, true);
+  ctx.dispose();
+  petServer.close();
 }
 
 if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });

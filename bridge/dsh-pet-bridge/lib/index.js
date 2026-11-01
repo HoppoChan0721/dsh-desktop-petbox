@@ -40,6 +40,11 @@ const DEFAULTS = {
   petSessionTitle: '桌宠互动',
   agentPreset: 'bigfish',      // 新建桌宠会话用的预设（人设要跟主会话一致）
   fallbackToMain: false,       // 桌宠会话建不起来时，要不要退回投主会话
+  echoToPet: true,             // 会话里说完的话回送到桌宠气泡（不然只能在聊天窗里干看着）
+  petSayUrl: 'http://127.0.0.1:61943/say',
+  echoMaxChars: 180,           // 气泡装不下长篇，超了截断
+  echoDelayMs: 900,            // 一轮里可能有好几条 assistant 消息，等最后一条再出气泡
+  echoVoice: false,            // true = 气泡同时走 TTS（3~10 秒，会跟点触本地的语音撞车）
   minIntervalMs: 1200,         // 同一部位在这个间隔内只投一次
   maxPerMinute: 24,            // 每分钟最多投递几条，防止连点刷屏
   quiet: false,
@@ -132,6 +137,77 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // ---- 回流：会话里说的话 → 桌宠气泡 ----
+  // 没有这一段，点触的结果只会躺在那个会话窗口里，主人在桌面上什么都看不到。
+  let echoPending = null, echoTimer = null, echoLastAt = 0;
+
+  function bubbleText(message) {
+    const blocks = (message && message.content) || [];
+    let t = blocks
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('\n');
+    t = t
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')        // 贴纸 / 图片
+      .replace(/```[\s\S]*?```/g, '')               // 代码块
+      .replace(/`([^`]*)`/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')            // 粗体
+      .replace(/~~([^~]+)~~/g, '$1')                // 删除线
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2')    // 斜体
+      .replace(/^\s{0,3}[>#]+\s*/gm, '')            // 标题 / 引用记号
+      .replace(/^\s*[-*+]\s+/gm, '')                // 列表记号
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')      // 链接只留文字
+      .replace(/^\s*---+\s*$/gm, '')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (t.length > cfg.echoMaxChars) t = t.slice(0, Math.max(1, cfg.echoMaxChars - 1)).trimEnd() + '…';
+    return t;
+  }
+
+  async function sayOnPet(text) {
+    const ms = Math.min(24000, Math.max(3000, 1800 + text.length * 140));   // 口型时长跟着字数走
+    const body = { text, ms };
+    if (cfg.echoVoice) body.voice = true;
+    const res = await fetch(cfg.petSayUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('say HTTP ' + res.status);
+    return true;
+  }
+
+  function flushEcho() {
+    echoTimer = null;
+    const text = echoPending;
+    echoPending = null;
+    if (!text) return;
+    const wait = cfg.echoDelayMs || 0;
+    const at = Date.now();
+    if (at - echoLastAt < wait) {   // 上一句刚出过气泡，别叠着刷
+      echoPending = text;
+      echoTimer = setTimeout(flushEcho, wait - (at - echoLastAt));
+      return;
+    }
+    echoLastAt = at;
+    sayOnPet(text)
+      .then(() => log(`echoed to pet (${text.length} chars)`))
+      .catch((e) => log('echo to pet failed: ' + e.message));
+  }
+
+  if (cfg.echoToPet) {
+    ctx.on('session/event', (session, event) => {
+      if (!petSid || !session || session.id !== petSid) return;
+      if (!event || event.type !== 'assistant/message' || event.interrupted) return;
+      const text = bubbleText(event.message);
+      if (!text) return;
+      echoPending = text;   // 一轮里最后一条会盖掉前面的中间稿
+      if (!echoTimer) echoTimer = setTimeout(flushEcho, cfg.echoDelayMs || 0);
+    });
+    log('echo to pet enabled -> ' + cfg.petSayUrl);
+  }
+
   // ---- 投递 ----
   async function deliverTo(sid, text) {
     if (!sid) throw new Error('no session to wake');
@@ -194,6 +270,7 @@ export function apply(ctx, config = {}) {
       return send(res, 200, {
         ok: true, port: cfg.port, mode: cfg.mode,
         sessionId: bound, petSessionId: petSid, petSessionTitle: cfg.petSessionTitle,
+        echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
         recent: recent.slice(-10),
       });
     }
