@@ -809,9 +809,18 @@ const BUBBLE_JS = `(() => {
     requestAnimationFrame(frame);
   })();
 })()`;
+// 气泡走紧凑排版：段间空行压成一个换行（2026-11-01 主人：一整行空的太松散）。
+// 只影响显示，语音那边照旧用原文。
+function compactBubble(text) {
+  return String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
 function say(text, voice, ms) {
   if (!win || win.isDestroyed()) return;
-  const t = String(text || '').slice(0, 300);
+  const t = compactBubble(text).slice(0, 300);
   win.webContents.executeJavaScript(`window.__petSay && window.__petSay(${JSON.stringify(t)}, ${Number(ms) || 6000})`).catch(() => {});
   if (voice) {
     try { spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', loadCfg().notifyVoice, '-Text', t], { windowsHide: true, stdio: 'ignore' }); } catch {}
