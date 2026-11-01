@@ -14,7 +14,7 @@
 
 设置面板（托盘 → 设置…，或 `node cli/pet.mjs panel`）。第一次运行时如果依赖没配好，外壳会直接把这个面板弹出来。
 
-<img src="docs/preview-settings.png" width="396" alt="设置面板：尺寸滑杆、鲸语/模型/Python 路径、端口、可选集成">
+<img src="docs/preview-settings.png" width="396" alt="设置面板：尺寸滑杆、鲸语/模型/Python 路径、互动开关、舞台帧率、可选集成">
 
 > 截图里只有外壳自己的界面。角色和模型不在本仓库内，也不提供。
 

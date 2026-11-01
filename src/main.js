@@ -1320,7 +1320,7 @@ function setSize(w, h) { return applySize(w, h, true) || { width: w, height: h }
 function createPanel() {
   if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
   const area = screen.getPrimaryDisplay().workArea;
-  const PW = 396, PH = 470; // 高度贴着内容，不留空白
+  const PW = 396, PH = 760; // 高度贴着内容，不留空白（内容约 736，留 24 余量）
   panel = new BrowserWindow({
     width: PW, height: PH,
     x: area.x + Math.round((area.width - PW) / 2), y: area.y + Math.round((area.height - PH) / 2),
