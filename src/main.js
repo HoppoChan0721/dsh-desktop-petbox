@@ -315,6 +315,13 @@ function startMoodServer() {
       try { n = Math.max(1, Math.min(200, Number(new URL('http://x' + req.url).searchParams.get('limit')) || 20)); } catch {}
       return send(200, { ok: true, items: touchRing.slice(-n) });
     }
+    // 分区标定：扫一遍透明轮廓，返回剪影包围盒 + 每行宽度 + 自动找到的脖子位置
+    if (req.method === 'GET' && req.url.startsWith('/zones')) {
+      const force = /scan/.test(req.url);
+      const job = (force || !zoneScan) ? requestZoneScan() : Promise.resolve(zoneScan);
+      job.then((r) => send(200, { ok: !!r.ok, cached: !force && !!zoneScan, zones: r })).catch((e) => send(500, { ok: false, error: e.message }));
+      return;
+    }
     if (req.method === 'POST' && req.url === '/say') {
       let raw = '';
       req.on('data', (c) => { raw += c; if (raw.length > 20000) req.destroy(); });
@@ -358,6 +365,23 @@ function startMoodServer() {
           const h = Math.max(360, Math.min(2000, Number(j.height) || 680));
           setSize(w, h);
           send(200, { ok: true, width: w, height: h });
+        } catch (e) { send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
+    // 摆位置（和拖拽一样会记住，省得改尺寸后还得手动拖回去）
+    if (req.method === 'POST' && req.url === '/position') {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 512) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          if (!win || win.isDestroyed()) return send(400, { ok: false, error: 'no window' });
+          const x = Math.round(Number(j.x)), y = Math.round(Number(j.y));
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return send(400, { ok: false, error: 'bad x/y' });
+          win.setPosition(x, y);
+          saveCfg({ x, y });
+          send(200, { ok: true, x, y });
         } catch (e) { send(400, { ok: false, error: e.message }); }
       });
       return;
@@ -428,6 +452,28 @@ const touchFile = () => path.join(DATA, 'touch.jsonl');
 const touchState = { zone: '', count: 0, at: 0 };
 let bridgeWarned = false;
 
+// ---- 分区标定：让 preload 扫一遍画布 alpha，量出模型自己的剪影 ----
+// 分区必须相对模型算，不能相对窗口：窗口拉伸、缩放、换 fit、换装都会让写死的窗口比例漂。
+let zoneScan = null;
+let zonePending = null;
+ipcMain.on('pet:zones-result', (_e, r) => {
+  zoneScan = r && r.ok ? r : { ok: false };
+  const done = zonePending;
+  zonePending = null;
+  if (done) done(zoneScan);
+});
+function requestZoneScan(timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    if (!win || win.isDestroyed()) { resolve({ ok: false, error: 'no window' }); return; }
+    if (zonePending) { resolve({ ok: false, error: 'busy' }); return; }
+    zonePending = resolve;
+    try { win.webContents.send('pet:zones-scan'); } catch { zonePending = null; resolve({ ok: false, error: 'send failed' }); return; }
+    setTimeout(() => {
+      if (zonePending === resolve) { zonePending = null; resolve({ ok: false, error: 'timeout' }); }
+    }, timeoutMs);
+  });
+}
+
 // 事件一条一行，超过 256KB 就轮转一份，避免无限长
 function appendTouch(ev) {
   touchRing.push(ev);
@@ -497,6 +543,8 @@ function handleTouch(p) {
     zone,
     nx: Number.isFinite(nx) ? nx : null,
     ny: Number.isFinite(ny) ? ny : null,
+    // nx/ny 现在是「模型剪影比例」不是窗口比例；calibrated=false 表示轮廓还没标定出来
+    calibrated: !!(p && p.calibrated),
   };
   appendTouch(ev);
   forwardTouch(ev);
@@ -907,7 +955,9 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, backgroundThrottling: false, spellcheck: false },
   });
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
-  win.webContents.on('did-finish-load', () => { loadAttempts = 0; win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); }).catch(() => {}); if (!win.isVisible()) win.show(); });
+  win.webContents.on('did-finish-load', () => { loadAttempts = 0; win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); }).catch(() => {}); if (!win.isVisible()) win.show();
+    // 页面刚加载时模型还没画出来，等它站稳再量剪影，这样第一次点击就不用现场扫
+    setTimeout(() => { try { win.webContents.send('pet:zones-reset'); } catch {} }, 2500); });
   win.webContents.on('context-menu', () => popupTrayMenu());
   let boundsTimer = null;
   const saveBounds = () => {
@@ -1130,6 +1180,8 @@ function applySize(w, h, save) {
   ny = Math.min(Math.max(ny, d.y), d.y + d.height - 80);
   win.setPosition(nx, ny);
   if (save) saveCfg({ width: W, height: H });
+  // 剪影缓存在 preload 里，尺寸一变就得重扫，不然点哪儿都会跟着旧比例漂
+  try { win.webContents.send('pet:zones-reset'); } catch {}
   return { width: W, height: H };
 }
 function setSize(w, h) { return applySize(w, h, true) || { width: w, height: h }; }

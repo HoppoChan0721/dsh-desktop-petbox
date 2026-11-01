@@ -61,33 +61,135 @@ document.addEventListener('mousemove', (e) => {
   if (over && now - lastInteractSent > 2500) { lastInteractSent = now; ipcRenderer.send('pet:interact'); }
 }, true);
 
-// 点击落在身体的哪一段：比例来自当前模型（3749×7697 全身立绘）的透明轮廓标定。
-// 换模型后要重标：tools/calibrate-zones.mjs 会打印每 2% 高度的左右边界。
-function zoneOf(nx, ny) {
-  if (ny < 0.105) return 'hair';
-  if (ny < 0.30) return 'head';
-  if (ny < 0.335) return 'neck';
-  if (ny < 0.48) return 'chest';
-  if (ny < 0.575) return 'waist';
-  if (ny < 0.75) return 'skirt';
-  if (ny < 0.865) return 'leg';
-  if (ny < 0.96) return 'foot';
+// ---- 剪影标定 ----
+// 分区比例必须相对「模型自己」而不是窗口：窗口拉伸、Ctrl+滚轮缩放、换 fit、换模型或换装，
+// 模型在画布里的位置和大小都会变，写死窗口比例就会像「点胸判成脖子」这样漂。
+// 所以启动后扫一遍 canvas 的 alpha 轮廓，量出剪影包围盒，之后点击都换算成模型比例。
+let profile = null;        // { bbox:{top,bottom,left,right}, rows:[{y,l,r,w}], at, canvasH }
+
+function modelCanvas() {
+  const c = document.getElementById('model-canvas');
+  if (!c) return null;
+  let gl = null;
+  try { gl = c.getContext('webgl2') || c.getContext('webgl'); } catch { return null; }
+  return gl ? { gl, c } : null;
+}
+
+// 逐行读 alpha，得到剪影轮廓（canvas 归一化，y 向下）
+function scanProfile() {
+  const ctx = modelCanvas();
+  if (!ctx) return null;
+  const { gl, c } = ctx;
+  const W = c.width, H = c.height;
+  if (W < 8 || H < 8) return null;
+  const step = Math.max(1, Math.ceil(H / 192));
+  const buf = new Uint8Array(W * 4);
+  const rows = [];
+  for (let yy = 0; yy < H; yy += step) {
+    try { gl.readPixels(0, H - 1 - yy, W, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf); } catch { return null; }
+    let l = -1, r = -1;
+    for (let x = 0; x < W; x++) if (buf[x * 4 + 3] > 12) { l = x; break; }
+    if (l < 0) continue;
+    for (let x = W - 1; x >= 0; x--) if (buf[x * 4 + 3] > 12) { r = x; break; }
+    rows.push({ y: yy / Math.max(1, H - 1), l: l / Math.max(1, W - 1), r: r / Math.max(1, W - 1), w: (r - l) / Math.max(1, W - 1) });
+  }
+  if (rows.length < 4) return null;
+  let left = 1, right = 0;
+  for (const row of rows) { if (row.l < left) left = row.l; if (row.r > right) right = row.r; }
+  return {
+    bbox: { top: rows[0].y, bottom: rows[rows.length - 1].y, left, right },
+    rows,
+    at: Date.now(),
+    canvasH: H,
+  };
+}
+
+// 脖子 = 头下方最窄的那一段，用轮廓宽度曲线自动找，不靠硬编码
+function detectNeck(p) {
+  if (!p || !p.rows || p.rows.length < 12) return null;
+  const h = p.bbox.bottom - p.bbox.top;
+  if (h <= 0.05) return null;
+  const from = p.bbox.top + h * 0.12;
+  const to = p.bbox.top + h * 0.40;
+  let best = null;
+  for (const row of p.rows) {
+    if (row.y < from || row.y > to) continue;
+    if (!best || row.w < best.w) best = row;
+  }
+  if (!best) return null;
+  return { y: (best.y - p.bbox.top) / h, w: best.w };
+}
+
+// 点击坐标 → 模型比例（剪影左上角为 0,0）；没有轮廓时退回 canvas 比例
+function toModelXY(clientX, clientY) {
+  const c = document.getElementById('model-canvas');
+  if (!c) return null;
+  const r = c.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return null;
+  const cx = (clientX - r.left) / r.width;
+  const cy = (clientY - r.top) / r.height;
+  const p = profile;
+  if (!p) return { mx: cx, my: cy, calibrated: false };
+  const bh = Math.max(0.01, p.bbox.bottom - p.bbox.top);
+  const bw = Math.max(0.01, p.bbox.right - p.bbox.left);
+  return { mx: (cx - p.bbox.left) / bw, my: (cy - p.bbox.top) / bh, calibrated: true };
+}
+
+// 点击落在身体的哪一段（模型比例）。数值是按当前模型实测标定的：截窗口截图 + 测每一行的
+// alpha 左右边界，量出头顶(0%) → 发箍 4.8% → 下巴 17.2% → 脖子 20.3% → 胸 34.0% →
+// 腰 40.8% → 裙摆 63.1% → 脚踝 95.4%。换模型或换装（剪影变了）就重跑 `pet.mjs zones scan`
+// 核一遍再改这里；只要还是这套衣服，窗口拉大缩小、Ctrl+滚轮缩放都不用重标，因为已经归一化到剪影。
+const ZONE_BANDS = [
+  [0.048, 'hair'],
+  [0.172, 'head'],
+  [0.203, 'neck'],
+  [0.340, 'chest'],
+  [0.408, 'waist'],
+  [0.631, 'skirt'],
+  [0.954, 'leg'],
+  [1.02, 'foot'],
+];
+function zoneOf(my, p) {
+  if (!p) return 'body';
+  for (const [edge, name] of ZONE_BANDS) if (my < edge) return name;
   return 'body';
 }
 
 window.addEventListener('click', (e) => {
   if (dragging || e.altKey) return;
   if (!(alphaAt(e.clientX, e.clientY) > 12)) return;
-  const w = Math.max(1, window.innerWidth);
-  const h = Math.max(1, window.innerHeight);
-  const nx = Math.min(1, Math.max(0, e.clientX / w));
-  const ny = Math.min(1, Math.max(0, e.clientY / h));
+  if (!profile) { const p0 = scanProfile(); if (p0) profile = p0; }   // 没标定就先量一次，宁可慢一帧也不错判
+  const p = profile;
+  const at = toModelXY(e.clientX, e.clientY);
+  if (!at) return;
+  const clamp = (v) => Math.round(Math.min(1, Math.max(0, v)) * 1000) / 1000;
   ipcRenderer.send('pet:tap', {
-    nx: Math.round(nx * 1000) / 1000,
-    ny: Math.round(ny * 1000) / 1000,
-    zone: zoneOf(nx, ny),
+    nx: clamp(at.mx),
+    ny: clamp(at.my),
+    zone: zoneOf(at.my, p),
+    calibrated: !!at.calibrated,
   });
 }, true);
+
+// 主进程要轮廓：扫一遍回传（一次性，用来标定分区 / 换模型后重标）
+ipcRenderer.on('pet:zones-scan', () => {
+  const p = scanProfile();
+  if (p) profile = p;
+  const neck = detectNeck(p);
+  ipcRenderer.send('pet:zones-result', p ? { ok: true, bbox: p.bbox, rows: p.rows, neck, at: p.at } : { ok: false });
+});
+
+ipcRenderer.on('pet:zones-prime', () => {
+  if (profile) return;
+  const p = scanProfile();
+  if (p) profile = p;
+});
+
+// 窗口尺寸 / fit 变了：模型在画布里的位置和大小都变了，剪影必须重扫，否则分区跟着漂
+ipcRenderer.on('pet:zones-reset', () => {
+  profile = null;
+  setTimeout(() => { const p = scanProfile(); if (p) profile = p; }, 600);
+});
 
 window.addEventListener('mousedown', (e) => {
   if (e.button === 0 && e.altKey) {

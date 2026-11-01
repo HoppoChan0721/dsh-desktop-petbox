@@ -195,6 +195,31 @@ async function main() {
     return;
   }
 
+  if (cmd === 'zones') {
+    const force = !!(F.scan || F.force || F._[0] === 'scan');
+    const r = await jget(`${SHELL}/zones${force ? '/scan' : ''}`);
+    const z = (r.data && r.data.zones) || null;
+    if (!z || !z.ok) {
+      console.log('扫描失败：' + ((z && z.error) || (r.data && r.data.error) || 'unknown'));
+      return;
+    }
+    const b = z.bbox;
+    const rows = z.rows || [];
+    const h = Math.max(0.001, b.bottom - b.top);
+    const maxW = Math.max(0.001, ...rows.map((x) => x.w));
+    console.log(`剪影 top=${b.top.toFixed(3)} bottom=${b.bottom.toFixed(3)} left=${b.left.toFixed(3)} right=${b.right.toFixed(3)}（行 ${rows.length}，${r.data.cached ? '缓存' : '刚扫'}）`);
+    console.log(`脖子最窄点 ny=${z.neck ? z.neck.y.toFixed(3) : 'n/a'}（这是分区要用的锚点）`);
+    console.log('身体比例  宽度  轮廓');
+    for (const row of rows) {
+      const p = (row.y - b.top) / h;
+      if (p < -0.01 || p > 1.01) continue;
+      const pct = Math.round(p * 100);
+      if (pct % 2 !== 0) continue;
+      console.log(`${String(pct).padStart(3)}%  ${row.w.toFixed(3)}  ${'#'.repeat(Math.round((row.w / maxW) * 42))}`);
+    }
+    return;
+  }
+
   if (cmd === 'say') {
     const text = F._[0] || arg('text');
     if (!text) throw new Error('say 需要文本');
@@ -323,6 +348,7 @@ const USAGE = `
   mood <name> [--intensity 0.7]  15 个预设情绪
   touch [zone]                   模拟点她一下（head/chest/waist/skirt/leg/foot/neck/hair）
   touches [n]                    最近 n 条点触记录（主人点了哪儿）
+  zones [scan]                   量模型剪影轮廓，看分区对不对（换模型/换装后跑 scan 重标）
   expr <表情> [--strength 0.9]   24 个表情
   gesture <name>                  hand_on_chest / point / grass
   look <left|right|up|down|center>
