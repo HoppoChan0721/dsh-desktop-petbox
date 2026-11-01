@@ -202,6 +202,7 @@ async function main() {
       text,
       voice: !!F.voice,
       emotion: arg('emotion') || undefined,
+      gesture: arg('gesture') || undefined,
       ms: num('ms', Math.max(3000, String(text).length * 220 + 1800)),
     };
     const r = await jpost(`${SHELL}/say`, body);
@@ -318,6 +319,7 @@ const USAGE = `
   state                          看她现在在干什么
   stock                          列出可用表情 / 手势
   say "文本" --voice --emotion e  气泡 + 口型（--voice 现场合成，3~10 秒）
+         [--gesture hand_on_chest]  说话时同时做手势（同帧下发，不排队）
   mood <name> [--intensity 0.7]  15 个预设情绪
   touch [zone]                   模拟点她一下（head/chest/waist/skirt/leg/foot/neck/hair）
   touches [n]                    最近 n 条点触记录（主人点了哪儿）

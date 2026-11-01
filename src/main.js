@@ -133,7 +133,9 @@ function stopPlan() {
 async function runPlan(plan, userAction, marginMs = 900) {
   if (userAction && Date.now() < planBusyUntil) { await stopPlan(); await sleep(140); }
   else { const w = planBusyUntil - Date.now(); if (w > 0) await sleep(w + 60); }
-  const ok = await postPlan(plan);
+  let ok = await postPlan(plan);
+  // 舞台被联动 watcher 的短动作占着时会 400：说话/情绪比它优先，抢几次
+  for (let i = 0; i < 4 && !ok; i++) { await stopPlan(); await sleep(180); ok = await postPlan(plan); }
   const dur = planDuration(plan);
   planBusyUntil = Date.now() + (ok ? dur * 1000 + marginMs : 400);
   if (userAction) lastUserPlanAt = Date.now();
@@ -325,12 +327,12 @@ function startMoodServer() {
             if (voicing) { send(200, { ok: false, busy: true }); return; }
             send(200, { ok: true, queued: true });
             petWait();
-            prepareAndSay(text, j.emotion);
+            prepareAndSay(text, j.emotion, j.gesture);
             return;
           }
           say(text, false, ms);
           if (j.audio && win && !win.isDestroyed()) { try { win.webContents.executeJavaScript('window.__petPlay && window.__petPlay(' + JSON.stringify(String(j.audio)) + ')').catch(() => {}); } catch {} }
-          runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, j.emotion, j.mouth) }, true).catch(() => {});
+          runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, j.emotion, j.mouth, j.gesture) }, true).catch(() => {});
           send(200, { ok: true, mouth: ms });
         }
         catch (e) { send(400, { ok: false, error: e.message }); }
@@ -508,8 +510,8 @@ const voiceScript = () => (loadCfg().voicePrepare || '').trim();
 const voiceEnabled = () => { const s = voiceScript(); return !!s && fs.existsSync(s) && !!((loadCfg().voiceWavDir || '').trim()); };
 function loadVCache() { try { return JSON.parse(fs.readFileSync(vcacheFile(), 'utf8').replace(/^\uFEFF/, '')) || {}; } catch { return {}; } }
 function saveVCache(o) { try { fs.mkdirSync(path.dirname(vcacheFile()), { recursive: true }); fs.writeFileSync(vcacheFile(), JSON.stringify(o, null, 1)); } catch {} }
-function sayPlan(ms, emotion, env) {
-  return { version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env) };
+function sayPlan(ms, emotion, env, gesture) {
+  return { version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture) };
 }
 function playInPage(audioUrl) {
   try { if (win && !win.isDestroyed()) win.webContents.executeJavaScript('window.__petPlay && window.__petPlay(' + JSON.stringify(audioUrl) + ')').catch(() => {}); } catch {}
@@ -748,7 +750,7 @@ function setVolume(v) {
   syncVolume();
   return n;
 }
-function sayActions(ms, emotion, env) {
+function sayActions(ms, emotion, env, gesture) {
   const dur = Math.min(20, Math.max(1, Number(ms) / 1000));
   const frames = [];
   if (Array.isArray(env) && env.length >= 2) {
@@ -761,6 +763,8 @@ function sayActions(ms, emotion, env) {
   }
   const actions = [{ kind: 'trajectory', at: 0, duration: dur, frames }];
   if (emotion && MOODS[emotion]) for (const [kind, opt] of MOODS[emotion]) actions.push(scaleMoodAction(kind, opt));
+  // 手势和口型可以同帧下发（不同参数），这样「说话时手放胸前」不需要排队等半天
+  if (gesture) actions.push({ kind: 'gesture', name: String(gesture), at: 0, duration: Math.max(1.4, Math.min(dur, 2.6)) });
   return actions;
 }
 // 从合成出来的 WAV 算音量包络（每窗 RMS → 0.05..0.95），给口型用
@@ -793,7 +797,7 @@ function wavEnvelope(file, n) {
 
 // 实时链路：现场合成 → 包络口型 → 页面内 Web Audio 播放 + 气泡 + 口型同帧
 // 旧实现用 SoundPlayer（启动偏 1~2s）且口型恒定开合，主人要的是真实效果，所以全换掉。
-function prepareAndSay(text, emotion) {
+function prepareAndSay(text, emotion, gesture) {
   if (!voiceEnabled()) {   // 没配 TTS 就只出气泡，不要把 /say 变成报错
     say(text, false, Math.max(2500, Math.min(9000, text.length * 260)));
     return;
@@ -837,7 +841,7 @@ function prepareAndSay(text, emotion) {
         try { spawn('powershell', ['-NoProfile', '-Command', `(New-Object System.Media.SoundPlayer '${wav}').PlaySync()`], { windowsHide: true, stdio: 'ignore' }); } catch {}
       }
       lastSay = { text, jobId: info.job_id, synthMs, dur: +dur.toFixed(2), mouth: env ? env.length : 0, at: Date.now() };
-      runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env) }, true).catch(() => {});
+      runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture) }, true).catch(() => {});
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} realtime say synth=${synthMs}ms dur=${dur.toFixed(2)}s mouth=${env ? env.length : 0} ${info.job_id}\n`); } catch {}
     } catch (e) {
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} prep-error ${String(e.message).slice(0, 160)}\n`); } catch {}
