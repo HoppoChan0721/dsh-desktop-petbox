@@ -26,6 +26,7 @@ const DEFAULTS = {
   voicePrepare: '',         // 外部 TTS 桥脚本，给了才有语音
   voiceWavDir: '',          // TTS 输出目录
   notifyVoice: '',          // 一次性播报脚本（可留空）
+  bridgeUrl: '',            // 反向桥：把「主人点了哪里」POST 给它（DSH 侧的 dsh-pet-bridge）
   // —— 运行状态（程序自己写回）——
   x: null, y: null, width: 531, height: 950,
   fit: 'portrait',

@@ -61,9 +61,32 @@ document.addEventListener('mousemove', (e) => {
   if (over && now - lastInteractSent > 2500) { lastInteractSent = now; ipcRenderer.send('pet:interact'); }
 }, true);
 
+// 点击落在身体的哪一段：比例来自当前模型（3749×7697 全身立绘）的透明轮廓标定。
+// 换模型后要重标：tools/calibrate-zones.mjs 会打印每 2% 高度的左右边界。
+function zoneOf(nx, ny) {
+  if (ny < 0.105) return 'hair';
+  if (ny < 0.30) return 'head';
+  if (ny < 0.335) return 'neck';
+  if (ny < 0.48) return 'chest';
+  if (ny < 0.575) return 'waist';
+  if (ny < 0.75) return 'skirt';
+  if (ny < 0.865) return 'leg';
+  if (ny < 0.96) return 'foot';
+  return 'body';
+}
+
 window.addEventListener('click', (e) => {
   if (dragging || e.altKey) return;
-  if (alphaAt(e.clientX, e.clientY) > 12) ipcRenderer.send('pet:tap');
+  if (!(alphaAt(e.clientX, e.clientY) > 12)) return;
+  const w = Math.max(1, window.innerWidth);
+  const h = Math.max(1, window.innerHeight);
+  const nx = Math.min(1, Math.max(0, e.clientX / w));
+  const ny = Math.min(1, Math.max(0, e.clientY / h));
+  ipcRenderer.send('pet:tap', {
+    nx: Math.round(nx * 1000) / 1000,
+    ny: Math.round(ny * 1000) / 1000,
+    zone: zoneOf(nx, ny),
+  });
 }, true);
 
 window.addEventListener('mousedown', (e) => {

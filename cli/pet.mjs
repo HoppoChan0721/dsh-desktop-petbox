@@ -215,6 +215,22 @@ async function main() {
     return;
   }
 
+  if (cmd === 'touch') {
+    // 模拟「主人点了这里」：node pet.mjs touch head|chest|waist|skirt|leg|foot|neck|hair|body
+    const zone = String(F._[0] || 'head');
+    const r = await jpost(`${SHELL}/touch`, { zone, nx: num('nx', 0.5), ny: num('ny', 0.2) });
+    console.log(JSON.stringify({ status: r.status, ...r.data }, null, 2));
+    return;
+  }
+
+  if (cmd === 'touches') {
+    // 最近点触记录：node pet.mjs touches 20
+    const n = Number(F._[0]) || 20;
+    const r = await jget(`${SHELL}/touches?limit=${n}`);
+    console.log(JSON.stringify(r.data, null, 2));
+    return;
+  }
+
   if (cmd === 'sway') {
     const patch = {};
     for (const k of ['phys', 'tilt', 'period', 'pivot', 'mix']) if (F[k] !== undefined) patch[k] = Number(F[k]);
@@ -303,6 +319,8 @@ const USAGE = `
   stock                          列出可用表情 / 手势
   say "文本" --voice --emotion e  气泡 + 口型（--voice 现场合成，3~10 秒）
   mood <name> [--intensity 0.7]  15 个预设情绪
+  touch [zone]                   模拟点她一下（head/chest/waist/skirt/leg/foot/neck/hair）
+  touches [n]                    最近 n 条点触记录（主人点了哪儿）
   expr <表情> [--strength 0.9]   24 个表情
   gesture <name>                  hand_on_chest / point / grass
   look <left|right|up|down|center>

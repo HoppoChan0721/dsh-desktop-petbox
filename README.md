@@ -26,6 +26,8 @@
 - **尺寸面板**：滑杆实时预览，比例锁定；也可 `Ctrl + 滚轮` 在角色身上调
 - **指针追踪**：全局鼠标位置持续喂给模型（着头/上身/前探/侧移），窗口穿透或指针在窗口外也有效
 - **绕圈生气**：围着她的头部转满一圈 → 眩晕 → 嫌弃 → 黑脸 + 手放胸前，进冷却
+- **分区互动**：点是哪就反应哪（头发 / 脑袋 / 脖子 / 胸口 / 腰 / 裙摆 / 腿 / 脚），台词与情绪分池；同一处连点三下会翻脸
+- **点触事件反推**：每次点击都落盘 `data/touch.jsonl`，并可选 POST 给外部桥（`bridgeUrl`），用来唤醒别的进程
 - **情绪端口**：`POST 127.0.0.1:61943/mood {"emotion":"shy","intensity":0.8}`，12 种情绪映射成鲸语 plan
 - **气泡**：`POST /say {"text":"…"}` 出对话气泡，可选接自己的 TTS
 - **CLI**：`cli/pet.mjs` 把上面这些都包成命令行
@@ -76,6 +78,7 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 | `dshWatch` + `dshSessionsDir` | 可选：DSH 会话联动 |
 | `moodJson` | 可选：外部心情文件（有就同步情绪） |
 | `voicePrepare` + `voiceWavDir` | 可选：外部 TTS 桥脚本与音频目录 |
+| `bridgeUrl` | 可选：点触事件 POST 到哪里（反向桥，例如 `http://127.0.0.1:61944/event`） |
 
 配置存在 `data/config.json`，日志在 `data/pet.log`。
 
@@ -91,6 +94,8 @@ POST /cursor  {on?, spin?, reset?}
 GET  /cursor                    窗口位置、鼠标、调戏区、绕圈阶段
 GET  /bubble  POST /bubble      气泡文本与位置
 POST /sway    {on, phys, tilt, period}   GET /sway
+POST /touch   {zone, nx?, ny?}   模拟一次点触（zone: hair/head/neck/chest/waist/skirt/leg/foot/body）
+GET  /touches?limit=20           最近的点触记录
 ```
 
 情绪：`happy shy excited thinking sleepy proud sad annoyed surprised greeting playful neutral`
@@ -103,6 +108,8 @@ node cli/pet.mjs say "主人回来啦" --emotion happy
 node cli/pet.mjs expr 脸红 --and look=down
 node cli/pet.mjs gesture hand_on_chest
 node cli/pet.mjs sway --phys 0.2 --tilt 0.6 --period 4.0
+node cli/pet.mjs touch head
+node cli/pet.mjs touches 20
 ```
 
 端口会读 `data/config.json`，也可用 `WHALE_PET_STAGE_PORT` / `WHALE_PET_MOOD_PORT` 覆盖。
@@ -110,6 +117,22 @@ node cli/pet.mjs sway --phys 0.2 --tilt 0.6 --period 4.0
 ## 可选：DSH 会话联动
 
 `integ/dsh-watch.mjs` 读 DSH 会话事件流，把「读文件 / 写文件 / 跑命令 / 网页 / 子代理 / 卡住 / 报错 / 答完」演成动作。默认关闭，在设置面板勾上并填会话目录即可。
+
+## 可选：反向桥（把她变成输入设备）
+
+她不只是被指挥，也可以反过来叫醒别的进程。填了 `bridgeUrl` 之后，每一次点触都会 POST 到那个地址：
+
+```json
+{"ts":"2026-11-01T07:15:04.608Z","seq":4,"zone":"head","nx":0.501,"ny":0.2}
+```
+
+同一份数据也会追加进 `data/touch.jsonl`（超过 256KB 自动轮转成 `touch.jsonl.1`），随时可以 `GET /touches` 或 `node cli/pet.mjs touches` 回看主人都点了哪儿。
+
+DSH 这边的接法是 `dsh-pet-bridge` 插件：收到事件后按 `sessionController.resolveAgent → agent.followup → sessions.flush` 往当前会话投一条 user 消息，于是「摸头」真的会触发一次模型调用。它带同部位 2.5 秒合并、每分钟 8 条上限，避免连点刷屏。
+
+### 分区坐标怎么调
+
+`zoneOf`（`src/preload.js`）里的比例是按这只模型（3749×7697 全身立绘）的透明轮廓量出来的。换模型后，最省事的做法是先 `node cdp.mjs shot` 截一张，再按「头发顶端 / 下巴 / 肩 / 胸 / 腰 / 裙摆 / 膝 / 脚踝」在图上量百分比，改那几行阈值即可。
 
 ⚠️ 里面的表情名（`眯眼`、`加载`、`圈圈眼`、`黑脸`、`hand_on_chest`…）按某个特定模型写死，换模型要在文件顶部的表情表里换成你自己模型 `Exp3/`、`Animation/` 里的名字，否则会被引擎拒收。
 

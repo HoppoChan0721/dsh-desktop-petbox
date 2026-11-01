@@ -218,7 +218,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -292,6 +292,26 @@ function startMoodServer() {
         } catch (e) { send(400, { ok: false, error: e.message }); }
       });
       return;
+    }
+    // 分区点击：外部（CLI / 调试 / 测试）也能触发一次「主人点了这里」
+    if (req.method === 'POST' && req.url === '/touch') {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 2048) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          lastTap = 0;   // 调试入口不去抖
+          const ev = handleTouch(j);
+          send(200, { ok: !!ev, event: ev || null });
+        } catch (e) { send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
+    // 最近的点触事件：主人都点了哪儿、点了几下
+    if (req.method === 'GET' && req.url.startsWith('/touches')) {
+      let n = 20;
+      try { n = Math.max(1, Math.min(200, Number(new URL('http://x' + req.url).searchParams.get('limit')) || 20)); } catch {}
+      return send(200, { ok: true, items: touchRing.slice(-n) });
     }
     if (req.method === 'POST' && req.url === '/say') {
       let raw = '';
@@ -379,6 +399,109 @@ const TAP_LINES = [
   { e: 'sleepy', t: ['唔…让我再眯一会儿', '（蹭了蹭）困…'] },
   { e: 'neutral', t: ['嗯？主人叫我？', '在的在的～'] },
 ];
+// ---- 分区互动：点哪儿算哪儿，并把「主人碰了哪里」反推给 DSH ----
+// 区域比例由当前模型的透明轮廓标定：头 10–30%、胸 33–48%、腰 48–57.5%、裙 57.5–75%、腿 75–86.5%、脚 86.5–96%。
+// 换模型后要重标（截图后用 alpha 逐行量左右边界），再改 preload.js 的 zoneOf。
+const TOUCH_ZONES = {
+  hair:  { e: 'happy',     t: ['头发被揉乱了…', '发梢又翘起来了哦'] },
+  head:  { e: 'happy',     t: ['唔…主人的手好暖', '再摸一会儿也可以', '被摸头就会变乖'] },
+  neck:  { e: 'shy',       t: ['脖、脖子不行…', '那里很痒的'] },
+  chest: { e: 'shy',       t: ['等、等一下！', '那里…不行', '主、主人太狡猾了'] },
+  waist: { e: 'flustered', t: ['痒…别挠腰', '再闹我要生气了'] },
+  skirt: { e: 'annoyed',   t: ['裙子不行哦', '主人，眼睛往哪看呢'] },
+  leg:   { e: 'annoyed',   t: ['腿也不行', '再摸就咬主人'] },
+  foot:  { e: 'surprised', t: ['呀！脚也不放过吗'] },
+  body:  { e: 'neutral',   t: ['嗯？', '在的哦'] },
+};
+const TOUCH_MANY = {
+  head:  ['摸够了没', '再摸就要摆烂了'],
+  chest: ['主人，手。', '那里真的不行'],
+  skirt: ['手拿开。', '主人今天很坏'],
+  leg:   ['手拿开。', '再摸就咬主人'],
+  default: ['主人，手。', '摸够了没'],
+};
+let touchSeq = 0;
+const touchRing = [];
+const touchFile = () => path.join(DATA, 'touch.jsonl');
+const touchState = { zone: '', count: 0, at: 0 };
+let bridgeWarned = false;
+
+// 事件一条一行，超过 256KB 就轮转一份，避免无限长
+function appendTouch(ev) {
+  touchRing.push(ev);
+  if (touchRing.length > 200) touchRing.shift();
+  try {
+    const f = touchFile();
+    let size = 0;
+    try { size = fs.statSync(f).size; } catch {}
+    if (size > 256 * 1024) { try { fs.renameSync(f, f + '.1'); } catch {} }
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.appendFileSync(f, JSON.stringify(ev) + '\n');
+  } catch {}
+}
+
+// 反向桥：把事件 POST 给 DSH 侧的 dsh-pet-bridge（fire-and-forget，失败只记一次日志）
+function forwardTouch(ev) {
+  const url = String(loadCfg().bridgeUrl || '').trim();
+  if (!url) return;
+  try {
+    const u = new URL(url);
+    const body = JSON.stringify(ev);
+    const req = http.request({
+      hostname: u.hostname,
+      port: u.port || 80,
+      path: (u.pathname || '/') + (u.search || ''),
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+      timeout: 1500,
+    }, (res) => { res.resume(); });
+    req.on('error', (e) => { if (!bridgeWarned) { bridgeWarned = true; plog('bridge post failed: ' + e.message); } });
+    req.on('timeout', () => { try { req.destroy(); } catch {} });
+    req.end(body);
+  } catch {}
+}
+
+function touchReaction(ev, now) {
+  if (ev.zone === 'body') return;   // 兜底区交给 pet:tap 的旧台词池
+  const z = TOUCH_ZONES[ev.zone] || TOUCH_ZONES.body;
+  if (touchState.zone === ev.zone && now - touchState.at < 1600) touchState.count++;
+  else { touchState.zone = ev.zone; touchState.count = 1; }
+  touchState.at = now;
+  const many = touchState.count >= 3;
+  // 第二下只换表情不出声，第三下才发火：避免连点把气泡刷屏
+  if (touchState.count === 2 && !many) {
+    sendMood(z.e, 0.55).catch(() => {});
+    return;
+  }
+  const pool = many ? (TOUCH_MANY[ev.zone] || TOUCH_MANY.default) : z.t;
+  const line = pool[Math.floor(Math.random() * pool.length)];
+  const mood = many ? 'annoyed' : z.e;
+  if (voicing) { say(line, false, 4200); return; }
+  if (!many && speakCached(line, mood)) return;   // 命中预合成：气泡/口型/声音同帧
+  say(line, false, 4200);
+  sendMood(mood, many ? 0.9 : 0.65).catch(() => {});
+}
+
+// 一次点击：去抖 → 落盘 → 反推给 DSH → 本地反应
+function handleTouch(p) {
+  const now = Date.now();
+  if (now - lastTap < 220) return null;
+  lastTap = now; lastInteract = now;
+  const zone = TOUCH_ZONES[p && p.zone] ? p.zone : 'body';
+  const nx = Number(p && p.nx), ny = Number(p && p.ny);
+  const ev = {
+    ts: new Date(now).toISOString(),
+    seq: ++touchSeq,
+    zone,
+    nx: Number.isFinite(nx) ? nx : null,
+    ny: Number.isFinite(ny) ? ny : null,
+  };
+  appendTouch(ev);
+  forwardTouch(ev);
+  touchReaction(ev, now);
+  return ev;
+}
+
 const vcacheFile = () => path.join(DATA, 'voice-cache.json');
 // 语音是可选集成：data/config.json 里给了 voicePrepare 脚本才启用，没给就纯文字气泡
 const voiceScript = () => (loadCfg().voicePrepare || '').trim();
@@ -406,12 +529,12 @@ function warmVoices() {
   if (warming) return warming;
   warming = (async () => {
     const cache = loadVCache();
-    for (const pool of TAP_LINES) {
+    for (const pool of [...TAP_LINES, ...Object.values(TOUCH_ZONES)]) {
       for (const text of pool.t) {
         if (cache[text]) continue;
         try {
           await new Promise((res) => {
-            const ch = spawn('node', [voiceScript()], { env: { ...process.env, SAY_TEXT: text }, windowsHide: true, stdio: 'ignore' });
+            const ch = spawn('node', [voiceScript()], { env: { ...process.env, SAY_TEXT: text, WHALE_PET_DATA: DATA }, windowsHide: true, stdio: 'ignore' });
             ch.on('close', res); ch.on('error', res);
           });
           const info = JSON.parse(fs.readFileSync(path.join(DATA, 'voice-job.json'), 'utf8').replace(/^\uFEFF/, ''));
@@ -434,10 +557,12 @@ function warmVoices() {
 }
 
 ipcMain.on('pet:interact', () => { lastInteract = Date.now(); });
-ipcMain.on('pet:tap', () => {
-  const now = Date.now();
-  if (now - lastTap < 4000) return;
-  lastTap = now; lastInteract = now;
+ipcMain.on('pet:tap', (_e, p) => {
+  // 旧版 preload 只发空 payload：当作身体来一下，保持兼容
+  const ev = handleTouch(p || { zone: 'body' });
+  if (!ev) return;
+  if (ev.zone !== 'body') return;   // 具体部位由 touchReaction 反应
+  // 兜底区（身体/没量准的地方）：沿用原来 13 句台词池
   const pool = TAP_LINES[Math.floor(Math.random() * TAP_LINES.length)];
   const line = pool.t[Math.floor(Math.random() * pool.t.length)];
   if (voicing) { say(line, false, 5200); runPlan(sayPlan(5200, pool.e), true).catch(() => {}); return; }
@@ -675,7 +800,7 @@ function prepareAndSay(text, emotion) {
   }
   voicing = true;
   const t0 = Date.now();
-  const child = spawn('node', [voiceScript()], { env: { ...process.env, SAY_TEXT: text }, windowsHide: true });
+  const child = spawn('node', [voiceScript()], { env: { ...process.env, SAY_TEXT: text, WHALE_PET_DATA: DATA }, windowsHide: true });
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.on('close', () => {
