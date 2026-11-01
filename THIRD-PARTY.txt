@@ -1,0 +1,35 @@
+whale-pet-shell · 第三方组件与素材声明
+=====================================
+
+本仓库只包含「桌宠外壳」本身的代码（窗口、托盘、控制面板、指针追踪、玩法层、可选联动）。
+它**不包含**任何 Live2D 模型、贴图、Cubism Core 运行时，也不包含鲸语（Jingyu Live2D Agent）本体。
+
+运行时依赖
+----------
+Electron  ^45.2.0            MIT            https://github.com/electron/electron
+Node.js   >=20               MIT            https://nodejs.org/
+
+由鲸语一侧加载、本仓库不附带的组件
+----------------------------------
+PixiJS 6.x                   MIT            https://github.com/pixijs/pixijs
+pixi-live2d-display          MIT            https://github.com/guansss/pixi-live2d-display
+Live2D Cubism Web Framework  Live2D Open Software License
+                                            https://github.com/Live2D/CubismWebFramework/blob/develop/LICENSE.md
+Live2D Cubism Core           Live2D 专有软件许可（不随任何仓库分发，需从官方 SDK 获取）
+                                            https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html
+
+第三方项目
+----------
+鲸语 Jingyu Live2D Agent     https://www.bilibili.com/video/BV1KmxY66EZ3/
+  本外壳通过 HTTP 调用它的舞台与动作编译接口（/api/compile、/api/execute、/api/stop），
+  并在 patch/apply-jingyu.mjs 里对其 web/app.mjs、web/engine.mjs 做最小插入。
+  该项目的代码、文档与发布方式归原作者所有；本仓库不复制其源码。
+
+模型与角色素材
+--------------
+不随本仓库分发。模型的使用、修改、再分发受原作者与 Live2D 建模者各自的条款约束；
+下载本仓库或安装本外壳**不会**获得任何角色素材的分发权利。请向原作者渠道获取。
+
+备注
+----
+本仓库代码的许可见 LICENSE（MIT）。以上第三方条款优先于本仓库许可适用于对应组件。
