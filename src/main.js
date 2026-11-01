@@ -27,7 +27,13 @@ function refreshPaths() {
   BASE = R.repo; MODEL = R.model; PYTHON = R.python; PORT = R.stagePort; REPO = BASE; MOOD_PORT = R.moodPort;
   return R;
 }
-const stageUrl = (fit) => `http://127.0.0.1:${PORT}/?stage=1${fit === 'full' ? '&fit=full' : ''}`;
+const stageUrl = (fit) => `http://127.0.0.1:${PORT}/?stage=1${fit === 'full' ? '&fit=full' : ''}&fps=${stageFpsOf()}`;
+// 舞台帧率：高刷屏（144/165Hz）上 rAF 会跑满，Live2D 每帧要做参数求解+物理+蒙皮，白烧 CPU。
+// 默认锁 60，0 = 不限。改完要重载舞台页面才生效。
+const stageFpsOf = (cfg) => {
+  const v = Number((cfg || loadCfg()).stageFps);
+  return Number.isFinite(v) && v >= 0 ? v : 60;
+};
 const LOG_FILE = path.join(DATA, 'pet.log');
 function plog(msg) {
   try { fs.mkdirSync(DATA, { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {}
@@ -232,7 +238,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, fps: stageFpsOf(), lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -426,6 +432,23 @@ function startMoodServer() {
           const j = JSON.parse(raw || '{}');
           const on = typeof j.on === 'boolean' ? j.on : !bridgeOn;
           send(200, { ok: true, bridge: setBridge(on, true) });
+        } catch (e) { send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
+    // 舞台帧率：GET 读、POST 设（0 = 不限帧），改完重载舞台页面才生效
+    if (req.url === '/fps' && (req.method === 'GET' || req.method === 'POST')) {
+      if (req.method === 'GET') return send(200, { ok: true, fps: stageFpsOf() });
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 256) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          const v = Number(j.fps);
+          if (!Number.isFinite(v) || v < 0 || v > 240) throw new Error('fps 要在 0..240 之间（0 = 不限）');
+          saveCfg({ stageFps: Math.round(v) });
+          if (win && !win.isDestroyed()) win.loadURL(stageUrl(loadCfg().fit)).catch(() => {});
+          send(200, { ok: true, fps: stageFpsOf() });
         } catch (e) { send(400, { ok: false, error: e.message }); }
       });
       return;

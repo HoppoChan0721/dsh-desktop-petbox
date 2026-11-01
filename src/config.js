@@ -37,6 +37,7 @@ const DEFAULTS = {
   bridge: true,             // 模型桥接：点触要不要 POST 给 DSH 会话（关掉只留本地反应）
   interactive: true,        // 分区互动总开关
   spinTurns: 6,             // 绕她转几圈才算一节（2~20）：晕 → 嫌弃 → 生气
+  stageFps: 60,             // 舞台帧率上限（0 = 不限）：高刷屏满帧会白烧 CPU
   voiceVolume: 0.5,
   bubblePos: 'bottom',
 };

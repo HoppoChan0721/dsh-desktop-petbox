@@ -59,6 +59,20 @@ function patchApp(src) {
       notes.push('app.mjs：preserveDrawingBuffer');
     }
   }
+  if (!s.includes(`${MARK}:fps`)) {
+    const anchor = '  PIXI.live2d.Live2DModel.registerTicker(PIXI.Ticker);';
+    if (!s.includes(anchor)) throw new Error('app.mjs 锚点 4 缺失（PIXI.Live2DModel.registerTicker），鲸语版本可能变了');
+    s = s.replace(anchor,
+      `  // ${MARK}:fps — 高刷屏 rAF 会跑满 144/165Hz，而 Live2D 每帧要参数求解+物理+蒙皮；\n` +
+      `  // 桌宠没有 144fps 的需求，默认锁 60。?fps=0 不限，?fps=90 可单独放宽。\n` +
+      `  {\n` +
+      `    const raw = search.get('fps');\n` +
+      `    const tf = raw === null ? 60 : Number(raw);\n` +
+      `    pixi.ticker.maxFPS = Number.isFinite(tf) && tf >= 0 ? tf : 60;\n` +
+      `  }\n` +
+      anchor);
+    notes.push('app.mjs：锁帧（默认 60fps，?fps= 可调）');
+  }
   if (!s.includes(`${MARK}:expose`)) {
     if (s.includes('__stageEngine')) notes.push('app.mjs：已有 __stageEngine 暴露，跳过');
     else {
@@ -122,7 +136,7 @@ if (REVERT) {
 }
 
 if (CHECK) {
-  console.log('app.mjs    ' + state(files.app, [['stage-mode', 'const stageMode='], ['preserve', 'preserveDrawingBuffer'], ['expose', '__stageEngine']]));
+  console.log('app.mjs    ' + state(files.app, [['stage-mode', 'const stageMode='], ['preserve', 'preserveDrawingBuffer'], ['fps', 'pixi.ticker.maxFPS'], ['expose', '__stageEngine']]));
   console.log('engine.mjs ' + state(files.engine, [['pointer', 'applyPointer']]));
   process.exit(0);
 }

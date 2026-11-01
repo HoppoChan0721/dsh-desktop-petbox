@@ -56,12 +56,13 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent"
 node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 ```
 
-补丁只做四处最小插入，幂等、自动备份 `.whale-pet-bak`，可 `--revert` 还原：
+补丁只做五处最小插入，幂等、自动备份 `.whale-pet-bak`，可 `--revert` 还原：
 
 1. `app.mjs`：`?stage=1` 舞台模式判定
 2. `app.mjs`：`preserveDrawingBuffer`（像素级穿透要读 canvas alpha）
-3. `app.mjs`：暴露 `window.__stageEngine / __stageModel`、订阅壳子送来的指针、定时写 `#scene[data-hit]` 命中框
-4. `engine.mjs`：新增 `pointer` 驱动阶段（优先级 15），把指针映射到 `AngleX/AngleY/AngleZ/LeanInput/PositionX`
+3. `app.mjs`：锁帧（默认 60fps，`?fps=0` 不限）—— 高刷屏不锁帧会跟着 144/165Hz 满跑，白烧 CPU
+4. `app.mjs`：暴露 `window.__stageEngine / __stageModel`、订阅壳子送来的指针、定时写 `#scene[data-hit]` 命中框
+5. `engine.mjs`：新增 `pointer` 驱动阶段（优先级 15），把指针映射到 `AngleX/AngleY/AngleZ/LeanInput/PositionX`
 
 > 找不到锚点会直接报错、不写入。鲸语改版后锚点可能变，那时按报错手改，或对照本仓库 `patch/apply-jingyu.mjs` 里的插入内容。
 
@@ -79,6 +80,7 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 | `moodJson` | 可选：外部心情文件（有就同步情绪） |
 | `voicePrepare` + `voiceWavDir` | 可选：外部 TTS 桥脚本与音频目录 |
 | `bridgeUrl` | 可选：点触事件 POST 到哪里（反向桥，例如 `http://127.0.0.1:61944/event`） |
+| `stageFps` | 舞台帧率上限，默认 60（`0` = 不限）。高刷屏不锁帧会按显示器刷新率满跑，CPU 翻三倍 |
 
 配置存在 `data/config.json`，日志在 `data/pet.log`。
 
@@ -96,6 +98,7 @@ GET  /bubble  POST /bubble      气泡文本与位置
 POST /sway    {on, phys, tilt, period}   GET /sway
 POST /touch   {zone, nx?, ny?}   模拟一次点触（zone: hair/head/neck/chest/waist/skirt/leg/foot/body）
 GET  /touches?limit=20           最近的点触记录
+GET  /fps  POST /fps {fps}       舞台帧率上限（0 = 不限），改完自动重载舞台
 ```
 
 情绪：`happy shy excited thinking sleepy proud sad annoyed surprised greeting playful neutral`
@@ -110,6 +113,7 @@ node cli/pet.mjs gesture hand_on_chest
 node cli/pet.mjs sway --phys 0.2 --tilt 0.6 --period 4.0
 node cli/pet.mjs touch head
 node cli/pet.mjs touches 20
+node cli/pet.mjs fps 30            # 舞台帧率上限（0 = 不限）
 ```
 
 端口会读 `data/config.json`，也可用 `WHALE_PET_STAGE_PORT` / `WHALE_PET_MOOD_PORT` 覆盖。

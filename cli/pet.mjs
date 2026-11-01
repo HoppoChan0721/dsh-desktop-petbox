@@ -217,6 +217,15 @@ async function main() {
     return;
   }
 
+  if (cmd === 'fps') {
+    // 舞台帧率上限：不设就是跟着显示器刷新率跑（144/165Hz 会白烧 CPU）
+    const a = String(F._[0] || '').toLowerCase();
+    const r = a === '' ? await jget(`${SHELL}/fps`) : await jpost(`${SHELL}/fps`, { fps: Number(a) });
+    if (r.status !== 200) { console.log('失败：' + ((r.data && r.data.error) || r.status)); return; }
+    console.log(JSON.stringify({ ok: true, fps: r.data.fps }, null, 2));
+    return;
+  }
+
   if (cmd === 'zones') {
     const force = !!(F.scan || F.force || F._[0] === 'scan');
     const r = await jget(`${SHELL}/zones${force ? '/scan' : ''}`);
@@ -373,6 +382,7 @@ const USAGE = `
   zones [scan]                   量模型剪影轮廓，看分区对不对（换模型/换装后跑 scan 重标）
   interactive [on|off]           分区互动总开关（不带参数=读）
   bridge [on|off]                模型桥接：点她要不要叫醒 DSH 会话（不带参数=读）
+  fps [n]                        舞台帧率上限（不带参数=读；60 默认，0 = 不限）
   expr <表情> [--strength 0.9]   24 个表情
   gesture <name>                  hand_on_chest / point / grass
   look <left|right|up|down|center>
