@@ -34,6 +34,14 @@ const stageFpsOf = (cfg) => {
   const v = Number((cfg || loadCfg()).stageFps);
   return Number.isFinite(v) && v >= 0 ? v : 60;
 };
+// 存新的帧率并重载舞台（面板和 /fps 都走这里）。只重载页面，不动窗口也不重启。
+function applyStageFps(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 240) return false;
+  saveCfg({ stageFps: Math.round(n) });
+  if (win && !win.isDestroyed()) win.loadURL(stageUrl(loadCfg().fit)).catch(() => {});
+  return true;
+}
 const LOG_FILE = path.join(DATA, 'pet.log');
 function plog(msg) {
   try { fs.mkdirSync(DATA, { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {}
@@ -445,9 +453,7 @@ function startMoodServer() {
         try {
           const j = JSON.parse(raw || '{}');
           const v = Number(j.fps);
-          if (!Number.isFinite(v) || v < 0 || v > 240) throw new Error('fps 要在 0..240 之间（0 = 不限）');
-          saveCfg({ stageFps: Math.round(v) });
-          if (win && !win.isDestroyed()) win.loadURL(stageUrl(loadCfg().fit)).catch(() => {});
+          if (!applyStageFps(v)) throw new Error('fps 要在 0..240 之间（0 = 不限）');
           send(200, { ok: true, fps: stageFpsOf() });
         } catch (e) { send(400, { ok: false, error: e.message }); }
       });
@@ -1232,6 +1238,8 @@ ipcMain.handle('cfg:save', (_e, patch) => {
   saveCfg(patch || {});
   if (patch && typeof patch.interactive === 'boolean') setInteractive(patch.interactive, false);   // 存过了，只广播
   if (patch && typeof patch.bridge === 'boolean') setBridge(patch.bridge, false);
+  // 帧率改了要重载舞台才生效（只重载页面，不动窗口）
+  if (patch && patch.stageFps !== undefined) applyStageFps(patch.stageFps);
   const r = refreshPaths();
   plog('config saved: ' + JSON.stringify(patch || {}));
   return r;
@@ -1312,7 +1320,7 @@ function setSize(w, h) { return applySize(w, h, true) || { width: w, height: h }
 function createPanel() {
   if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
   const area = screen.getPrimaryDisplay().workArea;
-  const PW = 396, PH = 430; // 高度贴着内容，不留空白
+  const PW = 396, PH = 470; // 高度贴着内容，不留空白
   panel = new BrowserWindow({
     width: PW, height: PH,
     x: area.x + Math.round((area.width - PW) / 2), y: area.y + Math.round((area.height - PH) / 2),

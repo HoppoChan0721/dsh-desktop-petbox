@@ -6,6 +6,64 @@ const FIELDS = ['jingyuRepo', 'modelDir', 'pythonPath', 'stagePort', 'moodPort',
 const box = (id) => document.getElementById(id);
 let aspect = 380 / 680;
 
+// ---- 帧率：30 / 60 / 90 预设 + 自定义（0 = 不限）----
+const fpsSel = box('fps');
+const fpsCustom = box('fpsCustom');
+const fpsVal = box('fpsVal');
+
+function fpsFromUi() {
+  if (fpsSel.value === 'custom') {
+    const n = Number(fpsCustom.value);
+    return Number.isFinite(n) && n >= 0 && n <= 240 && fpsCustom.value.trim() !== '' ? Math.round(n) : null;
+  }
+  return Number(fpsSel.value);
+}
+
+function paintFps(n) {
+  const v = Number.isFinite(n) ? Math.max(0, Math.min(240, Math.round(n))) : 60;
+  fpsVal.textContent = v === 0 ? '不限' : v + ' fps';
+  if (v === 30 || v === 60 || v === 90) {
+    fpsSel.value = String(v);
+    fpsCustom.value = '';
+    fpsCustom.hidden = true;
+  } else {
+    fpsSel.value = 'custom';
+    fpsCustom.value = String(v);
+    fpsCustom.hidden = false;
+  }
+}
+
+async function applyFps(n) {
+  if (n === null || !Number.isFinite(n)) {
+    statusEl.className = 'hint bad';
+    statusEl.textContent = '帧率要填 0–240 之间的整数（0 = 不限）。';
+    return;
+  }
+  const v = Math.max(0, Math.min(240, Math.round(n)));
+  try {
+    await window.petCfg.save({ stageFps: v });
+    paintFps(v);
+    statusEl.className = 'hint good';
+    statusEl.textContent = v === 0 ? '帧率已设为不限，正在重载舞台…' : `帧率已设为 ${v} fps，正在重载舞台…`;
+  } catch (e) {
+    statusEl.className = 'hint bad';
+    statusEl.textContent = '设置帧率失败：' + e.message;
+  }
+}
+
+fpsSel.addEventListener('change', () => {
+  if (fpsSel.value === 'custom') {
+    fpsCustom.hidden = false;
+    fpsCustom.focus();
+    return;
+  }
+  fpsCustom.hidden = true;
+  applyFps(Number(fpsSel.value));
+});
+
+fpsCustom.addEventListener('change', () => applyFps(fpsFromUi()));
+fpsCustom.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFps(fpsFromUi()); } });
+
 const readSize = () => {
   const h = Number(r.value);
   const w = Math.round(h * aspect);
@@ -34,6 +92,7 @@ async function loadConfig() {
     box('dshWatch').checked = !!cfg.dshWatch;
     box('interactive').checked = cfg.interactive !== false;
     box('bridge').checked = cfg.bridge !== false;
+    paintFps(Number(cfg.stageFps));
     paintStatus(resolved);
   } catch (e) {
     statusEl.className = 'hint bad';
@@ -96,6 +155,8 @@ box('bridge').addEventListener('change', async () => {
 
 box('save').addEventListener('click', async () => {
   const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked, bridge: box('bridge').checked };
+  const fv = fpsFromUi();
+  if (fv !== null) patch.stageFps = fv;
   for (const id of FIELDS) {
     const v = box(id).value.trim();
     if (id === 'stagePort' || id === 'moodPort') {

@@ -30,9 +30,12 @@
   input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px;
     border-radius: 50%; background: #7fd6ff; box-shadow: 0 0 0 3px rgba(127, 214, 255, .22); cursor: pointer; }
   .field { display: flex; gap: 6px; -webkit-app-region: no-drag; }
-  .field input[type=text] { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid #33505f; border-radius: 8px;
+  .field input[type=text], .field input[type=number], .field select { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid #33505f; border-radius: 8px;
     background: #182c38; color: #dceef7; font: 12px ui-monospace, "Cascadia Mono", monospace; }
-  .field input[type=text]::placeholder { color: #5b7a8b; }
+  .field select { flex: 1; cursor: pointer; }
+  .field input[type=number] { flex: 0 0 92px; }
+  .field input[type=number]::-webkit-inner-spin-button { opacity: .45; }
+  .field input[type=text]::placeholder, .field input[type=number]::placeholder { color: #5b7a8b; }
   .field button, .btns button { padding: 5px 10px; border: 0; border-radius: 8px; background: #2f4b5c; color: #dceef7;
     font: 12px system-ui, "Microsoft YaHei"; cursor: pointer; white-space: nowrap; }
   .field button:hover, .btns button:hover { background: #3a5c70; }
@@ -80,6 +83,19 @@
       <div class="hint">关掉后点她等于点空气：不说话、不记事、不叫醒会话，Alt+拖拽和穿透照旧。</div>
       <label class="check"><input id="bridge" type="checkbox"> 模型桥接（点她会叫醒 DSH 会话）</label>
       <div class="hint">关掉只断这一条线：表情和台词照做、点触照记，只是不叫醒会话、不回话。</div>
+
+      <h3>性能</h3>
+      <div class="row"><span>舞台帧率</span><span class="val" id="fpsVal">60 fps</span></div>
+      <div class="field">
+        <select id="fps">
+          <option value="30">30 帧（最省）</option>
+          <option value="60">60 帧（默认）</option>
+          <option value="90">90 帧（更顺）</option>
+          <option value="custom">自定义…</option>
+        </select>
+        <input id="fpsCustom" type="number" min="0" max="240" step="1" placeholder="0–240，0 = 不限" hidden>
+      </div>
+      <div class="hint">高刷屏（144 / 165Hz）不锁帧会按刷新率满跑，CPU 翻三倍。选自定义可填 0 = 不限。改完会重载一次舞台。</div>
 
       <h3>可选集成</h3>
       <label class="check"><input id="dshWatch" type="checkbox"> DSH 会话联动（把会话状态演成动作）</label>
