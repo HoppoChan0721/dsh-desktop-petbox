@@ -40,6 +40,18 @@ let voiceVolume = 0.5;   // 0..1，持久化在 config.json 的 voiceVolume
 let lastSay = null;   // 最近一次实时合成的结果（给演示脚本判断节奏用）
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 资源目录：assets 在仓库根，也就是 src 的上一层；打包后可能被搬到 resources 下，几处都试一遍。
+// 以前这里少了 '..'，createFromPath 找不到文件就返回空图，托盘图标于是永远空白。
+function assetPath(name) {
+  const cands = [
+    path.join(__dirname, '..', 'assets', name),
+    path.join(__dirname, 'assets', name),
+    path.join(process.resourcesPath || '', 'assets', name),
+  ];
+  for (const p of cands) { try { if (fs.existsSync(p)) return p; } catch {} }
+  return cands[0];
+}
+
 function ping() {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port: PORT, path: '/api/state', timeout: 800 }, (res) => { res.resume(); resolve(true); });
@@ -975,7 +987,7 @@ function createWindow() {
     x, y, width, height, show: false, transparent: true, frame: false, hasShadow: false,
     resizable: true, movable: true, minimizable: true, maximizable: false, skipTaskbar: true,
     alwaysOnTop: true, roundedCorners: false, backgroundColor: '#00000000',
-    icon: path.join(__dirname, 'assets', 'icon-256.png'),
+    icon: assetPath('icon-256.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, backgroundThrottling: false, spellcheck: false },
   });
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
@@ -1177,7 +1189,14 @@ ipcMain.on('pet:wheel-resize', (_e, dir) => {
   applySize(Math.round(nh * (w / Math.max(1, h))), nh, true);
 });
 
-function trayIcon() { return nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon-32.png')); }
+function trayIcon() {
+  const p = assetPath('icon-32.png');
+  const img = nativeImage.createFromPath(p);
+  // 加载不到只会得到空图、托盘一片空白，而且不报错，所以留一行日志方便排查
+  if (img.isEmpty()) plog('tray icon EMPTY: ' + p);
+  else plog('tray icon ok: ' + p + ' ' + JSON.stringify(img.getSize()));
+  return img;
+}
 
 function popupTrayMenu() {
   if (!tray) return;
@@ -1190,7 +1209,7 @@ function shortcutFile() {
 function autostartOn() { return fs.existsSync(shortcutFile()); }
 function setAutostart(on) {
   if (on) {
-    shell.writeShortcutLink(shortcutFile(), 'create', { target: process.execPath, args: `"${__dirname}"`, cwd: __dirname, icon: path.join(__dirname, 'assets', 'icon-256.png'), description: '大肥鱼桌宠' });
+    shell.writeShortcutLink(shortcutFile(), 'create', { target: process.execPath, args: `"${__dirname}"`, cwd: __dirname, icon: assetPath('icon-256.png'), description: '大肥鱼桌宠' });
   } else if (fs.existsSync(shortcutFile())) fs.unlinkSync(shortcutFile());
 }
 
@@ -1226,7 +1245,7 @@ function createPanel() {
     x: area.x + Math.round((area.width - PW) / 2), y: area.y + Math.round((area.height - PH) / 2),
     frame: false, transparent: true, resizable: false, maximizable: false, minimizable: false,
     alwaysOnTop: true, skipTaskbar: true, show: false, backgroundColor: '#00000000', roundedCorners: true,
-    icon: path.join(__dirname, 'assets', 'icon-256.png'),
+    icon: assetPath('icon-256.png'),
     webPreferences: { preload: path.join(__dirname, 'panel-preload.js'), contextIsolation: true, sandbox: false, spellcheck: false },
   });
   panel.setAlwaysOnTop(true, 'screen-saver');
@@ -1237,36 +1256,51 @@ function createPanel() {
 }
 
 function buildMenu() {
+  const fitNow = loadCfg().fit === 'full' ? 'full' : 'portrait';
+  const bubbleNow = loadCfg().bubblePos || 'bottom';
   return Menu.buildFromTemplate([
     { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return createWindow(); win.isVisible() ? win.hide() : win.show(); } },
     { type: 'separator' },
-    { label: '置顶显示', type: 'checkbox', checked: alwaysOnTop, click: (item) => { alwaysOnTop = item.checked; saveCfg({ onTop: alwaysOnTop }); if (win) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver'); } },
-    { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
-    { label: '分区互动（点她会有反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
-    { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
-    { label: '自动情绪（跟随 DSH 回复，需在设置里开联动）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
-    { label: '全身 / 近景', submenu: [
-      { label: '近景（默认）', type: 'radio', checked: loadCfg().fit !== 'full', click: () => { saveCfg({ fit: 'portrait' }); loadStage(); } },
-      { label: '全身', type: 'radio', checked: loadCfg().fit === 'full', click: () => { saveCfg({ fit: 'full' }); loadStage(); } },
+    // 顶层只留 5 组：互动 / 外观 / 情绪 / 设置 / 更多。开关类都收进「互动」，别越铺越长。
+    { label: '互动', submenu: [
+      { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
+      { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
+      { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
+      { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
     ] },
-    { label: '情绪测试', submenu: [['happy','开心'],['shy','害羞'],['excited','兴奋'],['thinking','思考'],['sleepy','困'],['proud','得意'],['annoyed','嫌弃'],['surprised','吃惊']].map(([e,label]) => ({ label, click: () => sendMood(e, 0.7) })) },
-    { label: '设置…（尺寸 / 鲸语 / 模型 / 端口）', click: () => createPanel() },
-    { label: '尺寸', submenu: [
-      { label: '小（300 × 520）', click: () => setSize(300, 520) },
-      { label: '中（380 × 680）', click: () => setSize(380, 680) },
-      { label: '大（480 × 860）', click: () => setSize(480, 860) },
+    { label: '外观', submenu: [
+      { label: '全身 / 近景', submenu: [
+        { label: '近景（默认）', type: 'radio', checked: fitNow !== 'full', click: () => { saveCfg({ fit: 'portrait' }); loadStage(); } },
+        { label: '全身', type: 'radio', checked: fitNow === 'full', click: () => { saveCfg({ fit: 'full' }); loadStage(); } },
+      ] },
+      { label: '尺寸', submenu: [
+        { label: '小（300 × 520）', click: () => setSize(300, 520) },
+        { label: '中（380 × 680）', click: () => setSize(380, 680) },
+        { label: '大（480 × 860）', click: () => setSize(480, 860) },
+        { type: 'separator' },
+        { label: '滑杆微调…', click: () => createPanel() },
+        { label: '也可 Ctrl + 滚轮（角色身上）', enabled: false },
+      ] },
+      { label: '气泡位置', submenu: [['bottom','底部'],['top','顶部'],['left','左侧（竖排）'],['right','右侧（竖排）']].map(([p,label]) => ({ label, type: 'radio', checked: bubbleNow === p, click: () => { saveCfg({ bubblePos: p }); applyBubblePos(p); } })) },
+      ...(voiceEnabled() ? [{ label: `语音音量（${Math.round(voiceVolume * 100)}%）`, submenu: [[1,'100%'],[0.7,'70%'],[0.55,'55%'],[0.4,'40%'],[0.25,'25%'],[0.1,'10%']].map(([v,label]) => ({ label, type: 'radio', checked: Math.abs(voiceVolume - v) < 0.01, click: () => setVolume(v) })) }] : []),
       { type: 'separator' },
-      { label: '滑杆微调…', click: () => createPanel() },
-      { label: '也可 Ctrl + 滚轮（角色身上）', enabled: false },
+      { label: '置顶显示', type: 'checkbox', checked: alwaysOnTop, click: (item) => { alwaysOnTop = item.checked; saveCfg({ onTop: alwaysOnTop }); if (win) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver'); } },
     ] },
-    { label: '气泡位置', submenu: [['bottom','底部'],['top','顶部'],['left','左侧（竖排）'],['right','右侧（竖排）']].map(([p,label]) => ({ label, type: 'radio', checked: (loadCfg().bubblePos || 'bottom') === p, click: () => { saveCfg({ bubblePos: p }); applyBubblePos(p); } })) },
-    ...(voiceEnabled() ? [{ label: `语音音量（${Math.round(voiceVolume * 100)}%）`, submenu: [[1,'100%'],[0.7,'70%'],[0.55,'55%'],[0.4,'40%'],[0.25,'25%'],[0.1,'10%']].map(([v,label]) => ({ label, type: 'radio', checked: Math.abs(voiceVolume - v) < 0.01, click: () => setVolume(v) })) }] : []),
+    { label: '情绪', submenu: [
+      ...[['happy','开心'],['shy','害羞'],['excited','兴奋'],['thinking','思考'],['sleepy','困'],['proud','得意'],['annoyed','嫌弃'],['surprised','吃惊']].map(([e, label]) => ({ label, click: () => sendMood(e, 0.7) })),
+      { type: 'separator' },
+      { label: '随机来一个', click: () => { const ks = Object.keys(MOODS); sendMood(ks[Math.floor(Math.random() * ks.length)], 0.7); } },
+    ] },
+    { label: '设置…（尺寸 / 鲸语 / 模型 / 端口）', click: () => createPanel() },
     { type: 'separator' },
-    { label: '重新载入', click: () => loadStage() },
-    { label: '打开鲸语工作台', click: () => shell.openExternal(`http://127.0.0.1:${PORT}/`) },
-    { label: '复制舞台地址（OBS 用）', click: () => clipboard.writeText(stageUrl('portrait')) },
+    { label: '更多', submenu: [
+      { label: '重新载入', click: () => loadStage() },
+      { label: '打开鲸语工作台', click: () => shell.openExternal(`http://127.0.0.1:${PORT}/`) },
+      { label: '复制舞台地址（OBS 用）', click: () => clipboard.writeText(stageUrl('portrait')) },
+      { type: 'separator' },
+      { label: '开机自启', type: 'checkbox', checked: autostartOn(), click: (item) => setAutostart(item.checked) },
+    ] },
     { type: 'separator' },
-    { label: '开机自启', type: 'checkbox', checked: autostartOn(), click: (item) => setAutostart(item.checked) },
     { label: '退出', click: () => app.quit() },
   ]);
 }
