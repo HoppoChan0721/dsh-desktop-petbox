@@ -2,7 +2,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, screen, shell, cli
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 
 // —— 配置：所有外部依赖（鲸语仓库 / 模型 / Python / 端口 / 可选集成）都在 data/config.json ——
 const CFG = require('./config');
@@ -246,7 +246,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, fps: stageFpsOf(), lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -388,6 +388,19 @@ function startMoodServer() {
       req.on('end', async () => {
         try { const j = JSON.parse(raw || '{}'); const r = await sendMood(j.emotion, j.intensity); send(200, r); }
         catch (e) { send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
+    // 贴窗口：POST /dock {"mode":"left|right|none","title":"DeepSeek Harness"}
+    if (req.method === 'POST' && req.url === '/dock') {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 1024) req.destroy(); });
+      req.on('end', async () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          const r = await applyDock(j.mode || loadCfg().dock, { title: j.title });
+          send(r.ok ? 200 : 404, r);
+        } catch (e) { send(400, { ok: false, error: e.message }); }
       });
       return;
     }
@@ -1048,6 +1061,52 @@ function loadStage() {
   });
 }
 
+// ---- 贴窗口：启动时把自己摆到目标窗口旁边（默认找 DSH 那个浏览器窗口）----
+// 窗口矩形靠 scripts/find-window.ps1 枚举顶层窗口拿到（纯 ASCII JSON，不碰编码）。
+function findDockTarget(title) {
+  return new Promise((resolve) => {
+    const script = path.join(__dirname, '..', 'scripts', 'find-window.ps1');
+    if (!fs.existsSync(script)) return resolve(null);
+    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Title', title || 'DeepSeek Harness'],
+      { timeout: 8000, windowsHide: true }, (err, stdout) => {
+        if (err) return resolve(null);
+        try {
+          const line = String(stdout || '').trim().split(/\r?\n/).filter(Boolean).pop();
+          const j = JSON.parse(line);
+          if (!j || j.ok === false || !Number.isFinite(j.w) || j.w < 100) return resolve(null);
+          resolve(j);
+        } catch { resolve(null); }
+      });
+  });
+}
+
+// 贴着目标窗口外侧放：right = 它的右边，left = 它的左边；垂直居中对齐
+function dockRect(t, mode) {
+  const [ww, wh] = win.getSize();
+  const gap = Math.max(0, Math.min(80, Number(loadCfg().dockGap ?? 8)));
+  let x = mode === 'left' ? t.x - ww - gap : t.x + t.w + gap;
+  let y = t.y + Math.round((t.h - wh) / 2);
+  const pt = { x: Math.max(t.x, Math.min(t.x + t.w, x + Math.round(ww / 2))), y: y + Math.round(wh / 2) };
+  const d = screen.getDisplayNearestPoint(pt).workArea;
+  x = Math.max(d.x - Math.round(ww * 0.25), Math.min(x, d.x + d.width - Math.round(ww * 0.75)));
+  y = Math.max(d.y, Math.min(y, d.y + d.height - wh));
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+// 返回 {ok, x, y, title?}；找不到窗口就保持原位（别把她甩到屏幕外）
+async function applyDock(mode, opts = {}) {
+  const m = mode === 'left' || mode === 'right' ? mode : 'none';
+  if (opts.persist !== false) saveCfg({ dock: m });
+  if (!win || win.isDestroyed() || m === 'none') return { ok: true, dock: m, moved: false };
+  const title = (opts.title || loadCfg().dockTitle || 'DeepSeek Harness').trim();
+  const t = await findDockTarget(title);
+  if (!t) return { ok: false, dock: m, error: `没找到标题含「${title}」的窗口`, moved: false };
+  const p = dockRect(t, m);
+  win.setPosition(p.x, p.y);
+  saveCfg({ x: p.x, y: p.y });
+  return { ok: true, dock: m, moved: true, x: p.x, y: p.y, target: { x: t.x, y: t.y, w: t.w, h: t.h } };
+}
+
 function createWindow() {
   const cfg = loadCfg();
   const area = screen.getPrimaryDisplay().workArea;
@@ -1064,9 +1123,18 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, backgroundThrottling: false, spellcheck: false },
   });
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
-  win.webContents.on('did-finish-load', () => { loadAttempts = 0; win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); }).catch(() => {}); if (!win.isVisible()) win.show();
+  win.webContents.on('did-finish-load', async () => {
+    loadAttempts = 0;
+    win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); }).catch(() => {});
+    // 第一次露脸前先贴到目标窗口旁边（设置里的 dock），找不到就还按上次的坐标站
+    const dm = loadCfg().dock;
+    if ((dm === 'left' || dm === 'right') && !win.isVisible()) {
+      try { await applyDock(dm, { persist: false }); } catch {}
+    }
+    if (!win.isVisible()) win.show();
     // 页面刚加载时模型还没画出来，等它站稳再量剪影，这样第一次点击就不用现场扫
-    setTimeout(() => { try { win.webContents.send('pet:zones-reset'); } catch {} }, 2500); });
+    setTimeout(() => { try { win.webContents.send('pet:zones-reset'); } catch {} }, 2500);
+  });
   win.webContents.on('context-menu', () => popupTrayMenu());
   let boundsTimer = null;
   const saveBounds = () => {
@@ -1346,6 +1414,8 @@ function createPanel() {
 function buildMenu() {
   const fitNow = loadCfg().fit === 'full' ? 'full' : 'portrait';
   const bubbleNow = loadCfg().bubblePos || 'bottom';
+  const dockNow = loadCfg().dock || 'none';
+  const dockClick = (mode) => { applyDock(mode).then((r) => { if (!r.ok) say(r.error || '没找到窗口', false, 4000); }).catch(() => {}); };
   return Menu.buildFromTemplate([
     { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return createWindow(); win.isVisible() ? win.hide() : win.show(); } },
     { type: 'separator' },
@@ -1371,6 +1441,14 @@ function buildMenu() {
         { label: '也可 Ctrl + 滚轮（角色身上）', enabled: false },
       ] },
       { label: '气泡位置', submenu: [['bottom','底部'],['top','顶部'],['left','左侧（竖排）'],['right','右侧（竖排）']].map(([p,label]) => ({ label, type: 'radio', checked: bubbleNow === p, click: () => { saveCfg({ bubblePos: p }); applyBubblePos(p); } })) },
+      { label: '贴窗口（启动时）', submenu: [
+        { label: '贴在它左边', type: 'radio', checked: dockNow === 'left', click: () => dockClick('left') },
+        { label: '贴在它右边', type: 'radio', checked: dockNow === 'right', click: () => dockClick('right') },
+        { label: '不贴（记住上次位置）', type: 'radio', checked: dockNow === 'none', click: () => dockClick('none') },
+        { type: 'separator' },
+        { label: '现在就贴一次', click: () => dockClick(dockNow === 'none' ? 'right' : dockNow) },
+        { label: `目标窗口：${loadCfg().dockTitle || 'DeepSeek Harness'}`, enabled: false },
+      ] },
       ...(voiceEnabled() ? [{ label: `语音音量（${Math.round(voiceVolume * 100)}%）`, submenu: [[1,'100%'],[0.7,'70%'],[0.55,'55%'],[0.4,'40%'],[0.25,'25%'],[0.1,'10%']].map(([v,label]) => ({ label, type: 'radio', checked: Math.abs(voiceVolume - v) < 0.01, click: () => setVolume(v) })) }] : []),
       { type: 'separator' },
       { label: '置顶显示', type: 'checkbox', checked: alwaysOnTop, click: (item) => { alwaysOnTop = item.checked; saveCfg({ onTop: alwaysOnTop }); if (win) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver'); } },

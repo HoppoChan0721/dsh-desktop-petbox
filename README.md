@@ -82,6 +82,9 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 | `voicePrepare` + `voiceWavDir` | 可选：外部 TTS 桥脚本与音频目录 |
 | `bridgeUrl` | 可选：点触事件 POST 到哪里（反向桥，例如 `http://127.0.0.1:61944/event`） |
 | `stageFps` | 舞台帧率上限，默认 60（`0` = 不限）。高刷屏不锁帧会按显示器刷新率满跑，CPU 翻三倍 |
+| `dock` | 启动时贴到哪：`none`（默认，记住上次位置）/ `left` / `right` |
+| `dockTitle` | 找哪个窗口，标题包含就算，默认 `DeepSeek Harness` |
+| `dockGap` | 和目标窗口之间留多少像素，默认 8 |
 
 配置存在 `data/config.json`，日志在 `data/pet.log`。
 
@@ -91,6 +94,7 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 GET  /status                    情绪列表、音量、最近一次说话
 POST /mood    {emotion, intensity}
 POST /say     {text, emotion?, gesture?, voice?, early?}
+POST /dock    {mode: "left"|"right"|"none", title?}   贴到窗口旁边（默认按标题找 DSH）
 POST /size    {width, height}
 POST /fit     {fit: "portrait"|"full"}
 POST /cursor  {on?, spin?, reset?}

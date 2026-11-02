@@ -195,6 +195,20 @@ async function main() {
     return;
   }
 
+  if (cmd === 'dock') {
+    // 启动时贴到某个窗口旁边：node pet.mjs dock [left|right|none] [--title "DeepSeek Harness"]
+    const a = String(F._[0] || '').toLowerCase();
+    const mode = ['left', 'right', 'none'].includes(a) ? a : null;
+    if (!mode) {
+      console.log(JSON.stringify({ ok: true, dock: (await jget(`${SHELL}/status`)).data?.dock ?? 'none' }, null, 2));
+      return;
+    }
+    const title = arg('title');
+    const r = await jpost(`${SHELL}/dock`, { mode, ...(title ? { title } : {}) });
+    console.log(JSON.stringify({ status: r.status, ...(r.data || {}) }, null, 2));
+    return;
+  }
+
   if (cmd === 'interactive') {
     const a = String(F._[0] || '').toLowerCase();
     if (a === 'on' || a === 'off') {
@@ -383,6 +397,7 @@ const USAGE = `
   interactive [on|off]           分区互动总开关（不带参数=读）
   bridge [on|off]                模型桥接：点她要不要叫醒 DSH 会话（不带参数=读）
   fps [n]                        舞台帧率上限（不带参数=读；60 默认，0 = 不限）
+  dock [left|right|none] [--title "..."]  启动时贴到窗口旁边（默认找 DSH；不带参数=读）
   expr <表情> [--strength 0.9]   24 个表情
   gesture <name>                  hand_on_chest / point / grass
   look <left|right|up|down|center>
