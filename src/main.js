@@ -1066,8 +1066,8 @@ function loadStage() {
 function findDockTarget(title) {
   return new Promise((resolve) => {
     const script = path.join(__dirname, '..', 'scripts', 'find-window.ps1');
-    if (!fs.existsSync(script)) return resolve(null);
-    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Title', title || 'DeepSeek Harness'],
+    if (!fs.existsSync(script) || !title) return resolve(null);
+    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Title', title],
       { timeout: 8000, windowsHide: true }, (err, stdout) => {
         if (err) return resolve(null);
         try {
@@ -1098,7 +1098,9 @@ async function applyDock(mode, opts = {}) {
   const m = mode === 'left' || mode === 'right' ? mode : 'none';
   if (opts.persist !== false) saveCfg({ dock: m });
   if (!win || win.isDestroyed() || m === 'none') return { ok: true, dock: m, moved: false };
-  const title = (opts.title || loadCfg().dockTitle || 'DeepSeek Harness').trim();
+  // 目标窗口名一定来自配置（或这次调用传的），代码里不写死任何人的窗口
+  const title = String(opts.title || loadCfg().dockTitle || '').trim();
+  if (!title) return { ok: false, dock: m, moved: false, error: '还没设 dockTitle：要贴哪个窗口，填它标题里的一段' };
   const t = await findDockTarget(title);
   if (!t) return { ok: false, dock: m, error: `没找到标题含「${title}」的窗口`, moved: false };
   const p = dockRect(t, m);
@@ -1447,7 +1449,7 @@ function buildMenu() {
         { label: '不贴（记住上次位置）', type: 'radio', checked: dockNow === 'none', click: () => dockClick('none') },
         { type: 'separator' },
         { label: '现在就贴一次', click: () => dockClick(dockNow === 'none' ? 'right' : dockNow) },
-        { label: `目标窗口：${loadCfg().dockTitle || 'DeepSeek Harness'}`, enabled: false },
+        { label: `目标窗口：${loadCfg().dockTitle || '（没设，改 config.json 的 dockTitle）'}`, enabled: false },
       ] },
       ...(voiceEnabled() ? [{ label: `语音音量（${Math.round(voiceVolume * 100)}%）`, submenu: [[1,'100%'],[0.7,'70%'],[0.55,'55%'],[0.4,'40%'],[0.25,'25%'],[0.1,'10%']].map(([v,label]) => ({ label, type: 'radio', checked: Math.abs(voiceVolume - v) < 0.01, click: () => setVolume(v) })) }] : []),
       { type: 'separator' },

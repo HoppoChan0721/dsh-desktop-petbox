@@ -2,12 +2,15 @@
 # 输出一行 JSON：{"x","y","w","h","hwnd"} 或 {"ok":false}
 # 纯 ASCII 输出，主进程直接 JSON.parse 就行（中文标题不进输出，避免编码问题）。
 param(
-  [string]$Title = 'DeepSeek Harness',
+  [string]$Title = '',
   [int]$MinWidth = 200,
   [int]$MinHeight = 200
 )
 
 $ErrorActionPreference = 'Stop'
+
+# 没给标题就什么都不做：这脚本是通用的，别把任何人的窗口名写死在里面
+if (-not $Title) { '{"ok":false,"error":"no-title"}'; exit 0 }
 
 Add-Type -TypeDefinition @'
 using System;

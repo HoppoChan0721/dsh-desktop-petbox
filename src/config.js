@@ -38,8 +38,8 @@ const DEFAULTS = {
   interactive: true,        // 分区互动总开关
   spinTurns: 6,             // 绕她转几圈才算一节（2~20）：晕 → 嫌弃 → 生气
   stageFps: 60,             // 舞台帧率上限（0 = 不限）：高刷屏满帧会白烧 CPU
-  dock: 'none',             // 启动时贴到某个窗口旁：none | left | right
-  dockTitle: 'DeepSeek Harness',  // 找哪个窗口（标题包含就算），默认 DSH
+  dock: 'none',             // 启动时贴到某个窗口旁：none | left | right（默认关，谁想用谁自己开）
+  dockTitle: '',            // 目标窗口标题里的一段（留空 = 不贴）。各人用自己的窗口名，别写死在代码里
   dockGap: 8,               // 和目标窗口留多少像素
   voiceVolume: 0.5,
   bubblePos: 'bottom',
