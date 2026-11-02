@@ -362,8 +362,14 @@ function startMoodServer() {
           const text = String(j.text || '');
           if (j.voice) {
             if (voicing) { send(200, { ok: false, busy: true }); return; }
-            send(200, { ok: true, queued: true });
-            petWait();
+            send(200, { ok: true, queued: true, early: !!j.early });
+            petWait();   // 气泡先变三个点（合成期间就是这个等待态，说好过）
+            // early：表情和手势不用等合成，先把脸换过去、手抬起来，省得那几秒像块木头。
+            // 正文仍然等合成好了一起出（气泡/口型/声音同帧），这点别再改。
+            if (j.early) {
+              const earlyMs = Math.max(6000, Math.min(20000, text.length * 320));
+              runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(earlyMs, j.emotion, [0.05, 0.05], j.gesture) }, true).catch(() => {});
+            }
             prepareAndSay(text, j.emotion, j.gesture);
             return;
           }
@@ -947,6 +953,7 @@ function wavEnvelope(file, n) {
 
 // 实时链路：现场合成 → 包络口型 → 页面内 Web Audio 播放 + 气泡 + 口型同帧
 // 旧实现用 SoundPlayer（启动偏 1~2s）且口型恒定开合，主人要的是真实效果，所以全换掉。
+// 合成期间气泡停在省略号（/say 里先调 petWait），别先漏正文——这是说好的。
 function prepareAndSay(text, emotion, gesture) {
   if (!voiceEnabled()) {   // 没配 TTS 就只出气泡，不要把 /say 变成报错
     say(text, false, Math.max(2500, Math.min(9000, text.length * 260)));

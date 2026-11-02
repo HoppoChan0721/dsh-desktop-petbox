@@ -90,7 +90,7 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 ```
 GET  /status                    情绪列表、音量、最近一次说话
 POST /mood    {emotion, intensity}
-POST /say     {text, emotion?, voice?}
+POST /say     {text, emotion?, gesture?, voice?, early?}
 POST /size    {width, height}
 POST /fit     {fit: "portrait"|"full"}
 POST /cursor  {on?, spin?, reset?}
@@ -139,7 +139,11 @@ DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后�
 
 **默认投专用会话，不碰主会话**（`mode: pet`）：第一次点触时它会 `sessionController.create()` 建一个固定会话（自动改名「桌宠互动」，用 `bigfish` 预设，所以人设跟主会话一致），之后所有点触都投那儿。这样正在写代码的主会话不会被「主人刚刚碰了你的胸口」插进等候区。会话 id 落在 `$DSH_HOME/pet-bridge.json`，重启沿用；`POST :61944/reset-pet-session` 换一个干净的；把 `mode` 改成 `main` 就退回旧行为（投最近活跃会话）。
 
-**回复回流成气泡**（`echoToPet`，默认开）：那个会话里我一旦说话，桥就监听 `session/event` 的 `assistant/message`，把最后一段文本洗掉 markdown / 贴纸 / 代码块、截到 `echoMaxChars`，再 `POST` 回 `:61943/say`——于是桌面真的会出现气泡 + 口型，而不是只躺在聊天窗口里。一轮多条只出最后一条；被打断的残句不播；`echoVoice: true` 会连 TTS 一起合成（3~10 秒，且点触本身已有本地语音，容易撞车，默认关）。
+**回复回流成气泡**（`echoToPet`，默认开）：那个会话里我一旦说话，桥就等到这一轮结束，把最后一段文本洗掉 markdown / 贴纸 / 代码块、截到 `echoMaxChars`，再 `POST` 回 `:61943/say`——于是桌面真的会出现气泡 + 口型，而不是只躺在聊天窗口里。一轮多条只出最后一条；被打断的残句不播。
+
+**语音**（`echoVoice`，默认关）：打开后只念 `echoVoiceMaxChars`（默认 40）以内的短回复。合成期间气泡停在三个点，合成好之后正文、口型、声音同帧一起出；`early: true` 只让表情和手势提前摆好，正文不会提前漏。改配置要重启 DSH。
+
+**顺带控制表情和手势**：投给桌宠会话的消息后面会附一句口径（一句、20~40 字、别排版），并允许模型在最前面写 `[emotion:shy]` / `[gesture:hand_on_chest]`，桥把这俩摘出来交给 `/say`，标记不进气泡；认不出的名字直接忽略、正文照留。
 
 安装（DSH 侧）：
 

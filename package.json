@@ -1,6 +1,6 @@
 {
   "name": "whale-pet-shell",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "把鲸语 Live2D 舞台变成桌面透明桌宠的 Electron 外壳：托盘菜单、像素级穿透、尺寸面板、指针追踪、情绪端口",
   "main": "src/main.js",
   "scripts": {

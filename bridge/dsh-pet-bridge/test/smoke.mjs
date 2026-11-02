@@ -91,6 +91,8 @@ rmSync(TMP, { recursive: true, force: true });
   ok('第 1 次点触：会话改名「桌宠互动」', calls.rename[0].title, '桌宠互动');
   ok('第 1 次点触：消息落在新建的会话里', calls.followup[0].sid === calls.create[0].sessionId, true);
   ok('第 1 次点触：消息正文是分区描述', /桌宠｜主人刚刚碰了你的胸口/.test(calls.followup[0].text), true);
+  ok('第 1 次点触：附带「一句、20~40 字」的口径', /20～40 字/.test(calls.followup[0].text), true);
+  ok('第 1 次点触：告诉她可以自己挑表情', /\[emotion:/.test(calls.followup[0].text), true);
 
   const r2 = await post(62001, '/event', { zone: 'head' });
   ok('第 2 次点触：不再重复建会话', calls.create.length, 1);
@@ -243,6 +245,29 @@ rmSync(TMP, { recursive: true, force: true });
     await post(62014, '/event', { zone: 'head' });
     await new Promise((r) => setTimeout(r, 350));
     ok('回流：main 模式不回声到桌宠', says.length, 0);
+    ctx.dispose();
+  }
+
+  // 8f：表情 / 手势标记摘出来交给桌宠，不进气泡（2026-11-02）
+  {
+    says.length = 0;
+    const { ctx } = await boot({ ...cfg8, port: 62015 }, { reply: '[emotion:pout] [gesture:hand_on_chest] 主人这样一直戳，我会生气的。' });
+    await post(62015, '/event', { zone: 'head' });
+    await new Promise((r) => setTimeout(r, 350));
+    ok('回流：标记不进气泡', says[0].text, '主人这样一直戳，我会生气的。');
+    ok('回流：表情标记变成 emotion', says[0].emotion, 'pout');
+    ok('回流：手势标记变成 gesture', says[0].gesture, 'hand_on_chest');
+    ctx.dispose();
+  }
+
+  // 8g：不认识的表情名不认，字也别丢
+  {
+    says.length = 0;
+    const { ctx } = await boot({ ...cfg8, port: 62016 }, { reply: '[emotion:unknownface] 嗯。' });
+    await post(62016, '/event', { zone: 'head' });
+    await new Promise((r) => setTimeout(r, 350));
+    ok('回流：未知表情不传', says[0].emotion, undefined);
+    ok('回流：未知表情也不会吞掉正文', says[0].text, '嗯。');
     ctx.dispose();
   }
 
