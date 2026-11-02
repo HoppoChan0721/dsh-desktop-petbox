@@ -73,6 +73,30 @@ function patchApp(src) {
       anchor);
     notes.push('app.mjs：锁帧（默认 60fps，?fps= 可调）');
   }
+  if (!s.includes(`${MARK}:clip-mask`)) {
+    if (s.includes('boostClippingMask')) notes.push('app.mjs：已有遮罩缓冲提升（手改过），跳过');
+    else {
+      const anchor = 'pixi.stage.addChild(model);';
+      if (!s.includes(anchor)) throw new Error('app.mjs 锚点 5 缺失（pixi.stage.addChild），鲸语版本可能变了');
+      s = s.replace(anchor, anchor +
+        `\n  // ${MARK}:clip-mask — 遮罩缓冲默认 256×256，还要被 49 个遮罩上下文瓜分\n` +
+        `  // （每份约 32×32 再放大到整屏），蓝色叠加层被尾巴网格裁出来时边缘糊成毛边。\n` +
+        `  // 提到 2048 后边缘干净，帧率仍是锁 60。\n` +
+        `  (function boostClippingMask(){\n` +
+        `    let tries=0;\n` +
+        `    const step=()=>{\n` +
+        `      const cm=model.internalModel.renderer&&model.internalModel.renderer._clippingManager;\n` +
+        `      if(cm&&typeof cm.setClippingMaskBufferSize==='function'){\n` +
+        `        if(cm.getClippingMaskBufferSize()<2048){cm.setClippingMaskBufferSize(2048);cm._maskTexture=null;cm._colorBuffer=null;cm._currentFrameNo=0;}\n` +
+        `        return;\n` +
+        `      }\n` +
+        `      if(tries++<180)requestAnimationFrame(step);\n` +
+        `    };\n` +
+        `    step();\n` +
+        `  })();`);
+      notes.push('app.mjs：遮罩缓冲 256 → 2048（修尾巴蓝边毛边）');
+    }
+  }
   if (!s.includes(`${MARK}:expose`)) {
     if (s.includes('__stageEngine')) notes.push('app.mjs：已有 __stageEngine 暴露，跳过');
     else {
@@ -136,7 +160,7 @@ if (REVERT) {
 }
 
 if (CHECK) {
-  console.log('app.mjs    ' + state(files.app, [['stage-mode', 'const stageMode='], ['preserve', 'preserveDrawingBuffer'], ['fps', 'pixi.ticker.maxFPS'], ['expose', '__stageEngine']]));
+  console.log('app.mjs    ' + state(files.app, [['stage-mode', 'const stageMode='], ['preserve', 'preserveDrawingBuffer'], ['fps', 'pixi.ticker.maxFPS'], ['clip-mask', 'boostClippingMask'], ['expose', '__stageEngine']]));
   console.log('engine.mjs ' + state(files.engine, [['pointer', 'applyPointer']]));
   process.exit(0);
 }
