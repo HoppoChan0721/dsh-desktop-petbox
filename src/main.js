@@ -578,34 +578,38 @@ function idleTick() {
 }
 
 // ---- 被摸到会说话：台词预合成缓存（点一下立刻出声，不用等 3~10 秒）----
+// 2026-11-04 主人改口径：本地只出**语气词**（呃…／呜…／嘿嘿…／呀…），不出具体回应。
+// 理由：她摸完会紧跟着一条模型的回话，本地要是先把话说死（「再摸就咬主人」），
+// 模型那句就接不上了；语气词是个开口，什么回复都能往下接。分区仍然保留情绪。
 const TAP_LINES = [
-  { e: 'shy', t: ['呀…别、别突然碰我嘛', '唔…会不好意思的', '主、主人…太近啦'] },
-  { e: 'happy', t: ['嘿嘿…被主人摸到了', '嗯！再来一下嘛', '主人的手好暖…'] },
-  { e: 'playful', t: ['哼哼，抓到主人了', '诶嘿～', '主人的手指，我要咬一口'] },
-  { e: 'proud', t: ['主人终于想起我了？', '我在这儿站好久了哦'] },
-  { e: 'sleepy', t: ['唔…让我再眯一会儿', '（蹭了蹭）困…'] },
-  { e: 'neutral', t: ['嗯？主人叫我？', '在的在的～'] },
+  { e: 'shy', t: ['呀…', '唔…'] },
+  { e: 'happy', t: ['嘿嘿…', '嗯…'] },
+  { e: 'playful', t: ['诶嘿…', '哼哼…'] },
+  { e: 'proud', t: ['嗯哼…'] },
+  { e: 'sleepy', t: ['唔…', '呼…'] },
+  { e: 'neutral', t: ['嗯…', '啊…'] },
 ];
 // ---- 分区互动：点哪儿算哪儿，并把「主人碰了哪里」反推给 DSH ----
 // 区域比例由当前模型的透明轮廓标定：头 10–30%、胸 33–48%、腰 48–57.5%、裙 57.5–75%、腿 75–86.5%、脚 86.5–96%。
 // 换模型后要重标（截图后用 alpha 逐行量左右边界），再改 preload.js 的 zoneOf。
+// 台词一律是语气词：同一句能接住任何回复，也不会和接下来那条模型回话打架。
 const TOUCH_ZONES = {
-  hair:  { e: 'happy',     t: ['头发被揉乱了…', '发梢又翘起来了哦'] },
-  head:  { e: 'happy',     t: ['唔…主人的手好暖', '再摸一会儿也可以', '被摸头就会变乖'] },
-  neck:  { e: 'shy',       t: ['脖、脖子不行…', '那里很痒的'] },
-  chest: { e: 'shy',       t: ['等、等一下！', '那里…不行', '主、主人太狡猾了'] },
-  waist: { e: 'flustered', t: ['痒…别挠腰', '再闹我要生气了'] },
-  skirt: { e: 'annoyed',   t: ['裙子不行哦', '主人，眼睛往哪看呢'] },
-  leg:   { e: 'annoyed',   t: ['腿也不行', '再摸就咬主人'] },
-  foot:  { e: 'surprised', t: ['呀！脚也不放过吗'] },
-  body:  { e: 'neutral',   t: ['嗯？', '在的哦'] },
+  hair:  { e: 'happy',     t: ['嘿嘿…', '欸…', '嗯…'] },
+  head:  { e: 'happy',     t: ['唔…', '嘿嘿…', '嗯…'] },
+  neck:  { e: 'shy',       t: ['呜…', '唔…', '呀…'] },
+  chest: { e: 'shy',       t: ['诶…', '呀…', '唔…'] },
+  waist: { e: 'flustered', t: ['唔…', '哈…', '呃…'] },
+  skirt: { e: 'annoyed',   t: ['哼…', '呃…', '唔…'] },
+  leg:   { e: 'annoyed',   t: ['呃…', '哼…', '呜…'] },
+  foot:  { e: 'surprised', t: ['呀…', '啊…', '诶…'] },
+  body:  { e: 'neutral',   t: ['嗯…', '唔…', '呃…'] },
 };
 const TOUCH_MANY = {
-  head:  ['摸够了没', '再摸就要摆烂了'],
-  chest: ['主人，手。', '那里真的不行'],
-  skirt: ['手拿开。', '主人今天很坏'],
-  leg:   ['手拿开。', '再摸就咬主人'],
-  default: ['主人，手。', '摸够了没'],
+  head:  ['呃…', '唔…'],
+  chest: ['呀…', '哼…'],
+  skirt: ['哼…', '呃…'],
+  leg:   ['哼…', '唔…'],
+  default: ['呃…', '哼…'],
 };
 let touchSeq = 0;
 const touchRing = [];
@@ -793,7 +797,7 @@ ipcMain.on('pet:tap', (_e, p) => {
   const ev = handleTouch(p || { zone: 'body' });
   if (!ev) return;
   if (ev.zone !== 'body') return;   // 具体部位由 touchReaction 反应
-  // 兜底区（身体/没量准的地方）：沿用原来 13 句台词池
+  // 兜底区（身体/没量准的地方）：只出一句语气词，等她后面那条模型回话接住
   const pool = TAP_LINES[Math.floor(Math.random() * TAP_LINES.length)];
   const line = pool.t[Math.floor(Math.random() * pool.t.length)];
   if (voicing) { say(line, false, 5200); runPlan(sayPlan(5200, pool.e), true).catch(() => {}); return; }
