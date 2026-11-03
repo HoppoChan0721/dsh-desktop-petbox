@@ -193,6 +193,17 @@ rmSync(TMP, { recursive: true, force: true });
   const h = await (await fetch('http://127.0.0.1:62009/health')).json();
   ok('health 带 mode', h.mode, 'pet');
   ok('health 带 petSessionId 字段', 'petSessionId' in h, true);
+  ok('health 带桌面预设名', h.petPresetWanted, 'bigfish-pet');
+  ctx.dispose();
+}
+
+// ── 场景 7b：没配 agentPreset 时默认用桌宠专用预设 bigfish-pet ──
+{
+  const { ctx, calls } = await boot({ port: 62017, mode: 'pet', minIntervalMs: 0 });
+  await post(62017, '/event', { zone: 'head' });
+  ok('默认预设：create 带 bigfish-pet', calls.create[0].agentPreset, 'bigfish-pet');
+  const h = await (await fetch('http://127.0.0.1:62017/health')).json();
+  ok('默认预设：health 回显实际预设', h.petPreset, 'bigfish-pet');
   ctx.dispose();
 }
 

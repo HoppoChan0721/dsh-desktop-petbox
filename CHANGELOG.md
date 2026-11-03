@@ -22,6 +22,11 @@
 - 现在 `ensurePetSession()` 动手前先查 `archivedSessionIds`，归档了就换新 id；`/health` 多一个 `petArchived`。
 - 冒烟测试补了「场景 2b」，`node test/smoke.mjs` 全过。
 
+### 桌宠会话改用专用预设 `bigfish-pet`
+- `agentPreset` 默认值从 `bigfish` 改成 `bigfish-pet`：这是主人给桌宠单独做的预设，只有人设、没有任何工具，省得桌宠那股劲儿跟写代码那股劲儿混在一起。
+- `/health` 多两个字段：`petPreset`（这个会话实际用的）和 `petPresetWanted`（配置要的）。两者不一致 = 那个预设没在这个进程里注册，日志也会留一行警告。
+- 换预设只影响**新建**的会话：老会话被 `create()` 收养时还是原来的脸。要换就先归档（或 `POST :61944/reset-pet-session`），再点她一次。
+
 ## v0.2.3 — 2026-11-02
 
 启动时会自己挪到指定窗口旁边，不用每次手动摆。

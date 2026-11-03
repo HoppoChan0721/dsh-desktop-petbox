@@ -38,7 +38,7 @@ const DEFAULTS = {
   sessionId: '',               // mode=main 时钉死一个会话；留空就自动跟最近活跃的
   petSessionId: '',            // mode=pet 的固定会话 id；留空自动生成，落盘复用
   petSessionTitle: '桌宠互动',
-  agentPreset: 'bigfish',      // 新建桌宠会话用的预设（人设要跟主会话一致）
+  agentPreset: 'bigfish-pet',  // 新建桌宠会话用的预设：主人 2026-11-03 给桌宠单独做的那个（只有人设、没有工具）
   fallbackToMain: false,       // 桌宠会话建不起来时，要不要退回投主会话
   echoToPet: true,             // 会话里说完的话回送到桌宠气泡（不然只能在聊天窗里干看着）
   petSayUrl: 'http://127.0.0.1:61943/say',
@@ -73,6 +73,7 @@ export function apply(ctx, config = {}) {
   let bound = cfg.sessionId || '';
   let petSid = cfg.petSessionId || '';
   let petReady = false;        // 本进程里已经确认这个会话能投（create 幂等，但别每次点都问一遍）
+  let petPresetReal = '';      // create() 真正用的预设：和配置不一致 = 这个进程里没有那个预设
   let petCreating = null;
   let lastAt = 0;
   let lastZone = '';
@@ -145,7 +146,12 @@ export function apply(ctx, config = {}) {
         const sid = (created && created.sessionId) || wanted;
         if (isArchived(sid)) throw new Error('adopted session is archived: ' + sid);
         petSid = sid; petReady = true; persist();
-        log(`pet session ready: ${sid} preset=${(created && created.agentPreset) || cfg.agentPreset || '-'}`);
+        // create 会照实返回它采用的预设；和配置不符 = 这个进程没加载那个预设（patch 要重启才生效）
+        petPresetReal = (created && created.agentPreset) || cfg.agentPreset || '';
+        log(`pet session ready: ${sid} preset=${petPresetReal || '-'}`);
+        if (cfg.agentPreset && petPresetReal && petPresetReal !== cfg.agentPreset) {
+          log(`警告：会话预设是 ${petPresetReal}，配置要的是 ${cfg.agentPreset}（这个预设没在这个进程里注册？）`);
+        }
         // 会话列表里能一眼认出来；改名失败不影响投递
         try { await ctx.sessionController.rename({ sessionId: sid, title: cfg.petSessionTitle }); } catch (e) { log('rename failed: ' + e.message); }
         return sid;
@@ -352,6 +358,8 @@ export function apply(ctx, config = {}) {
       return send(res, 200, {
         ok: true, port: cfg.port, mode: cfg.mode,
         sessionId: bound, petSessionId: petSid, petSessionTitle: cfg.petSessionTitle,
+        petPreset: petPresetReal || cfg.agentPreset || '',
+        petPresetWanted: cfg.agentPreset || '',
         petArchived: isArchived(petSid),
         echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
         recent: recent.slice(-10),
