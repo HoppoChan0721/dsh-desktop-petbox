@@ -90,6 +90,12 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 
 配置存在 `data/config.json`，日志在 `data/pet.log`。
 
+### 语音：仓库里一个音频文件都没有
+
+台词**只有文字**，声音全靠使用者自己的 TTS（`voicePrepare` 接一个把文本合成 wav 的脚本，`voiceWavDir` 是它输出的目录）。本仓库不附带、也不上传任何语音成品：合成出来的 wav、预合成缓存 `data/voice-cache.json`、以及任何克隆音色的样本都不在版本库里，`data/` 与 `*.wav / *.mp3 / audio/` 都在 `.gitignore` 里。
+
+想让她出声就自己准备音色——用你自己的 TTS 或自己克隆的声音，别把成品公开发布。
+
 ## 控制接口（61943）
 
 ```

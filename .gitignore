@@ -1,7 +1,19 @@
-﻿node_modules/
+node_modules/
 data/
 *.whale-pet-bak
 *.log
 .DS_Store
 Thumbs.db
 bridge/dsh-pet-bridge/test/.tmp/
+
+# 语音成品一律不进仓库（2026-11-04 主人定）：台词只保留文字，
+# 合成出来的 wav、克隆音色的样本都留在本机，别人要用自己准备。
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.m4a
+*.aac
+audio/
+voice/
+voices/
