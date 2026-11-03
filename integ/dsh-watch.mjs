@@ -344,43 +344,65 @@ function shellHead(cmd) {
   const junk = (s) => /^(cd |pushd |set-location\b|dir\b|ls\b)/i.test(s) || /^[$"'+]/.test(s);
   let pick = segs.find((s) => !junk(s)) || segs.find((s) => !/^[$"']/.test(s)) || segs[0] || '';
   pick = pick.replace(/^\$[\w:]+\s*=\s*/, '');   // 去掉 `$x = ` 赋值前缀
-  return clip(pick, 16);
+  return clip(pick, 16).replace(/[\s.,;:、]+$/, '');   // 别让截断卡在半个标点上
 }
+
+// 说法池：同一个状态每次换一句，别老一个词（主人 2026-11-03：太单一，要有趣）
+// 带尾巴的就拼上具体对象（文件名 / 命令 / 查询词），没有对象就单独说一句
+const SAY = {
+  think: ['让我想想', '嗯...', 'emmm...', '想一想', '琢磨一下', '这个得捋一捋', '脑内开个会', '容我想想', '等一下'],
+  read: ['让我看看', '看一眼', '翻翻', '瞅瞅', '读一下', '再核对下', '扒一扒'],
+  write: ['改改', '动一下', '修一下', '落笔', '这里得改', '写进去', '补两行'],
+  shell: ['跑一下', '让我试试', '执行', '敲一行', '试试这条', '来一下', '命令行见', '开跑'],
+  web: ['查查', '上网看看', '搜一下', '翻点资料', '外面问问', '去网上翻翻'],
+  grep: ['搜一下', '找找', '这词在哪儿', '捞一下'],
+  glob: ['找找', '文件在哪', '翻翻目录'],
+  subagent: ['叫个帮手', '分一个人去干', '子代理去跑', '找人搭把手'],
+  stall: ['这条有点慢', '还在跑', '再等等', '卡住了？再等等', '这命令真磨叽'],
+  error: ['出错了', '这条不对', '报错了', '啧，翻车'],
+  dizzy: ['想晕了', '脑子转冒烟了', '想不动了'],
+  image: ['画一张', '动手画', '描个图'],
+  sticker: ['翻表情包'],
+  misc: ['在干活', '忙一下', '马上', '这就办'],
+};
+const lastSay = new Map();
+function pickSay(key) {
+  const list = SAY[key] || SAY.misc;
+  const prev = lastSay.get(key);
+  const pool = list.length > 1 ? list.filter((s) => s !== prev) : list;
+  const s = pool[Math.floor(Math.random() * pool.length)];
+  lastSay.set(key, s);
+  return s;
+}
+const withTail = (key, tail) => (tail ? `${pickSay(key)} ${tail}` : pickSay(key));
 
 function toolText(name, args) {
   const a = args || {};
   const file = fileBase(a.file_path || a.path || a.file || a.target_path || '');
   const n = String(name || '');
-  if (/^read$/.test(n)) return file ? `看 ${file}` : '看文件';
-  if (/^grep$/.test(n)) return a.pattern ? `搜 ${clip(a.pattern, 14)}` : '搜代码';
-  if (/^glob$/.test(n)) return a.pattern ? `找 ${clip(a.pattern, 14)}` : '找文件';
-  if (/^(write|edit)$/.test(n)) return file ? `改 ${file}` : '改文件';
-  if (/^(pwsh|bash|shell)$/.test(n)) {
-    const cmd = shellHead(a.command || a.cmd);
-    return cmd ? `跑 ${cmd}` : '跑命令';
-  }
+  if (/^read$/.test(n)) return withTail('read', file);
+  if (/^grep$/.test(n)) return withTail('grep', a.pattern ? clip(a.pattern, 12) : '');
+  if (/^glob$/.test(n)) return withTail('glob', a.pattern ? clip(a.pattern, 12) : '');
+  if (/^(write|edit)$/.test(n)) return withTail('write', file);
+  if (/^(pwsh|bash|shell)$/.test(n)) return withTail('shell', shellHead(a.command || a.cmd));
   if (/web|search|fetch|research|domain/.test(n)) {
-    const q = clip(a.query || a.question || a.url || a.q || a.ticker || '', 14);
-    return q ? `查 ${q}` : '上网查一下';
+    return withTail('web', clip(a.query || a.question || a.url || a.q || a.ticker || '', 12));
   }
-  if (/subagent|task|workflow/.test(n)) return '叫子代理去干';
-  if (/image/.test(n)) return '画图';
-  if (/sticker|meme/.test(n)) return '翻表情包';
-  if (/session|schedule|goal/.test(n)) return '理会话';
-  return '在干活';
+  if (/subagent|task|workflow/.test(n)) return pickSay('subagent');
+  if (/image/.test(n)) return pickSay('image');
+  if (/sticker|meme/.test(n)) return pickSay('sticker');
+  return pickSay('misc');
 }
 
 // 状态 → 气泡文案。只有「过程」出气泡：done 由回复本身说话，fidget 是待机不吭声。
 function noteFor(kind, snap) {
   const t = snap && snap.pendingTool;
-  switch (kind) {
-    case 'think': return '想一想';
-    case 'dizzy': return '想晕了';
-    case 'stall': return '这条命令有点慢';
-    case 'error': return '出错了';
-    default: break;
-  }
-  if (!t) return kind === 'subagent' ? '子代理在干活' : null;
+  if (kind === 'think') return pickSay('think');
+  if (kind === 'dizzy') return pickSay('dizzy');
+  if (kind === 'stall') return pickSay('stall');
+  if (kind === 'error') return pickSay('error');
+  if (kind === 'subagent' && !t) return pickSay('subagent');
+  if (!t) return null;
   return toolText(t.name, t.args);
 }
 
