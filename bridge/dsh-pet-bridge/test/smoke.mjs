@@ -15,7 +15,7 @@ const ok = (label, got, want) => {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}${pass ? '' : `：得到 ${JSON.stringify(got)}，期望 ${JSON.stringify(want)}`}`);
 };
 
-function makeCtx({ createFails = false, reply = null } = {}) {
+function makeCtx({ createFails = false, reply = null, archived = [] } = {}) {
   const calls = { create: [], rename: [], followup: [], flush: [], list: 0 };
   const handlers = {};
   const transcripts = new Map();   // sid -> Message[]
@@ -53,6 +53,7 @@ function makeCtx({ createFails = false, reply = null } = {}) {
   };
   const ctx = {
     sessions, sessionController,
+    workspaceRegistry: { archivedSessionIds: archived },
     logger: { info() {}, warn() {} },
     on: (ev, fn) => { (handlers[ev] ||= []).push(fn); },
     emit: (ev, ...args) => (handlers[ev] || []).forEach((fn) => fn.apply(ctx, args)),
@@ -122,6 +123,27 @@ rmSync(TMP, { recursive: true, force: true });
   await post(p2, '/event', { zone: 'waist' });
   ok('重启后仍投落盘的那个会话', second.calls.followup[0].sid, savedId);
   ok('重启后 create 也是幂等收养同一个 id', second.calls.create[0].sessionId, savedId);
+  second.ctx.dispose();
+}
+
+// ── 场景 2b：旧会话被归档 → 自动换一个新的 ──────────────
+{
+  const archived = [];
+  const key = 'state-archived.json';
+  const p1 = 62010, p2 = 62011;
+  const first = await boot({ port: p1, mode: 'pet', minIntervalMs: 0 }, { archived });
+  await post(p1, '/event', { zone: 'leg' });
+  const oldId = first.calls.create[0].sessionId;
+  const fs = await import('node:fs');
+  fs.copyFileSync(first.statePath, join(TMP, key));
+  first.ctx.dispose();
+  archived.push(oldId);   // 主人把这个会话归档了
+  const second = await boot({ port: p2, mode: 'pet', minIntervalMs: 0, statePath: join(TMP, key) }, { archived });
+  const r = await post(p2, '/event', { zone: 'waist' });
+  ok('归档后：仍然投给 pet', r.json.target, 'pet');
+  ok('归档后：换了一个新 id', second.calls.create[0].sessionId !== oldId, true);
+  ok('归档后：消息不进旧的归档会话', second.calls.followup[0].sid !== oldId, true);
+  ok('归档后：新 id 落盘', JSON.parse(readFileSync(join(TMP, key), 'utf8')).petSessionId, second.calls.followup[0].sid);
   second.ctx.dispose();
 }
 

@@ -109,7 +109,33 @@ export function apply(ctx, config = {}) {
   // ---- 专用桌宠会话（mode=pet）----
   // create() 的语义是「建一个或幂等收养一个」：同一个 id 重复调用就是找回原会话，
   // 所以这里可以放心地在每次启动后第一次点触时再建，不用记「建过没有」。
+  //
+  // 但归档过的会话也被「收养」得回来：create() 不报错，followup 也照样 accept，
+  // 而那个会话根本不会再跑一轮 → 桌宠一声不响。所以用之前必须先确认它没被归档。
+  function archivedIds() {
+    try {
+      const ids = ctx.workspaceRegistry && ctx.workspaceRegistry.archivedSessionIds;
+      if (Array.isArray(ids)) return ids;
+    } catch {}
+    try {
+      const p = process.env.DSH_HOME ? join(process.env.DSH_HOME, 'storages', 'workspace.json') : '';
+      if (!p) return null;
+      const st = JSON.parse(readFileSync(p, 'utf8'));
+      const ids = st && st.global && st.global.archivedSessionIds;
+      return Array.isArray(ids) ? ids : null;
+    } catch { return null; }
+  }
+  function isArchived(sid) {
+    if (!sid) return false;
+    const ids = archivedIds();
+    return Array.isArray(ids) && ids.includes(sid);
+  }
+
   async function ensurePetSession(forceNew = false, retried = false) {
+    if (petSid && isArchived(petSid)) {
+      log('pet session is archived, minting a new one: ' + petSid);
+      petSid = ''; petReady = false; persist();
+    }
     if (petSid && petReady && !forceNew) return petSid;
     if (!petCreating) {
       petCreating = (async () => {
@@ -117,6 +143,7 @@ export function apply(ctx, config = {}) {
         const wanted = forceNew || !petSid ? randomUUID() : petSid;
         const created = await ctx.sessionController.create({ sessionId: wanted, agentPreset: cfg.agentPreset || undefined });
         const sid = (created && created.sessionId) || wanted;
+        if (isArchived(sid)) throw new Error('adopted session is archived: ' + sid);
         petSid = sid; petReady = true; persist();
         log(`pet session ready: ${sid} preset=${(created && created.agentPreset) || cfg.agentPreset || '-'}`);
         // 会话列表里能一眼认出来；改名失败不影响投递
@@ -325,6 +352,7 @@ export function apply(ctx, config = {}) {
       return send(res, 200, {
         ok: true, port: cfg.port, mode: cfg.mode,
         sessionId: bound, petSessionId: petSid, petSessionTitle: cfg.petSessionTitle,
+        petArchived: isArchived(petSid),
         echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
         recent: recent.slice(-10),
       });
