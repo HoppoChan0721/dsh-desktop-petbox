@@ -340,8 +340,11 @@ const fileBase = (p) => clip(String(p || '').split(/[\\/]/).pop(), 16);
 // shell 命令常以 `cd ...` / `$env:X='...'` 开头，那几段对人没信息量，跳到第一段真正的命令
 function shellHead(cmd) {
   const segs = String(cmd || '').replace(/\r/g, '').split(/[;\n]+/).map((s) => s.trim()).filter(Boolean);
-  const real = segs.find((s) => !/^(cd |pushd |set-location\b|dir\b|ls\b)/i.test(s) && !/^\$env:/i.test(s));
-  return clip(real || segs[0] || '', 16);
+  // 常量/环境变量/拼字符串的残段（`$env:PATH="F:\x;"` 会被分号切成两半，后半截长这样）
+  const junk = (s) => /^(cd |pushd |set-location\b|dir\b|ls\b)/i.test(s) || /^[$"'+]/.test(s);
+  let pick = segs.find((s) => !junk(s)) || segs.find((s) => !/^[$"']/.test(s)) || segs[0] || '';
+  pick = pick.replace(/^\$[\w:]+\s*=\s*/, '');   // 去掉 `$x = ` 赋值前缀
+  return clip(pick, 16);
 }
 
 function toolText(name, args) {
