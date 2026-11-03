@@ -49,7 +49,18 @@ function plog(msg) {
 
 let win = null, tray = null, panel = null, serverChild = null, spawnedServer = false;
 let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true;
-let watcherChild = null, autoMood = true, voicing = false;
+let watcherChild = null, autoMood = true, voicing = false, voicingTimer = null;
+function setVoicing(on, ms = 0) {
+  if (voicingTimer) { clearTimeout(voicingTimer); voicingTimer = null; }
+  if (on) {
+    voicing = true;
+    if (ms > 0) {
+      voicingTimer = setTimeout(() => { voicing = false; voicingTimer = null; }, ms);
+    }
+  } else {
+    voicing = false;
+  }
+}
 let voiceVolume = 0.5;   // 0..1，持久化在 config.json 的 voiceVolume
 let lastSay = null;   // 最近一次实时合成的结果（给演示脚本判断节奏用）
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -255,6 +266,33 @@ function startMoodServer() {
         .catch((e) => send(200, { ok: false, error: e.message }));
       return;
     }
+    // 阶段气泡：POST /tick {"text":"看 main.js","ms":3000}
+    // 给联动 watcher 用的通道——周期通信只走这里，不碰模型动作（表情走舞台的 /api/execute）。
+    if (req.method === 'POST' && req.url === '/tick') {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 4096) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          // {"on":false} 也能当开关用（面板走 IPC，这里留给 CLI / 调试）
+          if (typeof j.on === 'boolean') {
+            saveCfg({ tickBubble: j.on });
+            syncTickBubble();
+            return send(200, { ok: true, on: tickBubbleOn() });
+          }
+          const r = petTick(j.text, j.ms);
+          send(r ? 200 : 400, r ? { ok: true, ...r } : { ok: false, error: 'empty text' });
+        } catch (e) { send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/tick') {
+      if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
+      win.webContents.executeJavaScript('window.__petTickInfo ? window.__petTickInfo() : null')
+        .then((v) => send(200, { ok: !!v, on: tickBubbleOn(), last: lastTick, ...(v || {}) }))
+        .catch((e) => send(200, { ok: false, error: e.message }));
+      return;
+    }
     // 开关指针追踪：POST /cursor {"on":false,"amp":1}
     if (req.method === 'POST' && req.url === '/cursor') {
       let raw = '';
@@ -367,8 +405,13 @@ function startMoodServer() {
             // early：表情和手势不用等合成，先把脸换过去、手抬起来，省得那几秒像块木头。
             // 正文仍然等合成好了一起出（气泡/口型/声音同帧），这点别再改。
             if (j.early) {
-              const earlyMs = Math.max(6000, Math.min(20000, text.length * 320));
-              runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(earlyMs, j.emotion, [0.05, 0.05], j.gesture) }, true).catch(() => {});
+              const earlyMs = Math.max(4000, Math.min(12000, text.length * 280));
+              const earlyActions = [];
+              if (j.emotion && MOODS[j.emotion]) for (const [kind, opt] of MOODS[j.emotion]) earlyActions.push(scaleMoodAction(kind, opt));
+              if (j.gesture) earlyActions.push({ kind: 'gesture', name: String(j.gesture), at: 0, duration: Math.max(1.4, Math.min(earlyMs / 1000, 2.6)) });
+              if (earlyActions.length > 0) {
+                runPlan({ version: 1, title: '说话-准备', intent: '说话-准备', summary: '说话-准备', actions: earlyActions }, true).catch(() => {});
+              }
             }
             prepareAndSay(text, j.emotion, j.gesture);
             return;
@@ -743,6 +786,9 @@ const BUBBLE_JS = `(() => {
     '#pet-bubble.pos-right{right:12px;left:auto;top:50%;transform:translateY(-50%);max-width:38%;max-height:calc(100% - 60px);writing-mode:vertical-rl;text-orientation:upright;letter-spacing:.06em}' +
     '#pet-bubble .dot{display:inline-block;width:5px;height:5px;margin:0 2px;border-radius:50%;background:#2b3d3a;opacity:.3;animation:petDot 1.1s infinite}' +
     '#pet-bubble .dot:nth-child(2){animation-delay:.15s}#pet-bubble .dot:nth-child(3){animation-delay:.3s}@keyframes petDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}';
+  // 阶段气泡：像真气泡一样从肩边冒出来往上飘。可以同时好几颗，各自 2~4 秒飘完自己消失。
+  style.textContent += '.pet-tick{position:fixed;max-width:52%;padding:5px 10px;border-radius:13px;background:rgba(236,248,255,.88);border:1px solid rgba(120,180,240,.5);color:#1f3a55;font:14px/1.3 system-ui,"Microsoft YaHei";box-shadow:0 4px 12px rgba(30,80,140,.16);pointer-events:none;z-index:99998;white-space:pre-wrap;word-break:break-word;box-sizing:border-box;will-change:transform,opacity;animation:petTickUp var(--life,3000ms) cubic-bezier(.22,.68,.3,1) forwards}' +
+    '@keyframes petTickUp{0%{opacity:0;transform:translate3d(0,7px,0) scale(.68)}10%{opacity:1;transform:translate3d(0,-3px,0) scale(1)}24%{opacity:1}62%{opacity:.9;transform:translate3d(calc(var(--dx,0px) * .55),calc(var(--dy,-110px) * .5),0) scale(1)}100%{opacity:0;transform:translate3d(var(--dx,0px),var(--dy,-110px),0) scale(1.04)}}';
   document.head.appendChild(style);
   const el = document.createElement('div');
   el.id = 'pet-bubble';
@@ -842,6 +888,123 @@ const BUBBLE_JS = `(() => {
     el.style.opacity = '1';
     fitTop(true);
   };
+  // ---- 阶段气泡：思考 / 跑命令 / 读文件这些过程提示，像气泡一样往上飘 ----
+  // 每颗都是独立元素：出生在她右肩外侧，随机散开，边飘边淡，单颗 2~4 秒；
+  // 最多同时挂 5 颗，再多的把最老的挤掉。位置不写死——先量剪影，换窗口/换 fit 都不用改。
+  const tickBox = { key: '', at: 0, top: 0, bottom: 0, left: 0, right: 0, shoulder: 0 };
+  const measureBox = (force) => {
+    const c = document.getElementById('model-canvas');
+    const W = window.innerWidth || 380, H = window.innerHeight || 680;
+    if (!c || !c.width || !c.height) return null;
+    const key = W + 'x' + H;
+    if (!force && tickBox.key === key && performance.now() - tickBox.at < 700) return tickBox.key === key ? tickBox : null;
+    try {
+      const sw = 96, sh = Math.max(24, Math.round(sw * H / W));
+      tickBox.cv = tickBox.cv || document.createElement('canvas');
+      tickBox.cv.width = sw; tickBox.cv.height = sh;
+      const ctx = tickBox.cv.getContext('2d', { willReadFrequently: true });
+      ctx.clearRect(0, 0, sw, sh);
+      ctx.drawImage(c, 0, 0, sw, sh);
+      const d = ctx.getImageData(0, 0, sw, sh).data;
+      let top = -1, bottom = -1, left = sw, right = -1;
+      const rights = new Int16Array(sh).fill(-1);
+      const lefts = new Int16Array(sh).fill(sw);
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          if (d[(y * sw + x) * 4 + 3] <= 12) continue;
+          if (top < 0) top = y;
+          bottom = y;
+          if (x < left) left = x;
+          if (x > right) right = x;
+          if (x > rights[y]) rights[y] = x;
+          if (x < lefts[y]) lefts[y] = x;
+        }
+      }
+      // 肩线：只看「头到肩」这一小段的外沿（不含尾巴和裙摆，尾巴会把整条横幅推歪）
+      let shoulder = right, shoulderL = left;
+      if (top >= 0) {
+        const band = Math.max(1, Math.round((bottom - top) * 0.22));
+        shoulder = -1; shoulderL = sw;
+        for (let y = top; y <= Math.min(bottom, top + band); y++) {
+          if (rights[y] > shoulder) shoulder = rights[y];
+          if (lefts[y] < shoulderL) shoulderL = lefts[y];
+        }
+        if (shoulder < 0) shoulder = right;
+        if (shoulderL >= sw) shoulderL = left;
+      }
+      tickBox.top = top < 0 ? 0 : top * (H / sh);
+      tickBox.bottom = bottom < 0 ? H : bottom * (H / sh);
+      tickBox.left = left >= sw ? 0 : left * (W / sw);
+      tickBox.right = right < 0 ? W : (right + 1) * (W / sw);
+      tickBox.shoulder = shoulder < 0 ? W : (shoulder + 1) * (W / sw);
+      tickBox.shoulderL = shoulderL >= sw ? 0 : shoulderL * (W / sw);
+      tickBox.key = key; tickBox.at = performance.now();
+    } catch (e) { tickBox.key = ''; }
+    return tickBox.key === key ? tickBox : null;
+  };
+  // 出生点：肩线高度，5 条「车道」左右轮着走，几颗一起出也不会叠成一柱
+  // dy 是相对胸口的上下错位、side 是左右肩、dx 是飘出去的方向和距离
+  const TICK_LANES = [
+    { side: 1, dy: -48, dx: 28 },
+    { side: -1, dy: 4, dx: 26 },
+    { side: 1, dy: 30, dx: 36 },
+    { side: -1, dy: -32, dx: 32 },
+    { side: 1, dy: -4, dx: 22 },
+  ];
+  let tickLane = 0;
+  const tickAnchor = () => {
+    const W = window.innerWidth || 380, H = window.innerHeight || 680;
+    const b = measureBox(true);
+    if (b) {
+      const d = Math.max(1, b.bottom - b.top);
+      return { R: b.shoulder || b.right, L: b.shoulderL || b.left, y: b.top + d * 0.30, W, H };
+    }
+    return { R: W, L: 0, y: H * 0.30, W, H };   // 量不到轮廓时的退路：两侧、胸口高度
+  };
+  const MAX_TICK = 5;
+  const tickPool = [];
+  let tickOn = true;
+  window.__petTickSet = (on) => {
+    tickOn = on !== false;
+    if (!tickOn) for (const el of tickPool.splice(0)) el.remove();
+    return tickOn;
+  };
+  window.__petTick = (text, ms) => {
+    if (!tickOn) return null;
+    const full = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim().slice(0, 40);
+    if (!full) return null;
+    const a = tickAnchor();
+    const el = document.createElement('div');
+    el.className = 'pet-tick';
+    el.textContent = full;
+    el.style.visibility = 'hidden';
+    document.body.appendChild(el);
+    const w = el.offsetWidth || 120, h = el.offsetHeight || 28;
+    const lane = TICK_LANES[tickLane++ % TICK_LANES.length];
+    const side = lane.side;
+    const baseX = side > 0 ? a.R - w * 0.55 : a.L - w * 0.45;
+    const x = baseX + (Math.random() - 0.5) * w * 0.35;
+    const y = a.y - h * 0.5 + lane.dy + (Math.random() - 0.5) * 12;
+    el.dataset.dbg = JSON.stringify({ w, h, R: Math.round(a.R), L: Math.round(a.L), x: Math.round(x), y: Math.round(y) });
+    el.style.left = Math.round(Math.max(4, Math.min(a.W - w - 4, x))) + 'px';
+    el.style.top = Math.round(Math.max(4, Math.min(a.H - h - 4, y))) + 'px';
+    const life = Math.max(2000, Math.min(4000, Number(ms) || 3000));   // 单颗 2~4 秒
+    el.style.setProperty('--life', life + 'ms');
+    el.style.setProperty('--dx', Math.round(side * lane.dx) + 'px');
+    el.style.setProperty('--dy', '-' + Math.round(70 + Math.random() * 55) + 'px');
+    el.style.visibility = '';
+    tickPool.push(el);
+    while (tickPool.length > MAX_TICK) { const old = tickPool.shift(); if (old) old.remove(); }
+    el.addEventListener('animationend', () => { el.remove(); const i = tickPool.indexOf(el); if (i >= 0) tickPool.splice(i, 1); });
+    return { text: full, ms: life, count: tickPool.length };
+  };
+  window.__petTickInfo = () => ({
+    on: tickOn, count: tickPool.length,
+    items: tickPool.map((el) => ({ text: String(el.textContent || '').slice(0, 24), left: el.style.left, top: el.style.top, opacity: getComputedStyle(el).opacity, dbg: el.dataset.dbg || '' })),
+    box: { top: Math.round(tickBox.top), bottom: Math.round(tickBox.bottom), left: Math.round(tickBox.left), right: Math.round(tickBox.right), shoulder: Math.round(tickBox.shoulder) },
+    winW: window.innerWidth, winH: window.innerHeight,
+  });
+
   // ---- 待机摇摆：整幅画面以脚为支点微倾 ----
   // 为什么不用动作接口：模型的身体角度是物理输出（ParamBodyAngle* / HipAngle*），
   // 语义接口只放 AngleX(摇头)/AngleZ(歪头)/AngleY/LeanInput(前后)/PositionX 几个输入，
@@ -901,6 +1064,26 @@ function say(text, voice, ms) {
 function petWait() {
   if (!win || win.isDestroyed()) return;
   win.webContents.executeJavaScript('window.__petWait && window.__petWait()').catch(() => {});
+}
+// 阶段气泡（周期通信专用）：往上飘的小气泡，不动模型、不压说话气泡，单颗 2~4 秒
+// 面板 / 托盘能关（config.tickBubble）；关掉后 /tick 只回 ok:true + off:true，不再画
+let lastTick = null;
+const tickBubbleOn = () => loadCfg().tickBubble !== false;
+function syncTickBubble() {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.executeJavaScript(`window.__petTickSet && window.__petTickSet(${tickBubbleOn() ? 'true' : 'false'})`).catch(() => {});
+}
+function petTick(text, ms) {
+  if (!win || win.isDestroyed()) return null;
+  const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (!t) return null;
+  const dur = Math.max(2000, Math.min(4000, Number(ms) || 3000));
+  lastTick = { text: t, ms: dur, at: new Date().toISOString() };
+  if (!tickBubbleOn()) return { ...lastTick, off: true };
+  try {
+    win.webContents.executeJavaScript(`window.__petTick && window.__petTick(${JSON.stringify(t)}, ${dur})`).catch(() => {});
+  } catch {}
+  return lastTick;
 }
 function applyBubblePos(pos) {
   if (!win || win.isDestroyed()) return;
@@ -972,12 +1155,12 @@ function prepareAndSay(text, emotion, gesture) {
     say(text, false, Math.max(2500, Math.min(9000, text.length * 260)));
     return;
   }
-  voicing = true;
+  setVoicing(true, 30000);   // 合成中先锁定 voicing（带 30s 兜底防泄露）
   const t0 = Date.now();
   const child = spawn('node', [voiceScript()], { env: { ...process.env, SAY_TEXT: text, WHALE_PET_DATA: DATA }, windowsHide: true });
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
-  child.on('close', () => {
+  child.on('close', async () => {
     const synthMs = Date.now() - t0;
     try {
       const info = JSON.parse(fs.readFileSync(path.join(DATA, 'voice-job.json'), 'utf8').replace(/^\uFEFF/, ''));
@@ -1011,13 +1194,16 @@ function prepareAndSay(text, emotion, gesture) {
         try { spawn('powershell', ['-NoProfile', '-Command', `(New-Object System.Media.SoundPlayer '${wav}').PlaySync()`], { windowsHide: true, stdio: 'ignore' }); } catch {}
       }
       lastSay = { text, jobId: info.job_id, synthMs, dur: +dur.toFixed(2), mouth: env ? env.length : 0, at: Date.now() };
-      runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture) }, true).catch(() => {});
+      // 保持 voicing 锁定直到音频真正播放完毕（dur * 1000 + 400ms 缓冲）
+      setVoicing(true, ms + 400);
+      await runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture) }, true);
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} realtime say synth=${synthMs}ms dur=${dur.toFixed(2)}s mouth=${env ? env.length : 0} ${info.job_id}\n`); } catch {}
     } catch (e) {
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} prep-error ${String(e.message).slice(0, 160)}\n`); } catch {}
       say(text, false, 6000);
+      setVoicing(false);
       postPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(6000, emotion) });
-    } finally { voicing = false; }
+    }
   });
 }
 function startWatcher() {
@@ -1127,7 +1313,7 @@ function createWindow() {
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
   win.webContents.on('did-finish-load', async () => {
     loadAttempts = 0;
-    win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); }).catch(() => {});
+    win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); syncTickBubble(); }).catch(() => {});
     // 第一次露脸前先贴到目标窗口旁边（设置里的 dock），找不到就还按上次的坐标站
     const dm = loadCfg().dock;
     if ((dm === 'left' || dm === 'right') && !win.isVisible()) {
@@ -1315,6 +1501,7 @@ ipcMain.handle('cfg:save', (_e, patch) => {
   saveCfg(patch || {});
   if (patch && typeof patch.interactive === 'boolean') setInteractive(patch.interactive, false);   // 存过了，只广播
   if (patch && typeof patch.bridge === 'boolean') setBridge(patch.bridge, false);
+  if (patch && typeof patch.tickBubble === 'boolean') syncTickBubble();
   // 帧率改了要重载舞台才生效（只重载页面，不动窗口）
   if (patch && patch.stageFps !== undefined) applyStageFps(patch.stageFps);
   const r = refreshPaths();

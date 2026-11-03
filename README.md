@@ -31,9 +31,10 @@
 - **点触事件反推**：每次点击都落盘 `data/touch.jsonl`，并可选 POST 给外部桥（`bridgeUrl`），用来唤醒别的进程
 - **情绪端口**：`POST 127.0.0.1:61943/mood {"emotion":"shy","intensity":0.8}`，12 种情绪映射成鲸语 plan
 - **气泡**：`POST /say {"text":"…"}` 出对话气泡，可选接自己的 TTS
+- **阶段气泡**：`POST /tick {"text":"看 main.js","ms":3000}` 从上半身肩线冒出小气泡，边飘边淡，单颗 2~4 秒、最多同时 5 颗（联动用它说「在想 / 跑命令 / 看文件」，面板里能关）
 - **CLI**：`cli/pet.mjs` 把上面这些都包成命令行
 
-可选集成（默认关闭）：DSH 会话联动 `integ/dsh-watch.mjs`，把会话状态（读文件/写文件/跑命令/子代理）演成动作。
+可选集成（默认关闭）：DSH 会话联动 `integ/dsh-watch.mjs`，把会话状态（读文件/写文件/跑命令/子代理/卡住/报错）演成**表情 + 肩上的阶段气泡**，不再推她的头。
 
 ## 前置条件（不提供，需自行获取）
 
@@ -100,6 +101,7 @@ POST /fit     {fit: "portrait"|"full"}
 POST /cursor  {on?, spin?, reset?}
 GET  /cursor                    窗口位置、鼠标、调戏区、绕圈阶段
 GET  /bubble  POST /bubble      气泡文本与位置
+POST /tick    {text, ms?}       阶段气泡（小、贴肩、2~4 秒消失）   GET /tick 看当前那条
 POST /sway    {on, phys, tilt, period}   GET /sway
 POST /touch   {zone, nx?, ny?}   模拟一次点触（zone: hair/head/neck/chest/waist/skirt/leg/foot/body）
 GET  /touches?limit=20           最近的点触记录
@@ -125,7 +127,9 @@ node cli/pet.mjs fps 30            # 舞台帧率上限（0 = 不限）
 
 ## 可选：DSH 会话联动
 
-`integ/dsh-watch.mjs` 读 DSH 会话事件流，把「读文件 / 写文件 / 跑命令 / 网页 / 子代理 / 卡住 / 报错 / 答完」演成动作。默认关闭，在设置面板勾上并填会话目录即可。
+`integ/dsh-watch.mjs` 读 DSH 会话事件流，把「读文件 / 写文件 / 跑命令 / 网页 / 子代理 / 卡住 / 报错 / 答完」演出来。默认关闭，在设置面板勾上并填会话目录即可。
+
+分工是：**表情走舞台**（`/api/execute`，只发 `expression`，不动头不动身体），**过程提示走气泡**（`POST /tick`，从肩线往上飘，单颗 2~4 秒、最多同时 5 颗，面板里能关）。两条线互不干扰——身体留给指针追踪、待机摇摆和说话手势。
 
 ## 可选：反向桥（把她变成输入设备）
 

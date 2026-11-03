@@ -92,6 +92,7 @@ async function loadConfig() {
     box('dshWatch').checked = !!cfg.dshWatch;
     box('interactive').checked = cfg.interactive !== false;
     box('bridge').checked = cfg.bridge !== false;
+    box('tickBubble').checked = cfg.tickBubble !== false;
     paintFps(Number(cfg.stageFps));
     paintStatus(resolved);
   } catch (e) {
@@ -153,8 +154,21 @@ box('bridge').addEventListener('change', async () => {
   }
 });
 
+// 阶段气泡开关：即时生效，关掉后 /tick 只回 ok 不画
+box('tickBubble').addEventListener('change', async () => {
+  const on = box('tickBubble').checked;
+  try {
+    await window.petCfg.save({ tickBubble: on });
+    statusEl.className = 'hint good';
+    statusEl.textContent = on ? '阶段气泡已开启，会话进度会从肩边冒出来。' : '阶段气泡已关闭，只剩表情。';
+  } catch (e) {
+    statusEl.className = 'hint bad';
+    statusEl.textContent = '切换失败：' + e.message;
+  }
+});
+
 box('save').addEventListener('click', async () => {
-  const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked, bridge: box('bridge').checked };
+  const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked, bridge: box('bridge').checked, tickBubble: box('tickBubble').checked };
   const fv = fpsFromUi();
   if (fv !== null) patch.stageFps = fv;
   for (const id of FIELDS) {

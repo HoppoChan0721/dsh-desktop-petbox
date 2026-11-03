@@ -1,20 +1,21 @@
 // ============================================================================
 // DSH → 桌宠 联动（conductor v3，2026-10-31）
 //
-// v2 只会看「回合结束后的语气」和「25 秒没答完就思考」，所以中间几十秒她是呆的。
-// v3 直接读会话事件流，把**过程中**的每一种状态都演出来：
+// v3 直接读会话事件流，把**过程中**的每一种状态都演出来。
+// 2026-11-03 起分工改了（主人要求）：**周期通信只给表情，动作全部解绑**——
+// 抬头/点头/歪头/摇头/眨眼/smile 这些不再由联动驱动，阶段信息改由外壳的气泡说
+// （POST 61943/tick，从上半身附近冒出，2~4 秒自己消失）。
 //
-//   主人发话        → 抬头 + 点头          (listen)
-//   我在生成        → 眯眼 + 歪头 + 视线偏上 (think)
-//   跑工具          → 按工具类型给不同姿态   (tool:read / write / shell / web / subagent ...)
+//   我在生成        → 眯眼一张脸            (think)
+//   跑工具          → 按工具类型换脸         (tool:read / write / shell / web / subagent ...)
 //   工具卡很久      → 流冷汗               (stall)
-//   工具报错        → 流冷汗 + 摇头         (error)
-//   子代理在跑      → 看向旁边 + 圈圈眼      (subagent)
+//   工具报错        → 流冷汗               (error)
+//   子代理在跑      → 圈圈眼               (subagent)
 //   答完了          → 按回复语气给表情       (done)
 //   什么都没发生    → 待机（交给外壳的摇摆）
 //
-// 关键点：全部走 61942 的 /api/compile + /api/execute（跟 pet.mjs 同一条通道）；
-// 状态只在**变化时**下发，长状态定期续一次，避免每 700ms 抽一次脸。
+// 关键点：表情走 61942 的 /api/compile + /api/execute（跟 pet.mjs 同一条通道），
+// 气泡走 61943 的 /tick；状态只在**变化时**下发，长状态定期续一次，避免每 700ms 抽一次脸。
 //
 // 用法：
 //   node dsm-watch.mjs            # 正常跑（Electron 外壳启动时自动拉起）
@@ -192,7 +193,10 @@ function derive(events) {
     if (r.type === 'tool/call') {
       const cid = (r.data && r.data.callId) || String(r.seq);
       const name = (r.data && r.data.name) || 'tool';
-      openCalls.set(cid, { name, seq: r.seq, at: Number(r.time) || Date.now() });
+      // 参数是 JSON 字符串，气泡要拿里面的文件名/命令/查询词说人话
+      let args = {};
+      try { args = JSON.parse((r.data && r.data.arguments) || '{}') || {}; } catch {}
+      openCalls.set(cid, { name, seq: r.seq, at: Number(r.time) || Date.now(), args });
       lastToolName = name;
     } else if (r.type === 'tool/result') {
       const msg = (r.data && r.data.message) || {};
@@ -247,86 +251,34 @@ function lastAssistantText(events, turn) {
   return '';
 }
 
-// ---------------------------------------------------------------- 动作配方
+// ---------------------------------------------------------------- 表情配方
 // 每个状态 = 一组**变体**：进状态时加权随机挑一个（避开上次用过的），续期沿用同一个。
 // 每 6.5 秒换一张脸反而更累，所以「随机」只发生在状态切换那一刻。
-// 引擎约束记牢：同一 plan 里不能两条动作控同一参数——`前倾` 自带 LeanInput；`look` 与 `nod` 都动 AngleY。
+// 2026-11-03 主人要求：周期通信只给表情，look/tilt/nod/shake/blink/smile 全部解绑，
+// 阶段信息改由外壳气泡说。副作用是好的：plan 里不再有参数冲突，也不用 /api/stop 打断。
 const HOLD_KINDS = new Set(['think', 'read', 'write', 'shell', 'web', 'subagent', 'stall']);
 
-const L = (dir, at = 0.2) => ({ kind: 'look', direction: dir, at, duration: 1.2 });
-const T = (dir, at = 0.3) => ({ kind: 'tilt', direction: dir, at, duration: 1.8 });
-const N = (count = 1, at = 0.2) => ({ kind: 'nod', count, at, duration: 1.2 + (count - 1) * 0.4 });
-const SH = (count = 1, at = 0.2) => ({ kind: 'shake_head', count, at, duration: 1.6 });
-const BL = (count = 1, at = 0.2) => ({ kind: 'blink', side: 'both', count, at, duration: 0.4 + count * 0.25 });
-const SM = (at = 0.2) => ({ kind: 'smile', at, duration: 1.8 });
-
-// 每个状态 = 「标识动作」固定（read 一定低头、write 一定前倾、subagent 一定看向旁边）
-//        + 「表情」按权重随机       + 「附加小动作」随机
-// faces: [[表情名 | null, 权重], ...]；acts 是标识动作；accents 是可选项（null = 不加）
+// faces: [[表情名 | null, 权重], ...]；null = 这一版不换脸，只出气泡
 const RIGS = {
-  think: {
-    faces: [['加载', 6], ['眯眼', 3], ['屑屑眼', 1], ['圈圈眼', 1]],
-    acts: [],
-    accents: [null, null, L('up'), T('right'), T('left')],
-  },
-  read: {
-    faces: [[null, 4], ['眯眼', 2], ['圈圈眼', 1]],
-    acts: [L('down')],
-    accents: [null, null, T('right', 0.7), BL(1, 0.9)],
-  },
-  write: {
-    // 2026-11-01：原来靠「前倾」表情俯身，但那会驱动 LeanInput，和桌宠指针追踪撞车；
-    // 改成「眯眼（专注落笔）/ 单片眼镜 / 屑屑眼」，身体留给指针追踪与待机。
-    faces: [['眯眼', 4], ['单片眼镜', 3], ['屑屑眼', 1]],
-    acts: [],
-    accents: [L('down'), L('down'), null, T('right', 0.6)],
-  },
-  shell: {
-    // 2026-11-01：原来靠「前倾」表情俯身，但那会驱动 LeanInput，和桌宠的指针追踪撞车；
-    // 改成「黑框眼镜（盯终端）/ 眯眼（专注）/ 加载」这些只在脸上的表达，身体留给指针追踪和待机。
-    faces: [['黑框眼镜', 4], ['眯眼', 3], ['加载', 1]],
-    acts: [L('down')],
-    accents: [null, null, T('right', 0.8)],
-  },
-  web: {
-    faces: [['兔牙', 3], ['加载', 2], [null, 2], ['爱心眼', 1]],
-    acts: [L('up')],
-    accents: [null, null],
-  },
-  subagent: {
-    faces: [['圈圈眼', 4], [null, 1], ['眯眼', 1]],
-    acts: [L('left')],
-    accents: [null, T('left', 0.7)],
-  },
-  stall: {
-    faces: [['流冷汗', 4], ['＞＜', 1], ['眯眼', 1]],
-    acts: [L('up')],
-    accents: [null, T('right', 0.7)],
-  },
-  error: {
-    faces: [['流冷汗', 3], ['流泪', 1], [null, 2]],
-    acts: [SH(1)],
-    accents: [null],
-  },
-  dizzy: { faces: [['圈圈眼', 1]], acts: [T('right', 0.4)], accents: [null] },
-  listen: {
-    faces: [[null, 3], ['兔牙', 1]],
-    acts: [N(1)],
-    accents: [null, null, SM()],
-  },
-  fidget: {
-    faces: [[null, 6], ['眯眼', 1], ['兔牙', 1]],
-    acts: [],
-    accents: [BL(1), T('left'), T('right'), L('left'), L('right'), SM(), N(1)],
-  },
-  done_happy: { faces: [['爱心眼', 3], ['兔牙', 2], [null, 2]], acts: [N(1)], accents: [null] },
-  done_excited: { faces: [['兔牙', 3], ['爱心眼', 2], [null, 1]], acts: [N(2)], accents: [null] },
-  done_proud: { faces: [['屑屑眼', 3], ['兔牙', 1]], acts: [N(1)], accents: [null] },
-  done_shy: { faces: [['脸红', 1]], acts: [T('left')], accents: [null] },
-  done_sad: { faces: [['流泪', 1]], acts: [L('down')], accents: [null] },
-  done_annoyed: { faces: [['黑脸', 1]], acts: [T('right')], accents: [null] },
-  done_playful: { faces: [['屑屑眼', 1]], acts: [T('right')], accents: [null] },
-  done_sleepy: { faces: [['＞＜', 1], ['眯眼', 1]], acts: [L('down')], accents: [null] },
+  think: { faces: [['加载', 6], ['眯眼', 3], ['屑屑眼', 1], ['圈圈眼', 1]] },
+  read: { faces: [[null, 4], ['眯眼', 2], ['圈圈眼', 1]] },
+  write: { faces: [['眯眼', 4], ['单片眼镜', 3], ['屑屑眼', 1]] },
+  shell: { faces: [['黑框眼镜', 4], ['眯眼', 3], ['加载', 1]] },
+  web: { faces: [['兔牙', 3], ['加载', 2], [null, 2], ['爱心眼', 1]] },
+  subagent: { faces: [['圈圈眼', 4], [null, 1], ['眯眼', 1]] },
+  stall: { faces: [['流冷汗', 4], ['＞＜', 1], ['眯眼', 1]] },
+  error: { faces: [['流冷汗', 3], ['流泪', 1], [null, 2]] },
+  dizzy: { faces: [['圈圈眼', 1]] },
+  listen: { faces: [[null, 3], ['兔牙', 1]] },
+  fidget: { faces: [[null, 6], ['眯眼', 1], ['兔牙', 1]] },
+  done_happy: { faces: [['爱心眼', 3], ['兔牙', 2], [null, 2]] },
+  done_excited: { faces: [['兔牙', 3], ['爱心眼', 2], [null, 1]] },
+  done_proud: { faces: [['屑屑眼', 3], ['兔牙', 1]] },
+  done_shy: { faces: [['脸红', 1]] },
+  done_sad: { faces: [['流泪', 1]] },
+  done_annoyed: { faces: [['黑脸', 1]] },
+  done_playful: { faces: [['屑屑眼', 1]] },
+  done_sleepy: { faces: [['＞＜', 1], ['眯眼', 1]] },
 };
 
 function pickWeighted(list, avoidIdx = -1) {
@@ -338,37 +290,28 @@ function pickWeighted(list, avoidIdx = -1) {
   return pool[pool.length - 1];
 }
 
-// 挑一份 plan：表情随机（避开这个状态上次用过的），动作由 RIGS 决定
+// 挑一份 plan：表情加权随机（避开这个状态上次用过的）
 function pickPlan(kind, lastFace = -1) {
-  const rig = RIGS[kind] || { faces: [[null, 1]], acts: [], accents: [null] };
+  const rig = RIGS[kind] || { faces: [[null, 1]] };
   const fi = pickWeighted(rig.faces, lastFace);
   const face = rig.faces[fi][0];
-  const accents = rig.accents || [null];
-  const accent = accents[Math.floor(Math.random() * accents.length)] || null;
-  const acts = [...(rig.acts || []), ...(accent ? [accent] : [])];
-  return { plan: buildPlan(kind, face, acts), faceIdx: fi, face, acts };
+  return { plan: buildPlan(kind, face), faceIdx: fi, face };
 }
 
-// 枚举一个状态的所有「表情 × 附加」组合（给 --probe 用）
+// 枚举一个状态的所有表情（给 --probe 用）
 function allCombos(kind) {
-  const rig = RIGS[kind] || { faces: [[null, 1]], acts: [], accents: [null] };
-  const out = [];
-  rig.faces.forEach((f, fi) => {
-    (rig.accents || [null]).forEach((acc, ai) => {
-      out.push({ fi, ai, plan: buildPlan(kind, f[0], [...(rig.acts || []), ...(acc ? [acc] : [])]) });
-    });
-  });
-  return out;
+  const rig = RIGS[kind] || { faces: [[null, 1]] };
+  return rig.faces.map((f, fi) => ({ fi, plan: buildPlan(kind, f[0]) }));
 }
 
-function buildPlan(kind, face, acts = []) {
+// 一份 plan = 一张脸；脸是 null 就返回空 plan（只出气泡，不动模型）
+function buildPlan(kind, face) {
   // 引擎一次只跑一份 plan，时长就是「占用窗口」：长状态 5.5s 一版、每 6.5s 续一次
   const d = HOLD_KINDS.has(kind) ? 5.5 : 2.5;
   const actions = [];
   if (face) actions.push({ kind: 'expression', name: face, strength: 0.85, layer: 'exclusive', at: 0, duration: d });
-  for (const a of acts) actions.push({ ...a });
   const title = `联动 · ${kind}${face ? ' · ' + face : ''}`;
-  return { version: 1, title, intent: title, summary: title, actions: actions.slice(0, 24) };
+  return { version: 1, title, intent: title, summary: title, actions };
 }
 
 async function applyPlan(plan, allowStop = true) {
@@ -384,6 +327,75 @@ async function applyPlan(plan, allowStop = true) {
   const ok = r.status === 200 || r.status === 201;
   if (!ok) log(`apply ${plan.title} 失败 ${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
   return ok;
+}
+
+// ---------------------------------------------------------------- 阶段气泡
+// 主人要的：思考 / 跑命令 / 读文件这些阶段，用气泡从上半身附近冒出来，2~4 秒自己消失。
+// 这里只负责把会话事件翻译成人话，气泡画在哪儿、怎么淡出，交给外壳（61943 /tick）。
+const clip = (s, n) => {
+  const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  return t.length > n ? t.slice(0, n) : t;
+};
+const fileBase = (p) => clip(String(p || '').split(/[\\/]/).pop(), 16);
+// shell 命令常以 `cd ...` / `$env:X='...'` 开头，那几段对人没信息量，跳到第一段真正的命令
+function shellHead(cmd) {
+  const segs = String(cmd || '').replace(/\r/g, '').split(/[;\n]+/).map((s) => s.trim()).filter(Boolean);
+  const real = segs.find((s) => !/^(cd |pushd |set-location\b|dir\b|ls\b)/i.test(s) && !/^\$env:/i.test(s));
+  return clip(real || segs[0] || '', 16);
+}
+
+function toolText(name, args) {
+  const a = args || {};
+  const file = fileBase(a.file_path || a.path || a.file || a.target_path || '');
+  const n = String(name || '');
+  if (/^read$/.test(n)) return file ? `看 ${file}` : '看文件';
+  if (/^grep$/.test(n)) return a.pattern ? `搜 ${clip(a.pattern, 14)}` : '搜代码';
+  if (/^glob$/.test(n)) return a.pattern ? `找 ${clip(a.pattern, 14)}` : '找文件';
+  if (/^(write|edit)$/.test(n)) return file ? `改 ${file}` : '改文件';
+  if (/^(pwsh|bash|shell)$/.test(n)) {
+    const cmd = shellHead(a.command || a.cmd);
+    return cmd ? `跑 ${cmd}` : '跑命令';
+  }
+  if (/web|search|fetch|research|domain/.test(n)) {
+    const q = clip(a.query || a.question || a.url || a.q || a.ticker || '', 14);
+    return q ? `查 ${q}` : '上网查一下';
+  }
+  if (/subagent|task|workflow/.test(n)) return '叫子代理去干';
+  if (/image/.test(n)) return '画图';
+  if (/sticker|meme/.test(n)) return '翻表情包';
+  if (/session|schedule|goal/.test(n)) return '理会话';
+  return '在干活';
+}
+
+// 状态 → 气泡文案。只有「过程」出气泡：done 由回复本身说话，fidget 是待机不吭声。
+function noteFor(kind, snap) {
+  const t = snap && snap.pendingTool;
+  switch (kind) {
+    case 'think': return '想一想';
+    case 'dizzy': return '想晕了';
+    case 'stall': return '这条命令有点慢';
+    case 'error': return '出错了';
+    default: break;
+  }
+  if (!t) return kind === 'subagent' ? '子代理在干活' : null;
+  return toolText(t.name, t.args);
+}
+
+// 一次工具调用 = 一条气泡；同一个 key 不重复，短间隔不刷屏
+let lastBubble = { key: '', at: 0 };
+async function maybeBubble(kind, snap) {
+  const t = snap && snap.pendingTool;
+  const key = kind + '#' + (t ? t.seq : 'turn' + (snap && snap.turn));
+  const now = Date.now();
+  if (key === lastBubble.key) return;
+  if (now - lastBubble.at < 1400) return;
+  const text = noteFor(kind, snap);
+  if (!text) return;
+  lastBubble = { key, at: now };
+  if (DRY) { log(`DRY 气泡「${text}」`); return; }
+  const ms = 2400 + Math.round(Math.random() * 1200);   // 2.4 ~ 3.6 秒
+  const r = await jpost(`${SHELL}/tick`, { text, ms });
+  log(r.status === 200 ? `气泡「${text}」${ms}ms` : `气泡「${text}」失败 ${r.status}`);
 }
 
 // ---------------------------------------------------------------- 主循环
@@ -484,6 +496,9 @@ async function tick() {
     //   a) 连续用工具时，两个 call 之间那零点几秒的「think」不要切——不然就是鬼畜
     const TOOL_KINDS = new Set(['read', 'write', 'shell', 'web', 'subagent']);
     if (kind === 'think' && TOOL_KINDS.has(applied.kind) && now - (snap.lastToolAt || 0) < 3000) return;
+    // 气泡走独立一条线：比表情灵敏（表情要防抖防抽风，气泡自己会消失）。
+    // 必须放在防抖前面，否则一步 0.5~2 秒的短步骤根本等不到 DEBOUNCE_MS 就被下一个状态顶掉。
+    await maybeBubble(kind, snap);
     //   b) 新状态先稳定 DEBOUNCE_MS 才切；两次下发之间至少隔 MIN_GAP_MS（done/error/listen 例外）
     const hold = HOLD_KINDS.has(kind);
     const urgent = kind.startsWith('done_') || kind === 'error' || kind === 'listen';
@@ -503,7 +518,9 @@ async function tick() {
       ? { plan: applied.plan, face: applied.face, faceIdx: (saved.lastFace || {})[kind] }
       : pickPlan(kind, (saved.lastFace || {})[kind] ?? -1);
     if (!pick.plan) return;
-    if (await applyPlan(pick.plan, !isRefresh)) {
+    // 空 plan（这一版抽到「不换脸」）就只记账，不发请求
+    const ok = pick.plan.actions.length ? await applyPlan(pick.plan, !isRefresh) : true;
+    if (ok) {
       applied = { kind, at: now, since: isRefresh ? applied.since : now, plan: pick.plan, face: pick.face };
       saveState({ lastKind: kind, lastKindAt: now, lastFace: { ...(saved.lastFace || {}), [kind]: pick.faceIdx ?? -1 } });
       if (!isRefresh) {
@@ -517,16 +534,17 @@ async function tick() {
 }
 
 if (process.argv.includes('--probe')) {
-  // 每个状态的「表情 × 附加」组合都试一遍，看引擎接不接受（参数冲突会返回 400）
+  // 每个状态的每张脸都试一遍，看引擎接不接受（空 plan 是「不换脸」，直接跳过）
   let total = 0, fails = 0;
   for (const kind of Object.keys(RIGS)) {
-    for (const { fi, ai, plan } of allCombos(kind)) {
+    for (const { fi, plan } of allCombos(kind)) {
+      if (!plan.actions.length) continue;
       await jpost(`${STAGE}/api/stop`, {});
       await new Promise((res) => setTimeout(res, 110));
       const r = await jpost(`${STAGE}/api/execute`, { plan, backend: 'web' });
       total++;
       const ok = r.status === 200 || r.status === 201;
-      if (!ok) { fails++; console.log(`FAIL ${kind} f${fi}/a${ai} ${r.status} ${JSON.stringify(r.data).slice(0, 160)}`); }
+      if (!ok) { fails++; console.log(`FAIL ${kind} f${fi} ${r.status} ${JSON.stringify(r.data).slice(0, 160)}`); }
       await new Promise((res) => setTimeout(res, 220));
       await jpost(`${STAGE}/api/stop`, {});
       await new Promise((res) => setTimeout(res, 110));
