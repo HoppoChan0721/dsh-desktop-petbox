@@ -93,6 +93,7 @@ async function loadConfig() {
     box('interactive').checked = cfg.interactive !== false;
     box('bridge').checked = cfg.bridge !== false;
     box('tickBubble').checked = cfg.tickBubble !== false;
+    box('replyBtn').checked = cfg.replyBtn !== false;
     paintFps(Number(cfg.stageFps));
     paintStatus(resolved);
   } catch (e) {
@@ -168,7 +169,7 @@ box('tickBubble').addEventListener('change', async () => {
 });
 
 box('save').addEventListener('click', async () => {
-  const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked, bridge: box('bridge').checked, tickBubble: box('tickBubble').checked };
+  const patch = { dshWatch: box('dshWatch').checked, interactive: box('interactive').checked, bridge: box('bridge').checked, tickBubble: box('tickBubble').checked, replyBtn: box('replyBtn').checked };
   const fv = fpsFromUi();
   if (fv !== null) patch.stageFps = fv;
   for (const id of FIELDS) {

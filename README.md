@@ -32,6 +32,7 @@
 - **情绪端口**：`POST 127.0.0.1:61943/mood {"emotion":"shy","intensity":0.8}`，12 种情绪映射成鲸语 plan
 - **气泡**：`POST /say {"text":"…"}` 出对话气泡，可选接自己的 TTS
 - **阶段气泡**：`POST /tick {"text":"看 main.js","ms":3000}` 从上半身肩线冒出小气泡，边飘边淡，单颗 2~4 秒、最多同时 5 颗（联动用它说「在想 / 跑命令 / 看文件」，面板里能关）
+- **气泡回复**：她说完话，气泡角上挂一个小蓝钮；鼠标靠近气泡就先不淡，点开就能在桌宠窗口里直接打字，回车把这句话投给桌宠专用会话（要先填 `bridgeUrl`），她的回话再以气泡回流
 - **CLI**：`cli/pet.mjs` 把上面这些都包成命令行
 
 可选集成（默认关闭）：DSH 会话联动 `integ/dsh-watch.mjs`，把会话状态（读文件/写文件/跑命令/子代理/卡住/报错）演成**表情 + 肩上的阶段气泡**，不再推她的头。
@@ -102,6 +103,8 @@ POST /cursor  {on?, spin?, reset?}
 GET  /cursor                    窗口位置、鼠标、调戏区、绕圈阶段
 GET  /bubble  POST /bubble      气泡文本与位置
 POST /tick    {text, ms?}       阶段气泡（小、贴肩、2~4 秒消失）   GET /tick 看当前那条
+POST /reply   {text} | {open}   在主人在桌宠里打的那句话投给桌宠专用会话；{open:true/false} 开关输入卡（调试用）
+GET  /reply                     回复钮状态：开着没、输入卡开着没、当前文字
 POST /sway    {on, phys, tilt, period}   GET /sway
 POST /touch   {zone, nx?, ny?}   模拟一次点触（zone: hair/head/neck/chest/waist/skirt/leg/foot/body）
 GET  /touches?limit=20           最近的点触记录
@@ -115,6 +118,7 @@ GET  /fps  POST /fps {fps}       舞台帧率上限（0 = 不限），改完自�
 ```powershell
 node cli/pet.mjs state
 node cli/pet.mjs say "主人回来啦" --emotion happy
+node cli/pet.mjs reply "在吗，我看到气泡了"   # 替主人回她一句（走桌宠专用会话）
 node cli/pet.mjs expr 脸红 --and look=down
 node cli/pet.mjs gesture hand_on_chest
 node cli/pet.mjs sway --phys 0.2 --tilt 0.6 --period 4.0
@@ -152,6 +156,12 @@ DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后�
 **语音**（`echoVoice`，默认关）：打开后只念 `echoVoiceMaxChars`（默认 40）以内的短回复。合成期间气泡停在三个点，合成好之后正文、口型、声音同帧一起出；`early: true` 只让表情和手势提前摆好，正文不会提前漏。改配置要重启 DSH。
 
 **顺带控制表情和手势**：投给桌宠会话的消息后面会附一句口径（一句、**5~20 字**、越短越好、别排版），并允许模型在最前面写 `[emotion:shy]` / `[gesture:hand_on_chest]`，桥把这俩摘出来交给 `/say`，标记不进气泡；认不出的名字直接忽略、正文照留。
+
+**反过来，在桌宠里回她一句**（`config.replyBtn`，默认开）：她说完话，气泡右上角挂一个小蓝钮（只有说话气泡挂，过程小气泡不挂）。鼠标靠近气泡时气泡先不淡——不然 5 秒的回复根本来不及点；点开在桌宠窗口里弹一张输入卡，回车就发。壳子把这句 `POST` 到桥的 `/say`（由 `bridgeUrl` 换 pathname 得来），桥照常投进桌宠专用会话、她的回话再照常回流成气泡，所以你打一句、她答一句，全程不离开桌面。
+
+- 输入卡用 `Esc` 取消，点别处（窗口失焦）也会收掉；发送失败（DSH 没开、端口不通）时卡片不关，原因写在下面一行，文字留在框里。
+- 打字期间窗口不穿透；关掉卡片、鼠标离开就恢复。那颗钮是整窗唯一吃鼠标的 DOM（标了 `data-pet-ui`），气泡正文和其它位置照旧穿透，不影响在上面摸她。
+- 入口：托盘「互动 ▸ 气泡回复钮」、设置面板「互动」里的勾选框、`config.replyBtn`；`node cli/pet.mjs reply "在吗"` 和 `POST :61943/reply {"text":"…"}` 是同一件事，方便脚本里用。
 
 安装（DSH 侧）：
 

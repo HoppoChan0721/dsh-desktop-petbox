@@ -48,7 +48,7 @@ function plog(msg) {
 }
 
 let win = null, tray = null, panel = null, serverChild = null, spawnedServer = false;
-let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true;
+let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true, replyBtnOn = true;
 let watcherChild = null, autoMood = true, voicing = false, voicingTimer = null;
 function setVoicing(on, ms = 0) {
   if (voicingTimer) { clearTimeout(voicingTimer); voicingTimer = null; }
@@ -257,7 +257,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -290,6 +290,32 @@ function startMoodServer() {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
       win.webContents.executeJavaScript('window.__petTickInfo ? window.__petTickInfo() : null')
         .then((v) => send(200, { ok: !!v, on: tickBubbleOn(), last: lastTick, ...(v || {}) }))
+        .catch((e) => send(200, { ok: false, error: e.message }));
+      return;
+    }
+    // 回复她：POST /reply {"text":"主人写的话"} —— 和点气泡上的小钮同一条路（CLI / 调试用）
+    // {"open":true/false} 是给调试用的：不点鼠标也能把输入卡打开，验 UI 和键盘路径
+    if (req.method === 'POST' && req.url === '/reply') {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 4096) req.destroy(); });
+      req.on('end', async () => {
+        try {
+          const j = JSON.parse(raw || '{}');
+          if (typeof j.open === 'boolean') {
+            if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
+            const v = await win.webContents.executeJavaScript(`window.__petReply && window.__petReply(${j.open ? 'true' : 'false'})`).catch(() => null);
+            return send(200, { ok: v !== null, open: j.open });
+          }
+          const r = await sendReply(j.text);
+          return send(r.ok ? 200 : 502, r);
+        } catch (e) { return send(400, { ok: false, error: e.message }); }
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/reply') {
+      if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
+      win.webContents.executeJavaScript('window.__petReplyInfo ? window.__petReplyInfo() : null')
+        .then((v) => send(200, { ok: !!v, btn: replyBtnWanted(), url: String(replyTarget()), ...(v || {}) }))
         .catch((e) => send(200, { ok: false, error: e.message }));
       return;
     }
@@ -789,12 +815,154 @@ const BUBBLE_JS = `(() => {
   // 阶段气泡：像真气泡一样从肩边冒出来往上飘。可以同时好几颗，各自 2~4 秒飘完自己消失。
   style.textContent += '.pet-tick{position:fixed;max-width:52%;padding:5px 10px;border-radius:13px;background:rgba(236,248,255,.88);border:1px solid rgba(120,180,240,.5);color:#1f3a55;font:14px/1.3 system-ui,"Microsoft YaHei";box-shadow:0 4px 12px rgba(30,80,140,.16);pointer-events:none;z-index:99998;white-space:pre-wrap;word-break:break-word;box-sizing:border-box;will-change:transform,opacity;animation:petTickUp var(--life,3000ms) cubic-bezier(.22,.68,.3,1) forwards}' +
     '@keyframes petTickUp{0%{opacity:0;transform:translate3d(0,7px,0) scale(.68)}10%{opacity:1;transform:translate3d(0,-3px,0) scale(1)}24%{opacity:1}62%{opacity:.9;transform:translate3d(calc(var(--dx,0px) * .55),calc(var(--dy,-110px) * .5),0) scale(1)}100%{opacity:0;transform:translate3d(var(--dx,0px),var(--dy,-110px),0) scale(1.04)}}';
+  // 回复她：气泡角上的小蓝钮 + 窗口内直接打字的输入卡。
+  // 这两个是整窗唯一允许吃鼠标的 DOM（pointer-events:auto + data-pet-ui），
+  // 气泡正文仍然穿透（不然在桌宠上摸来摸去会被气泡挡住）。
+  style.textContent += '#pet-bubble-reply{position:fixed;left:0;top:0;width:26px;height:26px;border-radius:50%;background:linear-gradient(150deg,#5aa9ff,#2a7fff);box-shadow:0 3px 10px rgba(20,60,120,.35);display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;z-index:100000;opacity:0;visibility:hidden;transform:scale(.86);transition:opacity .16s,transform .16s}' +
+    '#pet-bubble-reply.on{opacity:1;visibility:visible;transform:scale(1)}' +
+    '#pet-bubble-reply:hover{transform:scale(1.1)}' +
+    '#pet-bubble-reply svg{width:15px;height:15px;display:block;pointer-events:none}' +
+    '#pet-reply-box{position:fixed;left:0;top:0;z-index:100001;display:flex;flex-direction:column;gap:3px;padding:7px 10px 6px;border-radius:14px;background:rgba(255,255,255,.97);border:1px solid rgba(120,180,240,.6);box-shadow:0 8px 24px rgba(20,50,90,.28);font:13px/1.3 system-ui,"Microsoft YaHei";pointer-events:auto;box-sizing:border-box}' +
+    '#pet-reply-input{width:100%;border:0;outline:0;background:transparent;font:17px/1.35 system-ui,"Microsoft YaHei";color:#1f3a55;padding:1px 0;cursor:text}' +
+    '#pet-reply-input::placeholder{color:#a6bccc}' +
+    '#pet-reply-hint{font-size:11px;color:#7d9ab0;cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}';
   document.head.appendChild(style);
   const el = document.createElement('div');
   el.id = 'pet-bubble';
   el.className = 'pos-bottom';
   document.body.appendChild(el);
   let timer = null, typer = null;
+  // ---- 回复她（2026-11-04）----
+  // 气泡右上角一个蓝色小钮，点开就在桌宠窗口里打字，回车把这句话投给桌宠专用会话。
+  // 为什么画在页面里而不是壳子另开一个小窗：桌宠本来就是置顶透明窗，在这儿打字不用切窗、
+  // 也多一个焦点对象；穿透由 preload 判（带 data-pet-ui 的元素算可交互）。
+  // 注意按钮必须是气泡的**兄弟节点**：气泡正文是 textContent 反复覆写的（打字机），塞进去会被抹掉。
+  const REPLY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.6c0 4.2-3.6 7.6-8 7.6-1.1 0-2.1-.2-3-.6L4 20.2l1.6-4.4c-.7-1.2-1.1-2.6-1.1-4.2 0-4.2 3.6-7.6 8-7.6s8 3.4 8 7.6z"/><path d="M8.4 11.4h7.2M8.4 14.6h4.4"/></svg>';
+  const replyBtn = document.createElement('div');
+  replyBtn.id = 'pet-bubble-reply';
+  replyBtn.setAttribute('data-pet-ui', '1');
+  replyBtn.title = '回复她';
+  replyBtn.innerHTML = REPLY_ICON;
+  document.body.appendChild(replyBtn);
+  let replyEnabled = true, replyOpen = false, bubbleShown = false, nearBubble = null;
+  const placeReplyBtn = () => {
+    const r = el.getBoundingClientRect();
+    const W = window.innerWidth || 380, H = window.innerHeight || 680;
+    const x = Math.max(4, Math.min(W - 30, r.right - 14));
+    const y = Math.max(4, Math.min(H - 30, r.top - 12));
+    replyBtn.style.left = Math.round(x) + 'px';
+    replyBtn.style.top = Math.round(y) + 'px';
+  };
+  const showReply = () => {
+    bubbleShown = true;
+    if (!replyEnabled) return;
+    placeReplyBtn();
+    replyBtn.classList.add('on');
+  };
+  const hideReply = () => {
+    bubbleShown = false;
+    nearBubble = null;
+    replyBtn.classList.remove('on');
+  };
+  const holdBubble = () => {
+    if (!bubbleShown) return;
+    clearTimeout(timer);
+    el.style.opacity = '1';
+  };
+  const releaseBubble = (delay) => {
+    if (!bubbleShown) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => { el.style.opacity = '0'; hideReply(); }, Math.max(0, Number(delay) || 0));
+  };
+  const placeReplyBox = () => {
+    const box = document.getElementById('pet-reply-box');
+    if (!box) return;
+    const W = window.innerWidth || 380, H = window.innerHeight || 680;
+    const bw = Math.min(420, Math.round(W * 0.92));
+    box.style.width = bw + 'px';
+    const bh = box.offsetHeight || 56;
+    const r = el.getBoundingClientRect();
+    // 气泡在下半屏就往上让，免得挡住她说话的那一行
+    let top = (r.top + r.bottom) / 2 > H / 2 ? r.top - bh - 10 : r.bottom + 10;
+    top = Math.max(6, Math.min(H - bh - 6, top));
+    box.style.left = Math.round((W - bw) / 2) + 'px';
+    box.style.top = Math.round(top) + 'px';
+  };
+  const closeReply = () => {
+    const box = document.getElementById('pet-reply-box');
+    if (box) box.remove();
+    const was = replyOpen;
+    replyOpen = false;
+    if (was) document.dispatchEvent(new CustomEvent('pet:reply-close'));
+    releaseBubble(900);
+    return true;
+  };
+  const openReply = () => {
+    if (replyOpen) { const i = document.getElementById('pet-reply-input'); if (i) { try { i.focus(); } catch (e) {} } return true; }
+    replyOpen = true;
+    holdBubble();
+    replyBtn.classList.remove('on');
+    const box = document.createElement('div');
+    box.id = 'pet-reply-box';
+    box.setAttribute('data-pet-ui', '1');
+    box.innerHTML = '<input id="pet-reply-input" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="和她说一句"><div id="pet-reply-hint">回车发送 · Esc 取消</div>';
+    document.body.appendChild(box);
+    placeReplyBox();
+    const inp = box.querySelector('input');
+    const hint = box.querySelector('#pet-reply-hint');
+    setTimeout(() => { try { inp.focus({ preventScroll: true }); } catch (e) {} }, 60);
+    document.dispatchEvent(new CustomEvent('pet:reply-open'));   // 壳子：切可交互、拿焦点
+    inp.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Escape') { closeReply(); return; }
+      if (ev.key !== 'Enter') return;
+      if (ev.isComposing || ev.keyCode === 229) return;   // 输入法选词的那下回车不算发送
+      const text = String(inp.value || '').trim();
+      if (!text) { closeReply(); return; }
+      inp.readOnly = true;
+      hint.textContent = '发送中…';
+      document.dispatchEvent(new CustomEvent('pet:reply-send', { detail: text }));
+    });
+    return true;
+  };
+  window.__petReply = (open) => { if (open) return openReply(); closeReply(); return false; };
+  window.__petReplySet = (on) => {
+    replyEnabled = on !== false;
+    if (!replyEnabled) replyBtn.classList.remove('on');
+    else if (bubbleShown) { placeReplyBtn(); replyBtn.classList.add('on'); }
+    return replyEnabled;
+  };
+  window.__petReplyInfo = () => ({ enabled: replyEnabled, open: replyOpen, shown: bubbleShown, text: replyOpen && document.getElementById('pet-reply-input') ? document.getElementById('pet-reply-input').value : '' });
+  document.addEventListener('pet:reply-result', (ev) => {
+    const r = (ev && ev.detail) || {};
+    if (r.ok) {
+      closeReply();
+      if (typeof window.__petTick === 'function') window.__petTick('已送到她那儿', 2400);
+      return;
+    }
+    const box = document.getElementById('pet-reply-box');
+    if (!box) return;
+    const inp = box.querySelector('input');
+    const hint = box.querySelector('#pet-reply-hint');
+    if (inp) inp.readOnly = false;
+    if (hint) hint.textContent = String(r.error || '没发出去');
+    if (inp) { try { inp.focus(); } catch (e) {} }
+  });
+  document.addEventListener('pet:reply-cancel', () => { if (replyOpen) closeReply(); });
+  replyBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openReply(); });
+  // 鼠标靠近气泡就先别淡（不然 5 秒的回复一变 3 秒就没了，钮都点不到）。
+  // 页面这边自己看坐标就够了：mousemove 不管落点是不是可穿透元素都会到 window。
+  window.addEventListener('mousemove', (e) => {
+    if (!bubbleShown) return;
+    const b = el.getBoundingClientRect();
+    const near = e.clientX >= b.left - 12 && e.clientX <= b.right + 18 && e.clientY >= b.top - 18 && e.clientY <= b.bottom + 14;
+    if (near === nearBubble) return;
+    nearBubble = near;
+    if (near) holdBubble();
+    else if (!replyOpen) releaseBubble(1800);
+  }, true);
+  window.addEventListener('resize', () => { if (bubbleShown) placeReplyBtn(); placeReplyBox(); });
+
   window.__petPlay = (url) => { try { const a = new Audio(url); a.volume = (typeof window.__petVol === 'number' ? window.__petVol : 1); a.play().catch(() => {}); window.__petAudio = a; return true; } catch { return false; } };
   window.__petVol = 1;
   window.__petSetVol = (v) => { const n = Math.max(0, Math.min(1, Number(v))); if (Number.isFinite(n)) window.__petVol = n; if (window.__petAudio) { try { window.__petAudio.volume = window.__petVol; } catch {} } return window.__petVol; };
@@ -802,6 +970,7 @@ const BUBBLE_JS = `(() => {
     const p = ['bottom', 'top', 'left', 'right'].includes(pos) ? pos : 'bottom';
     el.className = 'pos-' + p;
     fitTop();
+    if (bubbleShown) placeReplyBtn();
     return p;
   };
   // 顶部气泡贴模型头顶。头顶以前是写死的 168（只对 380×680 成立），换窗口大小后模型跟着缩放、
@@ -861,25 +1030,29 @@ const BUBBLE_JS = `(() => {
     gap: GAP, fontSize: el.style.fontSize || null, maxWidth: el.style.maxWidth || null,
     winW: window.innerWidth, winH: window.innerHeight, opacity: el.style.opacity || null, text: String(el.textContent || '').slice(0, 80),
   });
+  const REPLY_HOLD_MS = 6500;   // 带回复钮的气泡至少活这么久，够把鼠标挪过去点它
   window.__petSay = (text, ms) => {
     const full = String(text || '');
     clearInterval(typer); clearTimeout(timer);
     el.textContent = '';
     el.style.opacity = '1';
+    showReply();   // 一露头就挂回复钮，别等整句打完
     let i = 0;
     const step = () => {
       i++;
       el.textContent = full.slice(0, i);
       fitTop(i === 1);
+      if (bubbleShown) placeReplyBtn();
       if (i >= full.length) { clearInterval(typer); typer = null; }
     };
     typer = setInterval(step, 34);
     step();
-    timer = setTimeout(() => { el.style.opacity = '0'; }, Math.max(Number(ms) || 6000, full.length * 34 + 1400));
+    releaseBubble(Math.max(Number(ms) || 6000, full.length * 34 + 1400, replyEnabled ? REPLY_HOLD_MS : 0));
   };
   window.__petWait = (label) => {
     clearInterval(typer); typer = null;
     clearTimeout(timer);
+    hideReply();   // 三个点的等待态没东西可回
     const txt = document.createElement('span');
     txt.textContent = label ? String(label) + ' ' : '';
     el.textContent = '';
@@ -1088,6 +1261,66 @@ function petTick(text, ms) {
 function applyBubblePos(pos) {
   if (!win || win.isDestroyed()) return;
   win.webContents.executeJavaScript(`window.__petPos && window.__petPos(${JSON.stringify(pos)})`).catch(() => {});
+}
+
+// ---- 回复她（2026-11-04）----
+// 桌宠里打的一句话 → DSH 侧的桌宠专用会话。和点触走同一座桥（dsh-pet-bridge），
+// 只是文本换成主人自己写的；桥那边按「一轮对话」跑，说完再把她的回话回流成气泡，
+// 所以这里只管把话送出去，不管回话。
+const REPLY_URL_FALLBACK = 'http://127.0.0.1:61944/say';
+function replyBtnWanted() {
+  return replyBtnOn !== false && !!String(loadCfg().bridgeUrl || '').trim();
+}
+function syncReplyBtn() {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.executeJavaScript(`window.__petReplySet && window.__petReplySet(${replyBtnWanted() ? 'true' : 'false'})`).catch(() => {});
+}
+function setReplyBtn(on, save) {
+  replyBtnOn = !!on;
+  if (save) saveCfg({ replyBtn: replyBtnOn });
+  syncReplyBtn();
+  return replyBtnOn;
+}
+function replyTarget() {
+  try {
+    const u = new URL(String(loadCfg().bridgeUrl || '').trim() || REPLY_URL_FALLBACK);
+    u.pathname = '/say';
+    u.search = '';
+    u.hash = '';
+    return u;
+  } catch {
+    return new URL(REPLY_URL_FALLBACK);
+  }
+}
+function sendReply(text) {
+  return new Promise((resolve) => {
+    const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!t) { resolve({ ok: false, error: '空的' }); return; }
+    let u;
+    try { u = replyTarget(); } catch (e) { resolve({ ok: false, error: 'bridgeUrl 配得不对：' + e.message }); return; }
+    const body = JSON.stringify({ text: t });
+    const req = http.request({
+      hostname: u.hostname,
+      port: u.port || 80,
+      path: u.pathname,
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+      timeout: 12000,
+    }, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { raw += c; });
+      res.on('end', () => {
+        let j = {};
+        try { j = JSON.parse(raw || '{}'); } catch {}
+        if (res.statusCode >= 200 && res.statusCode < 300 && j.ok !== false) resolve({ ok: true, text: t, target: j.target || '', sessionId: j.sessionId || '' });
+        else resolve({ ok: false, error: j.error || ('桥回了 HTTP ' + res.statusCode) });
+      });
+    });
+    req.on('error', (e) => resolve({ ok: false, error: '连不上 DSH 侧的桥：' + e.message }));
+    req.on('timeout', () => { try { req.destroy(); } catch {} });
+    req.end(body);
+  });
 }
 // 音量只作用于页面内的 Web Audio（实时语音 + 预合成台词都走这条）
 function syncVolume() {
@@ -1313,7 +1546,7 @@ function createWindow() {
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
   win.webContents.on('did-finish-load', async () => {
     loadAttempts = 0;
-    win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); syncTickBubble(); }).catch(() => {});
+    win.webContents.executeJavaScript(BUBBLE_JS).then(() => { applyBubblePos(loadCfg().bubblePos || 'bottom'); syncSway(); syncVolume(); syncTickBubble(); syncReplyBtn(); }).catch(() => {});
     // 第一次露脸前先贴到目标窗口旁边（设置里的 dock），找不到就还按上次的坐标站
     const dm = loadCfg().dock;
     if ((dm === 'left' || dm === 'right') && !win.isVisible()) {
@@ -1343,6 +1576,13 @@ function createWindow() {
 function stopDrag() { if (dragTimer) { clearInterval(dragTimer); dragTimer = null; } }
 
 ipcMain.on('pet:ignore', (_e, ignore) => { if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!!ignore, { forward: true }); });
+// 回复输入卡：打开时把窗口拉到前台拿焦点（不聚焦就打不了字）；发送走 sendReply
+ipcMain.on('pet:reply-open', () => {
+  if (!win || win.isDestroyed()) return;
+  try { if (!win.isVisible()) win.show(); } catch {}
+  try { win.focus(); } catch {}
+});
+ipcMain.handle('pet:reply-send', (_e, text) => sendReply(text));
 ipcMain.on('pet:drag-start', () => {
   if (!win || dragTimer) return;
   const start = screen.getCursorScreenPoint();
@@ -1502,6 +1742,7 @@ ipcMain.handle('cfg:save', (_e, patch) => {
   if (patch && typeof patch.interactive === 'boolean') setInteractive(patch.interactive, false);   // 存过了，只广播
   if (patch && typeof patch.bridge === 'boolean') setBridge(patch.bridge, false);
   if (patch && typeof patch.tickBubble === 'boolean') syncTickBubble();
+  if (patch && typeof patch.replyBtn === 'boolean') setReplyBtn(patch.replyBtn, false);   // 存过了，只广播
   // 帧率改了要重载舞台才生效（只重载页面，不动窗口）
   if (patch && patch.stageFps !== undefined) applyStageFps(patch.stageFps);
   const r = refreshPaths();
@@ -1612,6 +1853,7 @@ function buildMenu() {
     { label: '互动', submenu: [
       { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
       { label: '模型桥接（点她会叫醒 DSH 会话）', type: 'checkbox', checked: bridgeOn, click: (item) => setBridge(item.checked, true) },
+      { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },
       { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
       { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
       { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
@@ -1676,6 +1918,7 @@ app.whenReady().then(() => {
   alwaysOnTop = loadCfg().onTop !== false;
   interactive = loadCfg().interactive !== false;
   bridgeOn = loadCfg().bridge !== false;
+  replyBtnOn = loadCfg().replyBtn !== false;
   autoMood = loadCfg().autoMood !== false;
   cursorTrack = loadCfg().cursorTrack !== false;
   { const st = Number(loadCfg().spinTurns); spinTurns = Number.isFinite(st) ? Math.min(20, Math.max(2, Math.round(st))) : SPIN.turnsPerStage; }

@@ -37,6 +37,7 @@ const DEFAULTS = {
   bridge: true,             // 模型桥接：点触要不要 POST 给 DSH 会话（关掉只留本地反应）
   interactive: true,        // 分区互动总开关
   tickBubble: true,         // 阶段气泡：联动上报进度时从肩边冒出上浮小气泡（可同时 3~5 颗）
+  replyBtn: true,           // 气泡上的回复按钮：点开直接在桌宠里打字，回车发到桌宠专用会话
   spinTurns: 6,             // 绕她转几圈才算一节（2~20）：晕 → 嫌弃 → 生气
   stageFps: 60,             // 舞台帧率上限（0 = 不限）：高刷屏满帧会白烧 CPU
   dock: 'none',             // 启动时贴到某个窗口旁：none | left | right（默认关，谁想用谁自己开）

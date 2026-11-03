@@ -14,6 +14,7 @@ let overNow = null;
 let ignored = null;
 let dragging = false;
 let alphaBroken = false;
+let uiLock = false;       // 回复输入卡开着：这段时间整窗都吃鼠标（不然打字时还在穿透）
 
 // 悬停在她身上时的光标：一个蓝色软点 + 白描边，热点在正中。比手型光标柔和，也不抢她。
 const PET_CURSOR_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
@@ -68,14 +69,45 @@ function overPet(x, y) {
 }
 
 let lastInteractSent = 0;
+// 页面里带 data-pet-ui 的元素（气泡回复钮、回复输入卡）是整窗唯一的可点 DOM。
+// 它们外面全是穿透区，所以悬停到它们身上时也必须先关掉穿透，否则点不到。
+function uiAt(x, y) {
+  try {
+    const t = document.elementFromPoint(x, y);
+    return !!(t && t.closest && t.closest('[data-pet-ui]'));
+  } catch { return false; }
+}
 document.addEventListener('mousemove', (e) => {
   if (!smart) { applyCursor(false); return; }
-  const over = overPet(e.clientX, e.clientY);
+  const ui = uiLock || uiAt(e.clientX, e.clientY);
+  const over = ui || overPet(e.clientX, e.clientY);
   sendIgnore(!over);
-  applyCursor(over);
+  applyCursor(ui ? false : over);
   const now = Date.now();
-  if (over && now - lastInteractSent > 2500) { lastInteractSent = now; ipcRenderer.send('pet:interact'); }
+  if (over && !ui && now - lastInteractSent > 2500) { lastInteractSent = now; ipcRenderer.send('pet:interact'); }
 }, true);
+
+// ---- 回复她：页面里开的输入卡 → 主进程 → DSH 侧桌宠会话 ----
+// 用 document 上的 CustomEvent 通信，不往页面里塞 API：注入脚本和 preload 分处两个世界，
+// CustomEvent 是两边都能看见的那一层。
+document.addEventListener('pet:reply-open', () => {
+  uiLock = true;
+  overNow = null;
+  sendIgnore(false);
+  ipcRenderer.send('pet:reply-open');
+});
+document.addEventListener('pet:reply-close', () => {
+  uiLock = false;
+  sendIgnore(true);
+});
+document.addEventListener('pet:reply-send', (e) => {
+  const text = String(e.detail || '');
+  ipcRenderer.invoke('pet:reply-send', text).then((r) => {
+    document.dispatchEvent(new CustomEvent('pet:reply-result', { detail: r || {} }));
+  }).catch((err) => {
+    document.dispatchEvent(new CustomEvent('pet:reply-result', { detail: { ok: false, error: String((err && err.message) || err) } }));
+  });
+});
 
 // ---- 剪影标定 ----
 // 分区比例必须相对「模型自己」而不是窗口：窗口拉伸、Ctrl+滚轮缩放、换 fit、换模型或换装，
@@ -228,6 +260,8 @@ window.addEventListener('blur', () => {
     dragging = false;
     ipcRenderer.send('pet:drag-end');
   }
+  // 输入卡开着时点了别处：收掉，别留一个抢焦点的空窗
+  if (uiLock) document.dispatchEvent(new CustomEvent('pet:reply-cancel'));
 });
 
 ipcRenderer.on('pet:smart', (_e, on) => {

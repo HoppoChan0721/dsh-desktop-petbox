@@ -280,8 +280,16 @@ async function main() {
     return;
   }
 
-  if (cmd === 'mood') {
-    const r = await jpost(`${SHELL}/mood`, { emotion: F._[0], intensity: num('intensity', 0.7) });
+  if (cmd === 'reply') {
+    // 替主人回她一句：等价于点气泡上的小钮、打完字回车（走 DSH 侧的桌宠专用会话）
+    const text = F._[0] || arg('text');
+    if (!text) throw new Error('reply 需要文本');
+    const r = await jpost(`${SHELL}/reply`, { text });
+    console.log(JSON.stringify({ ok: r.status === 200, ...r.data }, null, 2));
+    return;
+  }
+
+  if (cmd === 'mood') {    const r = await jpost(`${SHELL}/mood`, { emotion: F._[0], intensity: num('intensity', 0.7) });
     console.log(JSON.stringify({ status: r.status, ...r.data }, null, 2));
     return;
   }
@@ -390,6 +398,7 @@ const USAGE = `
   stock                          列出可用表情 / 手势
   say "文本" --voice --emotion e  气泡 + 口型（--voice 现场合成，3~10 秒）
          [--gesture hand_on_chest]  说话时同时做手势（同帧下发，不排队）
+  reply "文本"                   替主人回她一句（投给桌宠专用会话，等于点气泡上的回复钮）
   mood <name> [--intensity 0.7]  15 个预设情绪
   touch [zone]                   模拟点她一下（head/chest/waist/skirt/leg/foot/neck/hair）
   touches [n]                    最近 n 条点触记录（主人点了哪儿）
