@@ -21,6 +21,7 @@
 - 桌宠专用会话被归档后，`create()` 会静默「收养」它：投消息、flush 都成功，但那一轮永远不跑，桌宠一声不响。
 - 现在 `ensurePetSession()` 动手前先查 `archivedSessionIds`，归档了就换新 id；`/health` 多一个 `petArchived`。
 - 冒烟测试补了「场景 2b」，`node test/smoke.mjs` 全过。
+- 投递口径的字数从 **20~40 字压到 5~20 字**（主人 2026-11-03：太长，语音合成慢）。
 
 ### 桌宠会话改用专用预设 `bigfish-pet`
 - `agentPreset` 默认值从 `bigfish` 改成 `bigfish-pet`：这是主人给桌宠单独做的预设，只有人设、没有任何工具，省得桌宠那股劲儿跟写代码那股劲儿混在一起。

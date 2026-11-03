@@ -92,7 +92,7 @@ rmSync(TMP, { recursive: true, force: true });
   ok('第 1 次点触：会话改名「桌宠互动」', calls.rename[0].title, '桌宠互动');
   ok('第 1 次点触：消息落在新建的会话里', calls.followup[0].sid === calls.create[0].sessionId, true);
   ok('第 1 次点触：消息正文是分区描述', /桌宠｜主人刚刚碰了你的胸口/.test(calls.followup[0].text), true);
-  ok('第 1 次点触：附带「一句、20~40 字」的口径', /20～40 字/.test(calls.followup[0].text), true);
+  ok('第 1 次点触：附带「一句、5~20 字」的口径', /5～20 字/.test(calls.followup[0].text), true);
   ok('第 1 次点触：告诉她可以自己挑表情', /\[emotion:/.test(calls.followup[0].text), true);
 
   const r2 = await post(62001, '/event', { zone: 'head' });
