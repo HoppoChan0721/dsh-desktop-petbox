@@ -953,20 +953,17 @@ const BUBBLE_JS = `(() => {
     replyBtn.style.left = Math.round(x) + 'px';
     replyBtn.style.top = Math.round(y) + 'px';
   };
-  // 常驻模式没有气泡可贴，就贴在她腰侧的剪影外沿：不挡脸，模型缩放/换姿势后也跟着重贴。
+  // 常驻模式没有气泡可贴，就蹲在她脚边：垂直贴剪影最低点往上一点，水平按窗口比例偏右。
+  // 全是相对量（剪影 bottom + 窗口百分比），模型放大缩小、换 fit 都跟着走，不写死像素。
   const placeReplyBtnFixed = () => {
     const W = window.innerWidth || 380, H = window.innerHeight || 680;
-    let x = W - 44, y = H * 0.56;
+    let x = W * 0.70, y = H * 0.90;
     const b = measureBox(false);
-    if (b && b.rowsR && b.rowsR.length && b.bottom > b.top) {
-      const n = b.rowsR.length;
-      y = b.top + (b.bottom - b.top) * 0.52;
-      const row = Math.max(0, Math.min(n - 1, Math.round((y / H) * (n - 1))));
-      const r = b.rowsR[row];
-      if (r > 0) x = r + 8;
+    if (b && b.bottom > b.top) {
+      y = Math.max(4, Math.min(H - 30, b.bottom - Math.max(10, H * 0.014)));
     }
     replyBtn.style.left = Math.round(Math.max(4, Math.min(W - 30, x))) + 'px';
-    replyBtn.style.top = Math.round(Math.max(4, Math.min(H - 30, y))) + 'px';
+    replyBtn.style.top = Math.round(y) + 'px';
   };
   const showReply = () => {
     bubbleShown = true;
@@ -1090,6 +1087,8 @@ const BUBBLE_JS = `(() => {
     else if (!replyOpen) releaseBubble(1800);
   }, true);
   window.addEventListener('resize', () => { if (bubbleShown) placeReplyBtn(); if (replyAlways) placeReplyBtnFixed(); placeReplyBox(); });
+  // 模型大小是可调的（Ctrl+滚轮 / 换 fit），窗口不一定跟着变，所以常驻钮自己低频跟一下
+  setInterval(() => { if (replyAlways && replyEnabled && !replyOpen) placeReplyBtnFixed(); }, 1000);
 
   window.__petPlay = (url) => { try { const a = new Audio(url); a.volume = (typeof window.__petVol === 'number' ? window.__petVol : 1); a.play().catch(() => {}); window.__petAudio = a; return true; } catch { return false; } };
   window.__petVol = 1;
