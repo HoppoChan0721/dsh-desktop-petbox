@@ -950,6 +950,10 @@ const BUBBLE_JS = `(() => {
   replyBtn.innerHTML = REPLY_ICON;
   document.body.appendChild(replyBtn);
   let replyEnabled = true, replyAlways = false, replyOpen = false, bubbleShown = false, nearBubble = null;
+  // 气泡的到期时刻和「点开回复时被冻住的那点剩余时间」。
+  // 不加这两个的话，点钮 → holdBubble 把计时器清掉，取消时只能硬给个固定值，
+  // 结果一到点就没了，看起来像被回复钮吃掉的。
+  let bubbleDeadline = 0, heldRemain = 0;
   const placeReplyBtn = () => {
     const r = el.getBoundingClientRect();
     const W = window.innerWidth || 380, H = window.innerHeight || 680;
@@ -980,18 +984,25 @@ const BUBBLE_JS = `(() => {
   const hideReply = () => {
     bubbleShown = false;
     nearBubble = null;
-    if (replyAlways) { placeReplyBtnFixed(); return; }   // 常驻：气泡走了钮留着
+    bubbleDeadline = 0;
+    heldRemain = 0;
+    if (replyAlways) { placeReplyBtnFixed(); if (replyEnabled && !replyOpen) replyBtn.classList.add('on'); return; }   // 常驻：气泡走了钮留着
     replyBtn.classList.remove('on');
   };
   const holdBubble = () => {
     if (!bubbleShown) return;
+    const remain = bubbleDeadline ? Math.max(0, bubbleDeadline - Date.now()) : 0;
+    if (remain > heldRemain) heldRemain = remain;   // 连续 hold 别把剩余越记越短
     clearTimeout(timer);
     el.style.opacity = '1';
   };
   const releaseBubble = (delay) => {
     if (!bubbleShown) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { el.style.opacity = '0'; hideReply(); }, Math.max(0, Number(delay) || 0));
+    const d = Math.max(0, Number(delay) || 0);
+    bubbleDeadline = Date.now() + d;
+    heldRemain = 0;
+    timer = setTimeout(() => { el.style.opacity = '0'; hideReply(); }, d);
   };
   const placeReplyBox = () => {
     const box = document.getElementById('pet-reply-box');
@@ -1015,13 +1026,32 @@ const BUBBLE_JS = `(() => {
     box.style.left = Math.round((W - bw) / 2) + 'px';
     box.style.top = Math.round(top) + 'px';
   };
-  const closeReply = () => {
+  // 关掉输入卡后把钮摆回该在的地方：常驻模式一定要把 on 加回来，
+  // 不然 openReply 里那次 remove('on') 就再也回不来了，钮看着是「消失」
+  const restoreReplyBtn = () => {
+    if (!replyEnabled) return;
+    if (replyAlways) { placeReplyBtnFixed(); replyBtn.classList.add('on'); }
+    else if (bubbleShown) { placeReplyBtn(); replyBtn.classList.add('on'); }
+  };
+  // soft=true 是「取消」：气泡按被冻住前剩的时间继续待着，别一取消就消失
+  const closeReply = (soft) => {
     const box = document.getElementById('pet-reply-box');
     if (box) box.remove();
     const was = replyOpen;
     replyOpen = false;
     if (was) document.dispatchEvent(new CustomEvent('pet:reply-close'));
-    releaseBubble(900);
+    if (soft) {
+      const keep = Math.max(heldRemain, 1500);
+      heldRemain = 0;
+      clearTimeout(timer);
+      if (bubbleShown) {
+        bubbleDeadline = Date.now() + keep;
+        timer = setTimeout(() => { el.style.opacity = '0'; hideReply(); }, keep);
+      }
+    } else {
+      releaseBubble(900);
+    }
+    restoreReplyBtn();
     return true;
   };
   const openReply = () => {
@@ -1041,18 +1071,18 @@ const BUBBLE_JS = `(() => {
     document.dispatchEvent(new CustomEvent('pet:reply-open'));   // 壳子：切可交互、拿焦点
     inp.addEventListener('keydown', (ev) => {
       ev.stopPropagation();
-      if (ev.key === 'Escape') { closeReply(); return; }
+      if (ev.key === 'Escape') { closeReply(true); return; }
       if (ev.key !== 'Enter') return;
       if (ev.isComposing || ev.keyCode === 229) return;   // 输入法选词的那下回车不算发送
       const text = String(inp.value || '').trim();
-      if (!text) { closeReply(); return; }
+      if (!text) { closeReply(true); return; }
       inp.readOnly = true;
       hint.textContent = '发送中…';
       document.dispatchEvent(new CustomEvent('pet:reply-send', { detail: text }));
     });
     return true;
   };
-  window.__petReply = (open) => { if (open) return openReply(); closeReply(); return false; };
+  window.__petReply = (open) => { if (open) return openReply(); closeReply(true); return false; };
   window.__petReplySet = (on, always) => {
     replyEnabled = on !== false;
     replyAlways = always === true;
@@ -1078,7 +1108,7 @@ const BUBBLE_JS = `(() => {
     if (hint) hint.textContent = String(r.error || '没发出去');
     if (inp) { try { inp.focus(); } catch (e) {} }
   });
-  document.addEventListener('pet:reply-cancel', () => { if (replyOpen) closeReply(); });
+  document.addEventListener('pet:reply-cancel', () => { if (replyOpen) closeReply(true); });
   replyBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openReply(); });
   // 鼠标靠近气泡就先别淡（不然 5 秒的回复一变 3 秒就没了，钮都点不到）。
   // 页面这边自己看坐标就够了：mousemove 不管落点是不是可穿透元素都会到 window。
