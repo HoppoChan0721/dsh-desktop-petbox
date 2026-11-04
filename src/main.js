@@ -48,7 +48,7 @@ function plog(msg) {
 }
 
 let win = null, tray = null, panel = null, serverChild = null, spawnedServer = false;
-let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true, replyBtnOn = true;
+let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true, replyBtnOn = true, replyAlwaysOn = false;
 let watcherChild = null, autoMood = true, voicing = false, voicingTimer = null;
 function setVoicing(on, ms = 0) {
   if (voicingTimer) { clearTimeout(voicingTimer); voicingTimer = null; }
@@ -262,7 +262,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), replyAlways: replyAlwaysOn === true, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -944,7 +944,7 @@ const BUBBLE_JS = `(() => {
   replyBtn.title = '回复她';
   replyBtn.innerHTML = REPLY_ICON;
   document.body.appendChild(replyBtn);
-  let replyEnabled = true, replyOpen = false, bubbleShown = false, nearBubble = null;
+  let replyEnabled = true, replyAlways = false, replyOpen = false, bubbleShown = false, nearBubble = null;
   const placeReplyBtn = () => {
     const r = el.getBoundingClientRect();
     const W = window.innerWidth || 380, H = window.innerHeight || 680;
@@ -953,15 +953,32 @@ const BUBBLE_JS = `(() => {
     replyBtn.style.left = Math.round(x) + 'px';
     replyBtn.style.top = Math.round(y) + 'px';
   };
+  // 常驻模式没有气泡可贴，就贴在她腰侧的剪影外沿：不挡脸，模型缩放/换姿势后也跟着重贴。
+  const placeReplyBtnFixed = () => {
+    const W = window.innerWidth || 380, H = window.innerHeight || 680;
+    let x = W - 44, y = H * 0.56;
+    const b = measureBox(false);
+    if (b && b.rowsR && b.rowsR.length && b.bottom > b.top) {
+      const n = b.rowsR.length;
+      y = b.top + (b.bottom - b.top) * 0.52;
+      const row = Math.max(0, Math.min(n - 1, Math.round((y / H) * (n - 1))));
+      const r = b.rowsR[row];
+      if (r > 0) x = r + 8;
+    }
+    replyBtn.style.left = Math.round(Math.max(4, Math.min(W - 30, x))) + 'px';
+    replyBtn.style.top = Math.round(Math.max(4, Math.min(H - 30, y))) + 'px';
+  };
   const showReply = () => {
     bubbleShown = true;
     if (!replyEnabled) return;
-    placeReplyBtn();
+    if (replyAlways) placeReplyBtnFixed();
+    else placeReplyBtn();
     replyBtn.classList.add('on');
   };
   const hideReply = () => {
     bubbleShown = false;
     nearBubble = null;
+    if (replyAlways) { placeReplyBtnFixed(); return; }   // 常驻：气泡走了钮留着
     replyBtn.classList.remove('on');
   };
   const holdBubble = () => {
@@ -981,9 +998,17 @@ const BUBBLE_JS = `(() => {
     const bw = Math.min(420, Math.round(W * 0.92));
     box.style.width = bw + 'px';
     const bh = box.offsetHeight || 56;
-    const r = el.getBoundingClientRect();
-    // 气泡在下半屏就往上让，免得挡住她说话的那一行
-    let top = (r.top + r.bottom) / 2 > H / 2 ? r.top - bh - 10 : r.bottom + 10;
+    let top;
+    if (bubbleShown && !replyAlways) {
+      const r = el.getBoundingClientRect();
+      // 气泡在下半屏就往上让，免得挡住她说话的那一行
+      top = (r.top + r.bottom) / 2 > H / 2 ? r.top - bh - 10 : r.bottom + 10;
+    } else {
+      // 常驻钮直开、没有气泡：贴在钮的下方，放不下就翻到上方
+      const br = replyBtn.getBoundingClientRect();
+      top = br.bottom + 10;
+      if (top + bh > H - 6) top = br.top - bh - 10;
+    }
     top = Math.max(6, Math.min(H - bh - 6, top));
     box.style.left = Math.round((W - bw) / 2) + 'px';
     box.style.top = Math.round(top) + 'px';
@@ -1026,13 +1051,16 @@ const BUBBLE_JS = `(() => {
     return true;
   };
   window.__petReply = (open) => { if (open) return openReply(); closeReply(); return false; };
-  window.__petReplySet = (on) => {
+  window.__petReplySet = (on, always) => {
     replyEnabled = on !== false;
+    replyAlways = always === true;
     if (!replyEnabled) replyBtn.classList.remove('on');
+    else if (replyAlways) { placeReplyBtnFixed(); replyBtn.classList.add('on'); }
     else if (bubbleShown) { placeReplyBtn(); replyBtn.classList.add('on'); }
+    else replyBtn.classList.remove('on');
     return replyEnabled;
   };
-  window.__petReplyInfo = () => ({ enabled: replyEnabled, open: replyOpen, shown: bubbleShown, text: replyOpen && document.getElementById('pet-reply-input') ? document.getElementById('pet-reply-input').value : '' });
+  window.__petReplyInfo = () => ({ enabled: replyEnabled, always: replyAlways, open: replyOpen, shown: bubbleShown, text: replyOpen && document.getElementById('pet-reply-input') ? document.getElementById('pet-reply-input').value : '' });
   document.addEventListener('pet:reply-result', (ev) => {
     const r = (ev && ev.detail) || {};
     if (r.ok) {
@@ -1061,7 +1089,7 @@ const BUBBLE_JS = `(() => {
     if (near) holdBubble();
     else if (!replyOpen) releaseBubble(1800);
   }, true);
-  window.addEventListener('resize', () => { if (bubbleShown) placeReplyBtn(); placeReplyBox(); });
+  window.addEventListener('resize', () => { if (bubbleShown) placeReplyBtn(); if (replyAlways) placeReplyBtnFixed(); placeReplyBox(); });
 
   window.__petPlay = (url) => { try { const a = new Audio(url); a.volume = (typeof window.__petVol === 'number' ? window.__petVol : 1); a.play().catch(() => {}); window.__petAudio = a; return true; } catch { return false; } };
   window.__petVol = 1;
@@ -1071,6 +1099,7 @@ const BUBBLE_JS = `(() => {
     el.className = 'pos-' + p;
     fitTop();
     if (bubbleShown) placeReplyBtn();
+    else if (replyAlways) placeReplyBtnFixed();
     return p;
   };
   // 顶部气泡贴模型头顶。头顶以前是写死的 168（只对 380×680 成立），换窗口大小后模型跟着缩放、
@@ -1453,13 +1482,22 @@ function replyBtnWanted() {
 }
 function syncReplyBtn() {
   if (!win || win.isDestroyed()) return;
-  win.webContents.executeJavaScript(`window.__petReplySet && window.__petReplySet(${replyBtnWanted() ? 'true' : 'false'})`).catch(() => {});
+  const on = replyBtnWanted();
+  const always = on && replyAlwaysOn === true;
+  win.webContents.executeJavaScript(`window.__petReplySet && window.__petReplySet(${on ? 'true' : 'false'}, ${always ? 'true' : 'false'})`).catch(() => {});
 }
 function setReplyBtn(on, save) {
   replyBtnOn = !!on;
   if (save) saveCfg({ replyBtn: replyBtnOn });
   syncReplyBtn();
   return replyBtnOn;
+}
+// 常驻模式：钮一直挂在腰侧，随时能点开打字；关掉就回到「跟着气泡来去」的老样子
+function setReplyAlways(on, save) {
+  replyAlwaysOn = !!on;
+  if (save) saveCfg({ replyAlways: replyAlwaysOn });
+  syncReplyBtn();
+  return replyAlwaysOn;
 }
 function replyTarget() {
   try {
@@ -2006,6 +2044,7 @@ ipcMain.handle('cfg:save', (_e, patch) => {
   if (patch && typeof patch.bridge === 'boolean') setBridge(patch.bridge, false);
   if (patch && typeof patch.tickBubble === 'boolean') syncTickBubble();
   if (patch && typeof patch.replyBtn === 'boolean') setReplyBtn(patch.replyBtn, false);   // 存过了，只广播
+  if (patch && typeof patch.replyAlways === 'boolean') setReplyAlways(patch.replyAlways, false);
   // 帧率改了要重载舞台才生效（只重载页面，不动窗口）
   if (patch && patch.stageFps !== undefined) applyStageFps(patch.stageFps);
   const r = refreshPaths();
@@ -2117,6 +2156,7 @@ function buildMenu() {
       { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
       { label: '模型桥接（点她会叫醒 DSH 会话）', type: 'checkbox', checked: bridgeOn, click: (item) => setBridge(item.checked, true) },
       { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },
+      { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
       { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
       { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
       { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
@@ -2182,6 +2222,7 @@ app.whenReady().then(() => {
   interactive = loadCfg().interactive !== false;
   bridgeOn = loadCfg().bridge !== false;
   replyBtnOn = loadCfg().replyBtn !== false;
+  replyAlwaysOn = loadCfg().replyAlways === true;
   autoMood = loadCfg().autoMood !== false;
   cursorTrack = loadCfg().cursorTrack !== false;
   { const st = Number(loadCfg().spinTurns); spinTurns = Number.isFinite(st) ? Math.min(20, Math.max(2, Math.round(st))) : SPIN.turnsPerStage; }
