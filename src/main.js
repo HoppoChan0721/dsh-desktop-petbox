@@ -312,6 +312,20 @@ function startMoodServer() {
       });
       return;
     }
+    // TTS 保活 / 主动打招呼：POST /keepalive {"mode":"greet"|"ping"}（调试用，平时它自己每 15 分钟跑）
+    if (req.method === 'POST' && req.url === '/keepalive') {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 1024) req.destroy(); });
+      req.on('end', () => {
+        let mode = '';
+        try { mode = String((JSON.parse(raw || '{}') || {}).mode || ''); } catch {}
+        if (!voiceEnabled()) return send(200, { ok: false, error: '没配 TTS（voicePrepare / voiceWavDir）' });
+        if (keepAliveBusy || voicing) return send(200, { ok: false, busy: true });
+        keepAliveTick(mode === 'greet' ? 'greet' : mode === 'ping' ? 'ping' : undefined);
+        return send(200, { ok: true, mode: mode || 'auto' });
+      });
+      return;
+    }
     if (req.method === 'GET' && req.url === '/reply') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
       win.webContents.executeJavaScript('window.__petReplyInfo ? window.__petReplyInfo() : null')
@@ -791,8 +805,69 @@ function warmVoices() {
   return warming;
 }
 
-ipcMain.on('pet:interact', () => { lastInteract = Date.now(); });
-ipcMain.on('pet:tap', (_e, p) => {
+// ---- TTS 保活 + 主动打招呼（2026-11-04 主人点的）----
+// 背景：TTS 服务（9880）空闲一阵后第一句要 20~27 秒合成，气泡停在三个点很难看。
+// 做法：每 15 分钟打一次声——最近没人理她就真说一句短招呼（气泡 / 口型 / 声音同帧），
+// 有人在动就安静地只热一次服务（不出声、不进缓存），别在旁边念念叨叨。
+const KEEPALIVE_MS = 15 * 60 * 1000;
+const PING_TEXT = '嗯…';
+const GREET_GAP_MS = 45 * 60 * 1000;   // 两句招呼至少隔这么久
+const GREET_LINES = [
+  ['嗯…主人在忙吗', 'thinking'],
+  ['唔…我就在这儿哦', 'neutral'],
+  ['主人，喝口水吧', 'happy'],
+  ['呀…已经过了好一会儿了', 'surprised'],
+  ['嘿嘿…主人是不是又忘了时间', 'playful'],
+  ['主人，肩膀要不要捶一下', 'shy'],
+  ['嗯…我一直在等你', 'neutral'],
+  ['主人，眼睛离屏幕太近了', 'proud'],
+];
+let lastGreetAt = 0, keepAliveBusy = false;
+
+// 只热服务：跑一次合成，把产物删掉，不进 voice-cache、不出声
+function ttsPing() {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let ch;
+    try {
+      ch = spawn('node', [voiceScript()], { env: { ...process.env, SAY_TEXT: PING_TEXT, WHALE_PET_DATA: DATA }, windowsHide: true, stdio: 'ignore' });
+    } catch { resolve(0); return; }
+    const done = () => {
+      try {
+        const info = JSON.parse(fs.readFileSync(path.join(DATA, 'voice-job.json'), 'utf8').replace(/^\uFEFF/, ''));
+        fs.unlinkSync(path.join(loadCfg().voiceWavDir || '', info.job_id + '.wav'));   // 保活的产物不留
+      } catch {}
+      try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} keepalive ping ${Date.now() - t0}ms\n`); } catch {}
+      resolve(Date.now() - t0);
+    };
+    ch.on('close', done);
+    ch.on('error', () => resolve(0));
+  });
+}
+
+function greetOnce() {
+  const [text, emotion] = GREET_LINES[Math.floor(Math.random() * GREET_LINES.length)];
+  lastGreetAt = Date.now();
+  try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} greet "${text}"\n`); } catch {}
+  prepareAndSay(text, emotion);
+}
+
+// force: 'greet' 强制打招呼 / 'ping' 强制只热服务 / 不传按「有没有人在动」自己判
+function keepAliveTick(force) {
+  if (!voiceEnabled() || keepAliveBusy || voicing) return;
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  if (loadCfg().voiceKeepAlive === false && !force) return;
+  keepAliveBusy = true;
+  const now = Date.now();
+  const hour = new Date().getHours();
+  const lastAny = Math.max(lastInteract, lastMood, (lastSay && lastSay.at) ? lastSay.at : 0);
+  const busyRecently = now - lastAny < KEEPALIVE_MS;
+  const canGreet = force === 'greet' || (force !== 'ping' && !busyRecently && hour >= 8 && hour < 24 && now - lastGreetAt > GREET_GAP_MS);
+  const job = canGreet ? Promise.resolve(greetOnce()) : ttsPing();
+  job.finally(() => { keepAliveBusy = false; });
+}
+
+ipcMain.on('pet:interact', () => { lastInteract = Date.now(); });ipcMain.on('pet:tap', (_e, p) => {
   // 旧版 preload 只发空 payload：当作身体来一下，保持兼容
   const ev = handleTouch(p || { zone: 'body' });
   if (!ev) return;
@@ -1947,5 +2022,8 @@ app.whenReady().then(() => {
     if (autoMood) startWatcher();
     setTimeout(() => { if (voiceEnabled()) warmVoices().catch(() => {}); }, 9000);   // 舞台起来后再预合成台词
     setInterval(idleTick, 45000);
+    // TTS 保活：启动 90 秒后先热一次（省得开工第一句等 27 秒），之后每 15 分钟一次
+    setTimeout(() => keepAliveTick(), 90000);
+    setInterval(() => keepAliveTick(), KEEPALIVE_MS);
   }
 });

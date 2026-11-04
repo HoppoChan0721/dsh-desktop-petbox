@@ -82,6 +82,7 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 | `dshWatch` + `dshSessionsDir` | 可选：DSH 会话联动 |
 | `moodJson` | 可选：外部心情文件（有就同步情绪） |
 | `voicePrepare` + `voiceWavDir` | 可选：外部 TTS 桥脚本与音频目录 |
+| `voiceKeepAlive` | 每 15 分钟打一次声（默认开）：顺手把 TTS 服务热着，最近没人理她就真说一句短招呼 |
 | `bridgeUrl` | 可选：点触事件 POST 到哪里（反向桥，例如 `http://127.0.0.1:61944/event`） |
 | `stageFps` | 舞台帧率上限，默认 60（`0` = 不限）。高刷屏不锁帧会按显示器刷新率满跑，CPU 翻三倍 |
 | `dock` | 启动时贴到哪：`none`（默认，记住上次位置）/ `left` / `right` |
@@ -95,6 +96,8 @@ node patch/apply-jingyu.mjs --repo "D:/path/to/jingyu-live2d-agent" --check
 台词**只有文字**，声音全靠使用者自己的 TTS（`voicePrepare` 接一个把文本合成 wav 的脚本，`voiceWavDir` 是它输出的目录）。本仓库不附带、也不上传任何语音成品：合成出来的 wav、预合成缓存 `data/voice-cache.json`、以及任何克隆音色的样本都不在版本库里，`data/` 与 `*.wav / *.mp3 / audio/` 都在 `.gitignore` 里。
 
 想让她出声就自己准备音色——用你自己的 TTS 或自己克隆的声音，别把成品公开发布。
+
+**TTS 保活**（`voiceKeepAlive`，默认开）：本地 TTS 服务空闲久了第一句要 20~27 秒合成，中间气泡只能停在三个点。所以每 15 分钟打一次声——最近 15 分钟有人在动，就安静地合成一句随即扔掉的短句把服务热着（不出声、不进缓存、产物删掉）；真闲下来了才说一句短招呼（气泡 / 口型 / 声音同帧），两声招呼之间至少隔 45 分钟，只在 8~24 点之间开这个口。启动 90 秒后也会先热一次，省得开工第一句干等。手动触发：`POST :61943/keepalive {"mode":"greet"|"ping"}`。
 
 ## 控制接口（61943）
 
