@@ -298,6 +298,11 @@ function startMoodServer() {
         .catch((e) => send(200, { ok: false, error: e.message }));
       return;
     }
+    // 一键复原服装：POST /outfit/reset —— 衣服鞋子裙子体型全回默认档（单向换装表情没法自己穿回去）
+    if (req.method === 'POST' && req.url === '/outfit/reset') {
+      resetOutfit().then((ok) => send(200, { ok }));
+      return;
+    }
     // 回复她：POST /reply {"text":"主人写的话"} —— 和点气泡上的小钮同一条路（CLI / 调试用）
     // {"open":true/false} 是给调试用的：不点鼠标也能把输入卡打开，验 UI 和键盘路径
     if (req.method === 'POST' && req.url === '/reply') {
@@ -1090,6 +1095,25 @@ const BUBBLE_JS = `(() => {
   // 模型大小是可调的（Ctrl+滚轮 / 换 fit），窗口不一定跟着变，所以常驻钮自己低频跟一下
   setInterval(() => { if (replyAlways && replyEnabled && !replyOpen) placeReplyBtnFixed(); }, 1000);
 
+  // 一键复原服装：换装表情是单向的（只有「变成」没有「变回」），舞台的 pose 白名单也不收 Clothes*，
+  // 所以从壳子这边直接摸舞台引擎，把八个换装参数摁回默认档。
+  // 必须同时改 engine.current，不然下一帧 commit 会拿旧值平滑回去。
+  window.__petResetOutfit = () => {
+    const e = window.__stageEngine;
+    if (!e || !e.params || !e.current) return false;
+    try { if (typeof e.stop === 'function') e.stop(); } catch (err) {}
+    const ids = ['Clothes1', 'Clothes2', 'Clothes3', 'Clothes4', 'Clothes5', 'Clothes6', 'Clothes7', 'Clothes8'];
+    let n = 0;
+    for (const id of ids) {
+      const p = e.params.get(id);
+      if (!p) continue;
+      const d = Number.isFinite(p.default) ? p.default : 0;
+      e.current.set(id, d);
+      try { e.core.setParameterValueById(id, d); } catch (err) {}
+      n++;
+    }
+    return n > 0;
+  };
   window.__petPlay = (url) => { try { const a = new Audio(url); a.volume = (typeof window.__petVol === 'number' ? window.__petVol : 1); a.play().catch(() => {}); window.__petAudio = a; return true; } catch { return false; } };
   window.__petVol = 1;
   window.__petSetVol = (v) => { const n = Math.max(0, Math.min(1, Number(v))); if (Number.isFinite(n)) window.__petVol = n; if (window.__petAudio) { try { window.__petAudio.volume = window.__petVol; } catch {} } return window.__petVol; };
@@ -1497,6 +1521,11 @@ function setReplyAlways(on, save) {
   if (save) saveCfg({ replyAlways: replyAlwaysOn });
   syncReplyBtn();
   return replyAlwaysOn;
+}
+// 一键复原服装：换装表情单向，pose 又不收 Clothes*，所以直接调页面里摸引擎的那个函数
+function resetOutfit() {
+  if (!win || win.isDestroyed()) return Promise.resolve(false);
+  return win.webContents.executeJavaScript('window.__petResetOutfit && window.__petResetOutfit()').catch(() => false);
 }
 function replyTarget() {
   try {
@@ -2191,6 +2220,7 @@ function buildMenu() {
       { type: 'separator' },
       { label: '随机来一个', click: () => { const ks = Object.keys(MOODS); sendMood(ks[Math.floor(Math.random() * ks.length)], 0.7); } },
     ] },
+    { label: '复原服装（衣服回默认档）', click: () => resetOutfit() },
     { label: '设置…（尺寸 / 鲸语 / 模型 / 端口）', click: () => createPanel() },
     { type: 'separator' },
     { label: '更多', submenu: [
