@@ -195,6 +195,14 @@ Copy-Item -Recurse bridge/dsh-pet-bridge "$env:DSH_HOME/profiles/web/node_module
 
 ⚠️ 里面的表情名（`眯眼`、`加载`、`圈圈眼`、`黑脸`、`hand_on_chest`…）按某个特定模型写死，换模型要在文件顶部的表情表里换成你自己模型 `Exp3/`、`Animation/` 里的名字，否则会被引擎拒收。
 
+## 分支约定
+
+`main` 只放**明确封版**的代码，别人 clone 或拉下来能直接用；开发中的改动一律提交到 `dev`。
+
+- 日常开发：在 `dev` 上提交、推送，`main` 不动
+- 封版：`dev` 已验证稳定 → 合并进 `main` → 打 tag，比如 `git tag v0.3.0 && git push origin v0.3.0` → 同一个提交里把 `CHANGELOG.md` 和 `package.json` 的版本号一起升上去
+- 回滚/热修：从 `main` 切 `hotfix/*`，修完同时回并 `main` 和 `dev`
+
 ## 已知限制
 
 - 只适配 **鲸语 1.4.0-beta.2** 的 `web/app.mjs` / `web/engine.mjs` 结构
