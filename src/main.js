@@ -444,7 +444,7 @@ function startMoodServer() {
             if (!voiceEnabled()) {
               send(200, { ok: true, queued: false, noTts: true });
               say(text, false, ms);
-              runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, j.emotion, j.mouth, j.gesture) }, true).catch(() => {});
+              runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, j.emotion, j.mouth, j.gesture, j.moves) }, true).catch(() => {});
               return;
             }
             send(200, { ok: true, queued: true, early: !!j.early });
@@ -454,18 +454,21 @@ function startMoodServer() {
             if (j.early) {
               const earlyMs = Math.max(4000, Math.min(12000, text.length * 280));
               const earlyActions = [];
-              if (j.emotion && MOODS[j.emotion]) for (const [kind, opt] of MOODS[j.emotion]) earlyActions.push(scaleMoodAction(kind, opt));
+              const earlyExpr = sanitizeMoves(j.moves).filter((a) => a.kind === 'expression');
+              // 她自己点了表情就用她的，别再让情绪预设盖一层（独占层会互相顶）
+              if (!earlyExpr.length && j.emotion && MOODS[j.emotion]) for (const [kind, opt] of MOODS[j.emotion]) earlyActions.push(scaleMoodAction(kind, opt));
+              for (const a of earlyExpr) earlyActions.push({ ...a, at: 0, duration: Math.max(2, Math.min(earlyMs / 1000, 8)) });
               if (j.gesture) earlyActions.push({ kind: 'gesture', name: String(j.gesture), at: 0, duration: Math.max(1.4, Math.min(earlyMs / 1000, 2.6)) });
               if (earlyActions.length > 0) {
                 runPlan({ version: 1, title: '说话-准备', intent: '说话-准备', summary: '说话-准备', actions: earlyActions }, true).catch(() => {});
               }
             }
-            prepareAndSay(text, j.emotion, j.gesture);
+            prepareAndSay(text, j.emotion, j.gesture, j.moves);
             return;
           }
           say(text, false, ms);
           if (j.audio && win && !win.isDestroyed()) { try { win.webContents.executeJavaScript('window.__petPlay && window.__petPlay(' + JSON.stringify(String(j.audio)) + ')').catch(() => {}); } catch {} }
-          runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, j.emotion, j.mouth, j.gesture) }, true).catch(() => {});
+          runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, j.emotion, j.mouth, j.gesture, j.moves) }, true).catch(() => {});
           send(200, { ok: true, mouth: ms });
         }
         catch (e) { send(400, { ok: false, error: e.message }); }
@@ -898,9 +901,15 @@ const BUBBLE_JS = `(() => {
     '#pet-bubble.pos-right{right:12px;left:auto;top:50%;transform:translateY(-50%);max-width:38%;max-height:calc(100% - 60px);writing-mode:vertical-rl;text-orientation:upright;letter-spacing:.06em}' +
     '#pet-bubble .dot{display:inline-block;width:5px;height:5px;margin:0 2px;border-radius:50%;background:#2b3d3a;opacity:.3;animation:petDot 1.1s infinite}' +
     '#pet-bubble .dot:nth-child(2){animation-delay:.15s}#pet-bubble .dot:nth-child(3){animation-delay:.3s}@keyframes petDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}';
-  // 阶段气泡：像真气泡一样从肩边冒出来往上飘。可以同时好几颗，各自 2~4 秒飘完自己消失。
-  style.textContent += '.pet-tick{position:fixed;max-width:52%;padding:5px 10px;border-radius:13px;background:rgba(236,248,255,.88);border:1px solid rgba(120,180,240,.5);color:#1f3a55;font:14px/1.3 system-ui,"Microsoft YaHei";box-shadow:0 4px 12px rgba(30,80,140,.16);pointer-events:none;z-index:99998;white-space:pre-wrap;word-break:break-word;box-sizing:border-box;will-change:transform,opacity;animation:petTickUp var(--life,3000ms) cubic-bezier(.22,.68,.3,1) forwards}' +
-    '@keyframes petTickUp{0%{opacity:0;transform:translate3d(0,7px,0) scale(.68)}10%{opacity:1;transform:translate3d(0,-3px,0) scale(1)}24%{opacity:1}62%{opacity:.9;transform:translate3d(calc(var(--dx,0px) * .55),calc(var(--dy,-110px) * .5),0) scale(1)}100%{opacity:0;transform:translate3d(var(--dx,0px),var(--dy,-110px),0) scale(1.04)}}';
+  // 阶段气泡：圆滚滚的泡，从上半身任意位置冒出来，边往上飘边左右晃。几颗一起，各自 2~4 秒飘完消失。
+  // 外框 .pet-puff 只做位移（左右摆 + 上浮），.pet-tick 是那颗泡本体（圆/椭圆 + 高光）。
+  style.textContent += '.pet-puff{position:fixed;left:0;top:0;pointer-events:none;z-index:99998;will-change:transform,opacity}' +
+    '.pet-tick{position:relative;display:flex;align-items:center;justify-content:center;border-radius:50%;overflow:hidden;box-sizing:border-box;' +
+    'background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.94),rgba(230,245,255,.82) 44%,rgba(172,212,242,.68) 100%);' +
+    'color:#1c3550;font:13px/1.22 system-ui,"Microsoft YaHei";pointer-events:none;' +
+    'box-shadow:0 5px 14px rgba(26,74,128,.16),inset 0 0 0 1.5px rgba(255,255,255,.7),inset 0 -9px 16px rgba(140,190,235,.22)}' +
+    '.pet-tick::after{content:"";position:absolute;left:21%;top:12%;width:25%;height:15%;border-radius:50%;background:rgba(255,255,255,.92);filter:blur(1.2px);transform:rotate(-22deg)}' +
+    '.pet-tick-txt{display:flex;align-items:center;justify-content:center;text-align:center;overflow:hidden;word-break:break-word;overflow-wrap:anywhere;white-space:pre-line}';
   // 回复她：气泡角上的小蓝钮 + 窗口内直接打字的输入卡。
   // 这两个是整窗唯一允许吃鼠标的 DOM（pointer-events:auto + data-pet-ui），
   // 气泡正文仍然穿透（不然在桌宠上摸来摸去会被气泡挡住）。
@@ -1197,28 +1206,41 @@ const BUBBLE_JS = `(() => {
       tickBox.right = right < 0 ? W : (right + 1) * (W / sw);
       tickBox.shoulder = shoulder < 0 ? W : (shoulder + 1) * (W / sw);
       tickBox.shoulderL = shoulderL >= sw ? 0 : shoulderL * (W / sw);
+      // 逐行轮廓（窗口坐标）：出生点要在上半身里随机挑，光靠左右肩不够用
+      const rowsL = new Array(sh), rowsR = new Array(sh);
+      for (let y = 0; y < sh; y++) {
+        rowsL[y] = lefts[y] >= sw ? -1 : lefts[y] * (W / sw);
+        rowsR[y] = rights[y] < 0 ? -1 : (rights[y] + 1) * (W / sw);
+      }
+      tickBox.rowsL = rowsL; tickBox.rowsR = rowsR;
       tickBox.key = key; tickBox.at = performance.now();
     } catch (e) { tickBox.key = ''; }
     return tickBox.key === key ? tickBox : null;
   };
-  // 出生点：肩线高度，5 条「车道」左右轮着走，几颗一起出也不会叠成一柱
-  // dy 是相对胸口的上下错位、side 是左右肩、dx 是飘出去的方向和距离
-  const TICK_LANES = [
-    { side: 1, dy: -48, dx: 28 },
-    { side: -1, dy: 4, dx: 26 },
-    { side: 1, dy: 30, dx: 36 },
-    { side: -1, dy: -32, dx: 32 },
-    { side: 1, dy: -4, dx: 22 },
-  ];
-  let tickLane = 0;
-  const tickAnchor = () => {
+  // 出生点（2026-11-04 主人要的）：不再固定在左右两侧，改成上半身轮廓里随机挑一点。
+  // 剪影测量那边存了逐行左右沿：先随机一行（头顶往下 6%~46%），再在这一行里随机横坐标。
+  // 四分之三的泡落在这一行的外侧两段（头发边 / 肩 / 手臂），四分之一整行随机，
+  // 这样正脸不会被泡糊住，又确实是「上半身哪儿都可能冒」。
+  const TICK_BAND_TOP = 0.06, TICK_BAND_BOTTOM = 0.46;
+  const tickSpot = () => {
     const W = window.innerWidth || 380, H = window.innerHeight || 680;
-    const b = measureBox(true);
-    if (b) {
-      const d = Math.max(1, b.bottom - b.top);
-      return { R: b.shoulder || b.right, L: b.shoulderL || b.left, y: b.top + d * 0.30, W, H };
+    const b = measureBox(false);
+    if (!b || !b.rowsL || !b.rowsR) return { x: W * (0.28 + Math.random() * 0.44), y: H * (0.14 + Math.random() * 0.22) };
+    const hh = Math.max(1, b.bottom - b.top);
+    const y = b.top + hh * (TICK_BAND_TOP + Math.random() * (TICK_BAND_BOTTOM - TICK_BAND_TOP));
+    const n = b.rowsL.length;
+    const row = Math.max(0, Math.min(n - 1, Math.round((y / H) * (n - 1))));
+    const l = b.rowsL[row], r = b.rowsR[row];
+    if (l >= 0 && r > l + 6) {
+      const span = r - l;
+      let t;
+      if (Math.random() < 0.25) t = 0.14 + Math.random() * 0.72;
+      else t = Math.random() < 0.5 ? 0.04 + Math.random() * 0.28 : 0.68 + Math.random() * 0.28;
+      return { x: l + span * t, y };
     }
-    return { R: W, L: 0, y: H * 0.30, W, H };   // 量不到轮廓时的退路：两侧、胸口高度
+    // 这一行几乎没扫到东西（头顶边缘 / 侧脸）：退到整条剪影中线附近，别扔到窗外
+    const mid = ((b.left || 0) + (b.right || W)) / 2;
+    return { x: mid + (Math.random() - 0.5) * Math.max(40, (b.right - b.left) * 0.5), y };
   };
   const MAX_TICK = 5;
   const tickPool = [];
@@ -1228,34 +1250,98 @@ const BUBBLE_JS = `(() => {
     if (!tickOn) for (const el of tickPool.splice(0)) el.remove();
     return tickOn;
   };
+  // 一颗泡 = 外框 .pet-puff（只负责飘：上浮 + 左右摆 + 微转）+ 泡本体 .pet-tick（圆/椭圆 + 高光）
   window.__petTick = (text, ms) => {
     if (!tickOn) return null;
     const full = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim().slice(0, 40);
     if (!full) return null;
-    const a = tickAnchor();
+    const life = Math.max(2000, Math.min(4000, Number(ms) || 3000));   // 单颗 2~4 秒
+    const nchar = full.length;
+    // 泡的大小跟着字数走：短句是小圆泡，长一点就摊成椭圆（横竖比最多 1.5，别摊成条）
+    const hh = Math.round(Math.max(54, Math.min(80, 52 + nchar * 1.6)));
+    const aspect = Math.min(1.45, 1 + Math.max(0, nchar - 9) * 0.022);
+    const ww = Math.round(hh * aspect);
+    const puff = document.createElement('div');
+    puff.className = 'pet-puff';
     const el = document.createElement('div');
     el.className = 'pet-tick';
-    el.textContent = full;
-    el.style.visibility = 'hidden';
-    document.body.appendChild(el);
-    const w = el.offsetWidth || 120, h = el.offsetHeight || 28;
-    const lane = TICK_LANES[tickLane++ % TICK_LANES.length];
-    const side = lane.side;
-    const baseX = side > 0 ? a.R - w * 0.55 : a.L - w * 0.45;
-    const x = baseX + (Math.random() - 0.5) * w * 0.35;
-    const y = a.y - h * 0.5 + lane.dy + (Math.random() - 0.5) * 12;
-    el.dataset.dbg = JSON.stringify({ w, h, R: Math.round(a.R), L: Math.round(a.L), x: Math.round(x), y: Math.round(y) });
-    el.style.left = Math.round(Math.max(4, Math.min(a.W - w - 4, x))) + 'px';
-    el.style.top = Math.round(Math.max(4, Math.min(a.H - h - 4, y))) + 'px';
-    const life = Math.max(2000, Math.min(4000, Number(ms) || 3000));   // 单颗 2~4 秒
-    el.style.setProperty('--life', life + 'ms');
-    el.style.setProperty('--dx', Math.round(side * lane.dx) + 'px');
-    el.style.setProperty('--dy', '-' + Math.round(70 + Math.random() * 55) + 'px');
-    el.style.visibility = '';
-    tickPool.push(el);
+    el.style.width = ww + 'px';
+    el.style.height = hh + 'px';
+    const txt = document.createElement('div');
+    txt.className = 'pet-tick-txt';
+    // 文字框取内接矩形（0.71 倍），这样贴在椭圆上也不会被圆角切掉笔画
+    const boxW = Math.round(ww * 0.71), boxH = Math.round(hh * 0.71);
+    txt.style.width = boxW + 'px';
+    txt.style.height = boxH + 'px';
+    // 短中文短语手动对半分两行（查查/文档），不然在圆泡里会被挤成 3+1 的字数
+    let shown = full;
+    if (nchar >= 4 && nchar <= 10 && !/[\\sA-Za-z0-9]/.test(full)) {
+      const cut = Math.ceil(nchar / 2);
+      shown = full.slice(0, cut) + '\\n' + full.slice(cut);
+    }
+    txt.textContent = shown;
+    el.appendChild(txt);
+    puff.appendChild(el);
+    document.body.appendChild(puff);
+    // 字号自适应：泡小字多就往下缩，13 → 9px
+    let fs = 13;
+    txt.style.fontSize = fs + 'px';
+    while (fs > 9 && txt.scrollHeight > boxH + 1) { fs -= 1; txt.style.fontSize = fs + 'px'; }
+    const W = window.innerWidth || 380, H = window.innerHeight || 680;
+    // 和已经在飘的泡别叠在一起：位置随机抽，抽到挤了就重抽，最多试 7 次
+    const overlaps = (l, t) => {
+      for (const p of tickPool) {
+        const q = p.getBoundingClientRect();
+        if (l + ww + 6 < q.left || l > q.right + 6) continue;
+        if (t + hh + 6 < q.top || t > q.bottom + 6) continue;
+        return true;
+      }
+      return false;
+    };
+    let spot = tickSpot(), left = 0, top = 0;
+    for (let k = 0; k < 7; k++) {
+      spot = tickSpot();
+      left = Math.max(2, Math.min(W - ww - 2, Math.round(spot.x - ww / 2)));
+      top = Math.max(2, Math.min(H - hh - 2, Math.round(spot.y - hh / 2)));
+      if (!overlaps(left, top)) break;
+    }
+    puff.style.left = left + 'px';
+    puff.style.top = top + 'px';
+    // 飘升距离：够到顶部还剩 4px 就行，别飞出窗外
+    const rise = Math.round(Math.min(72 + Math.random() * 62, Math.max(28, top - 4)));
+    // 整体漂移：八成往外飘（离开身体中线），这样正脸不容易被几颗泡糊住
+    const bodyX = (() => { const bb = measureBox(false); return bb ? ((bb.left || 0) + (bb.right || W)) / 2 : W / 2; })();
+    const outward = spot.x >= bodyX ? 1 : -1;
+    const dir = Math.random() < 0.8 ? outward : (Math.random() < 0.5 ? -1 : 1);
+    const drift = dir * (12 + Math.random() * 24);                              // 整体往一边偏
+    const amp = 7 + Math.random() * 10;                                         // 左右抖动幅度
+    const freq = 0.8 + Math.random() * 0.9;                                     // 一趟晃几个来回
+    const phase = Math.random() * Math.PI * 2;
+    const steps = Math.max(20, Math.min(34, Math.round(life / 130)));
+    const frames = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const ramp = Math.min(1, t * 1.8);                            // 刚冒出来先别晃，站稳了再摆
+      const sw = Math.sin(phase + t * Math.PI * 2 * freq) * ramp;
+      const x = drift * t + amp * sw;
+      const y = -rise * (0.3 * t + 0.7 * t * t);                    // 越飘越快，像真气泡
+      const rot = sw * 4.2;
+      const o = t < 0.07 ? t / 0.07 : (t < 0.6 ? 1 : Math.max(0, (1 - t) / 0.4));
+      const s = t < 0.14 ? 0.6 + (t / 0.14) * 0.48 : (t < 0.26 ? 1.08 - ((t - 0.14) / 0.12) * 0.08 : 1);
+      frames.push({
+        offset: +t.toFixed(3),
+        opacity: +o.toFixed(3),
+        transform: 'translate3d(' + x.toFixed(1) + 'px,' + y.toFixed(1) + 'px,0) rotate(' + rot.toFixed(2) + 'deg) scale(' + s.toFixed(3) + ')',
+      });
+    }
+    puff.dataset.dbg = JSON.stringify({ w: ww, h: hh, fs, left, top, spot: [Math.round(spot.x), Math.round(spot.y), Math.round(rise), Math.round(amp), +freq.toFixed(2)] });
+    const anim = puff.animate(frames, { duration: life, easing: 'linear', fill: 'forwards' });
+    const drop = () => { puff.remove(); const i = tickPool.indexOf(puff); if (i >= 0) tickPool.splice(i, 1); };
+    anim.onfinish = drop;
+    anim.oncancel = drop;
+    tickPool.push(puff);
     while (tickPool.length > MAX_TICK) { const old = tickPool.shift(); if (old) old.remove(); }
-    el.addEventListener('animationend', () => { el.remove(); const i = tickPool.indexOf(el); if (i >= 0) tickPool.splice(i, 1); });
-    return { text: full, ms: life, count: tickPool.length };
+    return { text: full, ms: life, w: ww, h: hh, fs, count: tickPool.length };
   };
   window.__petTickInfo = () => ({
     on: tickOn, count: tickPool.length,
@@ -1424,7 +1510,56 @@ function setVolume(v) {
   syncVolume();
   return n;
 }
-function sayActions(ms, emotion, env, gesture) {
+// 指令动作白名单：会话里写错的东西一律丢掉，别让一条坏数据把整句话搞没
+const CUE_KINDS = new Set(['trajectory', 'look', 'nod', 'shake_head', 'tilt', 'smile', 'blink', 'expression', 'gesture', 'talk', 'pose']);
+const CUE_PARAMS = {
+  look: ['AngleX', 'AngleY'], nod: ['AngleY'], shake_head: ['AngleX'], tilt: ['AngleZ'],
+  smile: ['EyeSmile', 'MouthSmile_L', 'MouthSmile_R'], blink: ['ParamEyeLOpen', 'ParamEyeROpen'],
+  talk: ['ParamMouthOpenY'],
+};
+function sanitizeMoves(moves) {
+  if (!Array.isArray(moves)) return [];
+  const out = [];
+  for (const a of moves) {
+    if (!a || typeof a !== 'object' || !CUE_KINDS.has(a.kind)) continue;
+    const at = Number(a.at);
+    const dur = Number(a.duration);
+    const m = { ...a, at: Number.isFinite(at) ? Math.max(0, Math.min(60, at)) : 0 };
+    if (Number.isFinite(dur)) m.duration = Math.max(0.2, Math.min(20, dur));
+    // 舞台的两条硬限制：眨眼太快、点头太密都会 400，这里兜一手
+    if (m.kind === 'blink') m.duration = Math.max(Number(m.duration) || 0.4, (Number(m.count) || 1) * 0.35, 0.4);
+    if (m.kind === 'nod' || m.kind === 'shake_head') m.duration = Math.max(Number(m.duration) || 1.4, (Number(m.count) || 2) * 0.5);
+    out.push(m);
+    if (out.length >= 22) break;
+  }
+  return out;
+}
+function actionParams(a) {
+  if (a.kind === 'pose') return Object.keys(a.values || {});
+  if (a.kind === 'trajectory') {
+    const s = new Set();
+    for (const f of a.frames || []) for (const k of Object.keys(f.values || {})) s.add(k);
+    return [...s];
+  }
+  if (a.kind === 'expression' || a.kind === 'gesture') return [];   // 独占层 / 关节，舞台自己管
+  return CUE_PARAMS[a.kind] || [];
+}
+// 兜底：两条动作抢同一个参数时舞台会 400，这里按顺序把后一条往后挪。
+// 正常路径上桥已经排过一遍，这里防的是「情绪预设 + 指令动作」这种跨来源的撞车。
+function staggerConflicts(actions) {
+  const booked = [];
+  for (const a of actions) {
+    const ps = actionParams(a);
+    if (!ps.length) continue;
+    let latest = -Infinity;
+    for (const p of ps) for (const b of booked) if (b.param === p && b.to > latest) latest = b.to;
+    if (latest > Number(a.at || 0)) a.at = +(latest + 0.05).toFixed(2);
+    for (const p of ps) booked.push({ param: p, to: Number(a.at || 0) + Number(a.duration || 0) });
+  }
+  return actions;
+}
+
+function sayActions(ms, emotion, env, gesture, moves) {
   const dur = Math.min(20, Math.max(1, Number(ms) / 1000));
   const frames = [];
   if (Array.isArray(env) && env.length >= 2) {
@@ -1436,10 +1571,25 @@ function sayActions(ms, emotion, env, gesture) {
     for (let t = 0.15, k = 0; t <= dur - 0.15 && frames.length < 58; t += 0.12, k++) frames.push({ time: +t.toFixed(2), values: { ParamMouthOpenY: k % 2 === 0 ? 0.95 : 0.1 } });
   }
   const actions = [{ kind: 'trajectory', at: 0, duration: dur, frames }];
-  if (emotion && MOODS[emotion]) for (const [kind, opt] of MOODS[emotion]) actions.push(scaleMoodAction(kind, opt));
+  // talk 是纯口型指令，说话时已经有一条口型轨迹了，留着必撞
+  const extra = sanitizeMoves(moves).filter((a) => a.kind !== 'talk');
+  // 她自己点了表情就别让情绪预设再盖一次，表情是独占层，两个一起下会互相顶
+  const hasOwnExpr = extra.some((a) => a.kind === 'expression');
+  if (emotion && MOODS[emotion]) {
+    for (const [kind, opt] of MOODS[emotion]) {
+      if (hasOwnExpr && kind === 'expression') continue;
+      if (extra.length && kind === 'trajectory') continue;   // 她自己写了动作，情绪的背景摆动让位
+      actions.push(scaleMoodAction(kind, opt));
+    }
+  }
   // 手势和口型可以同帧下发（不同参数），这样「说话时手放胸前」不需要排队等半天
   if (gesture) actions.push({ kind: 'gesture', name: String(gesture), at: 0, duration: Math.max(1.4, Math.min(dur, 2.6)) });
-  return actions;
+  // 指令动作跟口型编在同一条计划里：一次下发，不会互相 stop
+  for (const a of extra) {
+    if (actions.length >= 24) break;
+    actions.push(a);
+  }
+  return staggerConflicts(actions);
 }
 // 从合成出来的 WAV 算音量包络（每窗 RMS → 0.05..0.95），给口型用
 function wavEnvelope(file, n) {
@@ -1472,7 +1622,7 @@ function wavEnvelope(file, n) {
 // 实时链路：现场合成 → 包络口型 → 页面内 Web Audio 播放 + 气泡 + 口型同帧
 // 旧实现用 SoundPlayer（启动偏 1~2s）且口型恒定开合，主人要的是真实效果，所以全换掉。
 // 合成期间气泡停在省略号（/say 里先调 petWait），别先漏正文——这是说好的。
-function prepareAndSay(text, emotion, gesture) {
+function prepareAndSay(text, emotion, gesture, moves) {
   if (!voiceEnabled()) {   // 没配 TTS 就只出气泡，不要把 /say 变成报错
     say(text, false, Math.max(2500, Math.min(9000, text.length * 260)));
     return;
@@ -1518,13 +1668,13 @@ function prepareAndSay(text, emotion, gesture) {
       lastSay = { text, jobId: info.job_id, synthMs, dur: +dur.toFixed(2), mouth: env ? env.length : 0, at: Date.now() };
       // 保持 voicing 锁定直到音频真正播放完毕（dur * 1000 + 400ms 缓冲）
       setVoicing(true, ms + 400);
-      await runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture) }, true);
+      await runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture, moves) }, true);
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} realtime say synth=${synthMs}ms dur=${dur.toFixed(2)}s mouth=${env ? env.length : 0} ${info.job_id}\n`); } catch {}
     } catch (e) {
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} prep-error ${String(e.message).slice(0, 160)}\n`); } catch {}
       say(text, false, 6000);
       setVoicing(false);
-      postPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(6000, emotion) });
+      postPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(6000, emotion, null, gesture, moves) });
     }
   });
 }
