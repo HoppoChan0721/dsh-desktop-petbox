@@ -48,7 +48,7 @@ function plog(msg) {
 }
 
 let win = null, tray = null, panel = null, serverChild = null, spawnedServer = false;
-let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true, replyBtnOn = true;
+let dragTimer = null, smart = true, alwaysOnTop = true, interactive = true, bridgeOn = true, replyBtnOn = true, replyAlwaysOn = false;
 let watcherChild = null, autoMood = true, voicing = false, voicingTimer = null;
 function setVoicing(on, ms = 0) {
   if (voicingTimer) { clearTimeout(voicingTimer); voicingTimer = null; }
@@ -131,7 +131,9 @@ function scaleMoodAction(kind, opt) {
 function moodPlan(name, k) {
   const actions = (MOODS[name] || MOODS.neutral).map(([kind, opt]) => {
     const o = scaleMoodAction(kind, opt);
-    o.strength = Math.max(0.15, Math.min(1, (opt.strength || 0.5) * k));
+    // 表情走的 key1..key13 是「按键」式图层开关，只认 0/1。给 0.3 会让原眼和替换眼
+    // 同时半透明，屏幕上就是「睁着眼还能看见 > <」的叠加。强度一律满档，k 只调身体幅度。
+    o.strength = kind === 'expression' ? 1 : Math.max(0.15, Math.min(1, (opt.strength || 0.5) * k));
     return o;
   });
   const m = Object.keys(MOODS).includes(name) ? name : 'neutral';
@@ -168,11 +170,14 @@ function stopPlan() {
 }
 
 async function runPlan(plan, userAction, marginMs = 900) {
+  // 先把待机摇摆按住：它每 600ms 来抢一次舞台，说话的计划经常一上去就 400
+  // （2026-11-04 查 ＞＜ 不生效时发现：一轮重试里连着五次全是 400）
+  if (userAction) lastUserPlanAt = Date.now();
   if (userAction && Date.now() < planBusyUntil) { await stopPlan(); await sleep(140); }
   else { const w = planBusyUntil - Date.now(); if (w > 0) await sleep(w + 60); }
   let ok = await postPlan(plan);
-  // 舞台被联动 watcher 的短动作占着时会 400：说话/情绪比它优先，抢几次
-  for (let i = 0; i < 4 && !ok; i++) { await stopPlan(); await sleep(180); ok = await postPlan(plan); }
+  // 舞台被联动 watcher / 摇摆占着时会 400：说话/情绪比它优先，多抢几轮
+  for (let i = 0; i < 6 && !ok; i++) { await stopPlan(); await sleep(240); ok = await postPlan(plan); }
   const dur = planDuration(plan);
   planBusyUntil = Date.now() + (ok ? dur * 1000 + marginMs : 400);
   if (userAction) lastUserPlanAt = Date.now();
@@ -257,7 +262,7 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), replyAlways: replyAlwaysOn === true, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -291,6 +296,11 @@ function startMoodServer() {
       win.webContents.executeJavaScript('window.__petTickInfo ? window.__petTickInfo() : null')
         .then((v) => send(200, { ok: !!v, on: tickBubbleOn(), last: lastTick, ...(v || {}) }))
         .catch((e) => send(200, { ok: false, error: e.message }));
+      return;
+    }
+    // 一键复原服装：POST /outfit/reset —— 衣服鞋子裙子体型全回默认档（单向换装表情没法自己穿回去）
+    if (req.method === 'POST' && req.url === '/outfit/reset') {
+      resetOutfit().then((ok) => send(200, { ok }));
       return;
     }
     // 回复她：POST /reply {"text":"主人写的话"} —— 和点气泡上的小钮同一条路（CLI / 调试用）
@@ -939,7 +949,11 @@ const BUBBLE_JS = `(() => {
   replyBtn.title = '回复她';
   replyBtn.innerHTML = REPLY_ICON;
   document.body.appendChild(replyBtn);
-  let replyEnabled = true, replyOpen = false, bubbleShown = false, nearBubble = null;
+  let replyEnabled = true, replyAlways = false, replyOpen = false, bubbleShown = false, nearBubble = null;
+  // 气泡的到期时刻和「点开回复时被冻住的那点剩余时间」。
+  // 不加这两个的话，点钮 → holdBubble 把计时器清掉，取消时只能硬给个固定值，
+  // 结果一到点就没了，看起来像被回复钮吃掉的。
+  let bubbleDeadline = 0, heldRemain = 0;
   const placeReplyBtn = () => {
     const r = el.getBoundingClientRect();
     const W = window.innerWidth || 380, H = window.innerHeight || 680;
@@ -948,26 +962,47 @@ const BUBBLE_JS = `(() => {
     replyBtn.style.left = Math.round(x) + 'px';
     replyBtn.style.top = Math.round(y) + 'px';
   };
+  // 常驻模式没有气泡可贴，就蹲在她脚边：垂直贴剪影最低点往上一点，水平按窗口比例偏右。
+  // 全是相对量（剪影 bottom + 窗口百分比），模型放大缩小、换 fit 都跟着走，不写死像素。
+  const placeReplyBtnFixed = () => {
+    const W = window.innerWidth || 380, H = window.innerHeight || 680;
+    let x = W * 0.70, y = H * 0.90;
+    const b = measureBox(false);
+    if (b && b.bottom > b.top) {
+      y = Math.max(4, Math.min(H - 30, b.bottom - Math.max(10, H * 0.014)));
+    }
+    replyBtn.style.left = Math.round(Math.max(4, Math.min(W - 30, x))) + 'px';
+    replyBtn.style.top = Math.round(y) + 'px';
+  };
   const showReply = () => {
     bubbleShown = true;
     if (!replyEnabled) return;
-    placeReplyBtn();
+    if (replyAlways) placeReplyBtnFixed();
+    else placeReplyBtn();
     replyBtn.classList.add('on');
   };
   const hideReply = () => {
     bubbleShown = false;
     nearBubble = null;
+    bubbleDeadline = 0;
+    heldRemain = 0;
+    if (replyAlways) { placeReplyBtnFixed(); if (replyEnabled && !replyOpen) replyBtn.classList.add('on'); return; }   // 常驻：气泡走了钮留着
     replyBtn.classList.remove('on');
   };
   const holdBubble = () => {
     if (!bubbleShown) return;
+    const remain = bubbleDeadline ? Math.max(0, bubbleDeadline - Date.now()) : 0;
+    if (remain > heldRemain) heldRemain = remain;   // 连续 hold 别把剩余越记越短
     clearTimeout(timer);
     el.style.opacity = '1';
   };
   const releaseBubble = (delay) => {
     if (!bubbleShown) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { el.style.opacity = '0'; hideReply(); }, Math.max(0, Number(delay) || 0));
+    const d = Math.max(0, Number(delay) || 0);
+    bubbleDeadline = Date.now() + d;
+    heldRemain = 0;
+    timer = setTimeout(() => { el.style.opacity = '0'; hideReply(); }, d);
   };
   const placeReplyBox = () => {
     const box = document.getElementById('pet-reply-box');
@@ -976,20 +1011,47 @@ const BUBBLE_JS = `(() => {
     const bw = Math.min(420, Math.round(W * 0.92));
     box.style.width = bw + 'px';
     const bh = box.offsetHeight || 56;
-    const r = el.getBoundingClientRect();
-    // 气泡在下半屏就往上让，免得挡住她说话的那一行
-    let top = (r.top + r.bottom) / 2 > H / 2 ? r.top - bh - 10 : r.bottom + 10;
+    let top;
+    if (bubbleShown && !replyAlways) {
+      const r = el.getBoundingClientRect();
+      // 气泡在下半屏就往上让，免得挡住她说话的那一行
+      top = (r.top + r.bottom) / 2 > H / 2 ? r.top - bh - 10 : r.bottom + 10;
+    } else {
+      // 常驻钮直开、没有气泡：贴在钮的下方，放不下就翻到上方
+      const br = replyBtn.getBoundingClientRect();
+      top = br.bottom + 10;
+      if (top + bh > H - 6) top = br.top - bh - 10;
+    }
     top = Math.max(6, Math.min(H - bh - 6, top));
     box.style.left = Math.round((W - bw) / 2) + 'px';
     box.style.top = Math.round(top) + 'px';
   };
-  const closeReply = () => {
+  // 关掉输入卡后把钮摆回该在的地方：常驻模式一定要把 on 加回来，
+  // 不然 openReply 里那次 remove('on') 就再也回不来了，钮看着是「消失」
+  const restoreReplyBtn = () => {
+    if (!replyEnabled) return;
+    if (replyAlways) { placeReplyBtnFixed(); replyBtn.classList.add('on'); }
+    else if (bubbleShown) { placeReplyBtn(); replyBtn.classList.add('on'); }
+  };
+  // soft=true 是「取消」：气泡按被冻住前剩的时间继续待着，别一取消就消失
+  const closeReply = (soft) => {
     const box = document.getElementById('pet-reply-box');
     if (box) box.remove();
     const was = replyOpen;
     replyOpen = false;
     if (was) document.dispatchEvent(new CustomEvent('pet:reply-close'));
-    releaseBubble(900);
+    if (soft) {
+      const keep = Math.max(heldRemain, 1500);
+      heldRemain = 0;
+      clearTimeout(timer);
+      if (bubbleShown) {
+        bubbleDeadline = Date.now() + keep;
+        timer = setTimeout(() => { el.style.opacity = '0'; hideReply(); }, keep);
+      }
+    } else {
+      releaseBubble(900);
+    }
+    restoreReplyBtn();
     return true;
   };
   const openReply = () => {
@@ -1009,25 +1071,28 @@ const BUBBLE_JS = `(() => {
     document.dispatchEvent(new CustomEvent('pet:reply-open'));   // 壳子：切可交互、拿焦点
     inp.addEventListener('keydown', (ev) => {
       ev.stopPropagation();
-      if (ev.key === 'Escape') { closeReply(); return; }
+      if (ev.key === 'Escape') { closeReply(true); return; }
       if (ev.key !== 'Enter') return;
       if (ev.isComposing || ev.keyCode === 229) return;   // 输入法选词的那下回车不算发送
       const text = String(inp.value || '').trim();
-      if (!text) { closeReply(); return; }
+      if (!text) { closeReply(true); return; }
       inp.readOnly = true;
       hint.textContent = '发送中…';
       document.dispatchEvent(new CustomEvent('pet:reply-send', { detail: text }));
     });
     return true;
   };
-  window.__petReply = (open) => { if (open) return openReply(); closeReply(); return false; };
-  window.__petReplySet = (on) => {
+  window.__petReply = (open) => { if (open) return openReply(); closeReply(true); return false; };
+  window.__petReplySet = (on, always) => {
     replyEnabled = on !== false;
+    replyAlways = always === true;
     if (!replyEnabled) replyBtn.classList.remove('on');
+    else if (replyAlways) { placeReplyBtnFixed(); replyBtn.classList.add('on'); }
     else if (bubbleShown) { placeReplyBtn(); replyBtn.classList.add('on'); }
+    else replyBtn.classList.remove('on');
     return replyEnabled;
   };
-  window.__petReplyInfo = () => ({ enabled: replyEnabled, open: replyOpen, shown: bubbleShown, text: replyOpen && document.getElementById('pet-reply-input') ? document.getElementById('pet-reply-input').value : '' });
+  window.__petReplyInfo = () => ({ enabled: replyEnabled, always: replyAlways, open: replyOpen, shown: bubbleShown, text: replyOpen && document.getElementById('pet-reply-input') ? document.getElementById('pet-reply-input').value : '' });
   document.addEventListener('pet:reply-result', (ev) => {
     const r = (ev && ev.detail) || {};
     if (r.ok) {
@@ -1043,7 +1108,7 @@ const BUBBLE_JS = `(() => {
     if (hint) hint.textContent = String(r.error || '没发出去');
     if (inp) { try { inp.focus(); } catch (e) {} }
   });
-  document.addEventListener('pet:reply-cancel', () => { if (replyOpen) closeReply(); });
+  document.addEventListener('pet:reply-cancel', () => { if (replyOpen) closeReply(true); });
   replyBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openReply(); });
   // 鼠标靠近气泡就先别淡（不然 5 秒的回复一变 3 秒就没了，钮都点不到）。
   // 页面这边自己看坐标就够了：mousemove 不管落点是不是可穿透元素都会到 window。
@@ -1056,8 +1121,29 @@ const BUBBLE_JS = `(() => {
     if (near) holdBubble();
     else if (!replyOpen) releaseBubble(1800);
   }, true);
-  window.addEventListener('resize', () => { if (bubbleShown) placeReplyBtn(); placeReplyBox(); });
+  window.addEventListener('resize', () => { if (bubbleShown) placeReplyBtn(); if (replyAlways) placeReplyBtnFixed(); placeReplyBox(); });
+  // 模型大小是可调的（Ctrl+滚轮 / 换 fit），窗口不一定跟着变，所以常驻钮自己低频跟一下
+  setInterval(() => { if (replyAlways && replyEnabled && !replyOpen) placeReplyBtnFixed(); }, 1000);
 
+  // 一键复原服装：换装表情是单向的（只有「变成」没有「变回」），舞台的 pose 白名单也不收 Clothes*，
+  // 所以从壳子这边直接摸舞台引擎，把八个换装参数摁回默认档。
+  // 必须同时改 engine.current，不然下一帧 commit 会拿旧值平滑回去。
+  window.__petResetOutfit = () => {
+    const e = window.__stageEngine;
+    if (!e || !e.params || !e.current) return false;
+    try { if (typeof e.stop === 'function') e.stop(); } catch (err) {}
+    const ids = ['Clothes1', 'Clothes2', 'Clothes3', 'Clothes4', 'Clothes5', 'Clothes6', 'Clothes7', 'Clothes8'];
+    let n = 0;
+    for (const id of ids) {
+      const p = e.params.get(id);
+      if (!p) continue;
+      const d = Number.isFinite(p.default) ? p.default : 0;
+      e.current.set(id, d);
+      try { e.core.setParameterValueById(id, d); } catch (err) {}
+      n++;
+    }
+    return n > 0;
+  };
   window.__petPlay = (url) => { try { const a = new Audio(url); a.volume = (typeof window.__petVol === 'number' ? window.__petVol : 1); a.play().catch(() => {}); window.__petAudio = a; return true; } catch { return false; } };
   window.__petVol = 1;
   window.__petSetVol = (v) => { const n = Math.max(0, Math.min(1, Number(v))); if (Number.isFinite(n)) window.__petVol = n; if (window.__petAudio) { try { window.__petAudio.volume = window.__petVol; } catch {} } return window.__petVol; };
@@ -1066,6 +1152,7 @@ const BUBBLE_JS = `(() => {
     el.className = 'pos-' + p;
     fitTop();
     if (bubbleShown) placeReplyBtn();
+    else if (replyAlways) placeReplyBtnFixed();
     return p;
   };
   // 顶部气泡贴模型头顶。头顶以前是写死的 168（只对 380×680 成立），换窗口大小后模型跟着缩放、
@@ -1448,13 +1535,27 @@ function replyBtnWanted() {
 }
 function syncReplyBtn() {
   if (!win || win.isDestroyed()) return;
-  win.webContents.executeJavaScript(`window.__petReplySet && window.__petReplySet(${replyBtnWanted() ? 'true' : 'false'})`).catch(() => {});
+  const on = replyBtnWanted();
+  const always = on && replyAlwaysOn === true;
+  win.webContents.executeJavaScript(`window.__petReplySet && window.__petReplySet(${on ? 'true' : 'false'}, ${always ? 'true' : 'false'})`).catch(() => {});
 }
 function setReplyBtn(on, save) {
   replyBtnOn = !!on;
   if (save) saveCfg({ replyBtn: replyBtnOn });
   syncReplyBtn();
   return replyBtnOn;
+}
+// 常驻模式：钮一直挂在腰侧，随时能点开打字；关掉就回到「跟着气泡来去」的老样子
+function setReplyAlways(on, save) {
+  replyAlwaysOn = !!on;
+  if (save) saveCfg({ replyAlways: replyAlwaysOn });
+  syncReplyBtn();
+  return replyAlwaysOn;
+}
+// 一键复原服装：换装表情单向，pose 又不收 Clothes*，所以直接调页面里摸引擎的那个函数
+function resetOutfit() {
+  if (!win || win.isDestroyed()) return Promise.resolve(false);
+  return win.webContents.executeJavaScript('window.__petResetOutfit && window.__petResetOutfit()').catch(() => false);
 }
 function replyTarget() {
   try {
@@ -1529,6 +1630,9 @@ function sanitizeMoves(moves) {
     // 舞台的两条硬限制：眨眼太快、点头太密都会 400，这里兜一手
     if (m.kind === 'blink') m.duration = Math.max(Number(m.duration) || 0.4, (Number(m.count) || 1) * 0.35, 0.4);
     if (m.kind === 'nod' || m.kind === 'shake_head') m.duration = Math.max(Number(m.duration) || 1.4, (Number(m.count) || 2) * 0.5);
+    // 表情不带 strength 时舞台会按 0.6 编译，原眼和替换眼一起半透明 → 眼睛叠加。
+    // 这里统一补满档，跟 MOODS 那边一个道理：按键式图层只认 0/1。
+    if (m.kind === 'expression') m.strength = 1;
     out.push(m);
     if (out.length >= 22) break;
   }
@@ -1579,7 +1683,9 @@ function sayActions(ms, emotion, env, gesture, moves) {
     for (const [kind, opt] of MOODS[emotion]) {
       if (hasOwnExpr && kind === 'expression') continue;
       if (extra.length && kind === 'trajectory') continue;   // 她自己写了动作，情绪的背景摆动让位
-      actions.push(scaleMoodAction(kind, opt));
+      const mo = scaleMoodAction(kind, opt);
+      if (kind === 'expression') mo.strength = 1;   // 同 moodPlan：按键式表情必须走满档，折扣会叠眼
+      actions.push(mo);
     }
   }
   // 手势和口型可以同帧下发（不同参数），这样「说话时手放胸前」不需要排队等半天
@@ -1843,6 +1949,10 @@ ipcMain.on('pet:need-smart', (e) => {
 // ---- 指针追踪：主进程轮询全局鼠标，窗口穿透也照样能看 ----
 // 归一化到桌宠窗口：x/y ∈ -1..1（右/上为正）；指针离开桌宠所在屏幕时送 null，模型自然回到待机
 let cursorTrack = true, cursorTimer = null, lastCursorKey = '', lastCursorSentAt = 0;
+// 鼠标静止超过这么久就当它离开了：视线和身体收回正前方，别一直偏着头朝着同一个方向。
+// 一动就立刻恢复追踪（位置一变就刷新 lastCursorMoveAt）。
+const CURSOR_IDLE_MS = 10000;
+let lastCursorMoveAt = 0, lastCursorX = null, lastCursorY = null;
 
 // 绕着她转圈 → 眩晕 → 嫌弃 → 黑脸生气 → 冷却（2026-11-01 主人点的玩法）
 // 判据：以**头部**为圆心（不是模型中心：头在窗口约 22% 高处），指针到头的半径 > 55px 时累计有向转角。
@@ -1951,6 +2061,7 @@ function startCursorTrack() {
     const display = screen.getDisplayNearestPoint(p);
     const petDisplay = screen.getDisplayNearestPoint({ x: wx + Math.round(ww / 2), y: wy + Math.round(wh / 2) });
     let payload = null;
+    let idleDrop = false;   // 这次 null 是「鼠标静止太久」造成的，不是离开屏幕
     if (display.id === petDisplay.id) {
       const cx = (p.x - wx) / Math.max(1, ww), cy = (p.y - wy) / Math.max(1, wh);
       let x = Math.max(-1, Math.min(1, cx * 2 - 1));
@@ -1959,7 +2070,16 @@ function startCursorTrack() {
       payload = { x: +x.toFixed(3), y: +y.toFixed(3), inside: cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1 };
       spinDetect(p, wx, wy, ww, wh);
       if (Date.now() < spinSuspendedUntil) payload = null;   // 生气/发晕期间不看鼠标
+      if (payload) {
+        if (payload.x !== lastCursorX || payload.y !== lastCursorY) {
+          lastCursorX = payload.x; lastCursorY = payload.y; lastCursorMoveAt = Date.now();
+        } else if (Date.now() - lastCursorMoveAt > CURSOR_IDLE_MS) {
+          payload = null; idleDrop = true;   // 鼠标长时间不动，当它已经离开
+        }
+      }
     }
+    // 离开本屏 / 暂停追踪：记成「刚刚动过」，回到屏幕时立刻恢复跟手
+    if (!payload && !idleDrop) lastCursorMoveAt = Date.now();
     const key = payload ? `${payload.x},${payload.y}` : 'null';
     if (key !== lastCursorKey || Date.now() - lastCursorSentAt > 400) {
       lastCursorKey = key; lastCursorSentAt = Date.now();
@@ -1982,6 +2102,7 @@ ipcMain.handle('cfg:save', (_e, patch) => {
   if (patch && typeof patch.bridge === 'boolean') setBridge(patch.bridge, false);
   if (patch && typeof patch.tickBubble === 'boolean') syncTickBubble();
   if (patch && typeof patch.replyBtn === 'boolean') setReplyBtn(patch.replyBtn, false);   // 存过了，只广播
+  if (patch && typeof patch.replyAlways === 'boolean') setReplyAlways(patch.replyAlways, false);
   // 帧率改了要重载舞台才生效（只重载页面，不动窗口）
   if (patch && patch.stageFps !== undefined) applyStageFps(patch.stageFps);
   const r = refreshPaths();
@@ -2093,6 +2214,7 @@ function buildMenu() {
       { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
       { label: '模型桥接（点她会叫醒 DSH 会话）', type: 'checkbox', checked: bridgeOn, click: (item) => setBridge(item.checked, true) },
       { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },
+      { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
       { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
       { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
       { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
@@ -2128,6 +2250,7 @@ function buildMenu() {
       { type: 'separator' },
       { label: '随机来一个', click: () => { const ks = Object.keys(MOODS); sendMood(ks[Math.floor(Math.random() * ks.length)], 0.7); } },
     ] },
+    { label: '复原服装（衣服回默认档）', click: () => resetOutfit() },
     { label: '设置…（尺寸 / 鲸语 / 模型 / 端口）', click: () => createPanel() },
     { type: 'separator' },
     { label: '更多', submenu: [
@@ -2158,6 +2281,7 @@ app.whenReady().then(() => {
   interactive = loadCfg().interactive !== false;
   bridgeOn = loadCfg().bridge !== false;
   replyBtnOn = loadCfg().replyBtn !== false;
+  replyAlwaysOn = loadCfg().replyAlways === true;
   autoMood = loadCfg().autoMood !== false;
   cursorTrack = loadCfg().cursorTrack !== false;
   { const st = Number(loadCfg().spinTurns); spinTurns = Number.isFinite(st) ? Math.min(20, Math.max(2, Math.round(st))) : SPIN.turnsPerStage; }

@@ -38,6 +38,7 @@ const DEFAULTS = {
   interactive: true,        // 分区互动总开关
   tickBubble: true,         // 阶段气泡：联动上报进度时从肩边冒出上浮小气泡（可同时 3~5 颗）
   replyBtn: true,           // 气泡上的回复按钮：点开直接在桌宠里打字，回车发到桌宠专用会话
+  replyAlways: false,       // 回复钮常驻：一直挂在腰侧，随时能点；关着就还是跟着气泡来去
   voiceKeepAlive: true,     // 每 15 分钟打一次声：顺手热 TTS 服务，没人理她就说一句短招呼
   spinTurns: 6,             // 绕她转几圈才算一节（2~20）：晕 → 嫌弃 → 生气
   stageFps: 60,             // 舞台帧率上限（0 = 不限）：高刷屏满帧会白烧 CPU

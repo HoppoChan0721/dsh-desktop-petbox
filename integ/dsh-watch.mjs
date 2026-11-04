@@ -262,8 +262,8 @@ const HOLD_KINDS = new Set(['think', 'read', 'write', 'shell', 'web', 'subagent'
 const RIGS = {
   think: { faces: [['加载', 6], ['眯眼', 3], ['屑屑眼', 1], ['圈圈眼', 1]] },
   read: { faces: [[null, 4], ['眯眼', 2], ['圈圈眼', 1]] },
-  write: { faces: [['眯眼', 4], ['单片眼镜', 3], ['屑屑眼', 1]] },
-  shell: { faces: [['黑框眼镜', 4], ['眯眼', 3], ['加载', 1]] },
+  write: { faces: [['眯眼', 3], ['圈圈眼', 3], ['屑屑眼', 2]] },   // 原来 单片眼镜 3，主人说眼镜观感不好
+  shell: { faces: [['＞＜', 3], ['眯眼', 3], ['加载', 2]] },        // 原来 黑框眼镜 4
   web: { faces: [['兔牙', 3], ['加载', 2], [null, 2], ['爱心眼', 1]] },
   subagent: { faces: [['圈圈眼', 4], [null, 1], ['眯眼', 1]] },
   stall: { faces: [['流冷汗', 4], ['＞＜', 1], ['眯眼', 1]] },
@@ -309,7 +309,8 @@ function buildPlan(kind, face) {
   // 引擎一次只跑一份 plan，时长就是「占用窗口」：长状态 5.5s 一版、每 6.5s 续一次
   const d = HOLD_KINDS.has(kind) ? 5.5 : 2.5;
   const actions = [];
-  if (face) actions.push({ kind: 'expression', name: face, strength: 0.85, layer: 'exclusive', at: 0, duration: d });
+  // strength 必须 1：表情是按键式图层开关，0.85 会让原眼和替换眼同时半透明 → 眼睛叠加
+  if (face) actions.push({ kind: 'expression', name: face, strength: 1, layer: 'exclusive', at: 0, duration: d });
   const title = `联动 · ${kind}${face ? ' · ' + face : ''}`;
   return { version: 1, title, intent: title, summary: title, actions };
 }

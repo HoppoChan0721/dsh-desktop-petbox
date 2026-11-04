@@ -120,6 +120,11 @@ function parseOne(raw) {
   // 裸表情名：[脸红]
   if (EXPRESSIONS.includes(inner)) return { kind: 'expr', name: inner };
 
+  // 不带参数的动作也要认：[smile] [talk] 以前会原样漏进气泡，因为下面那个正则只认冒号
+  const bareVerb = normVerb(inner);
+  if (bareVerb === 'smile') return { kind: 'smile', seconds: 1.8 };
+  if (bareVerb === 'talk') return { kind: 'talk', seconds: 2.4 };
+
   const m = inner.match(/^([^:：]+)[:：](.*)$/);
   if (!m) return null;
   const verb = normVerb(m[1]);
@@ -134,7 +139,7 @@ function parseOne(raw) {
       if (!name) return null;
       return {
         kind: 'expr', name,
-        strength: clamp(toNum(parts[1], 0.9), 0, 1),
+        strength: clamp(toNum(parts[1], 1), 0, 1),
         seconds: toNum(parts[2], 2.6),
         layer: parts[3] === 'overlay' ? 'overlay' : 'exclusive',
       };
@@ -178,7 +183,7 @@ function parseOne(raw) {
       const sub = parseOne(parts.slice(0, -1).join(':'));
       if (!sub || sub.kind === 'at') return null;
       sub.seconds = secs;
-      if (sub.kind === 'expr' && sub.strength == null) sub.strength = 0.9;
+      if (sub.kind === 'expr' && sub.strength == null) sub.strength = 1;
       return sub;
     }
     case 'act': {
