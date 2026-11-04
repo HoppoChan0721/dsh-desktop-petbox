@@ -1,5 +1,16 @@
 # 变更记录
 
+## v0.2.8 — 2026-11-04
+
+没有 TTS 也必须是完整可用的桌宠。
+
+### 无声环境
+- 主人要求：TTS 全程可选，不是每个使用者都有本地合成服务，没语音的人也不能出问题。
+- `/say {voice:true}` 在没配 `voicePrepare` / `voiceWavDir` 时**直接当普通气泡**：回 `{ok:true, queued:false, noTts:true}`，不排三个点、不占 `voicing`、不当 busy；表情/口型照常下发。
+- `say(text, voice, ms)` 里旧的一次性播报脚本改成**只有配了 `notifyVoice` 才 spawn**（原来空路径也会去 spawn powershell）。
+- 预合成 `warmVoices()`、保活/打招呼 `keepAliveTick()`、托盘的「语音音量」子菜单、`warmVoices` 的启动定时器，全部由 `voiceEnabled()` 把关，没 TTS 直接跳过。
+- 实测：把 `voicePrepare` / `voiceWavDir` / `notifyVoice` 三项清空后重启——`/status` 正常、`/say {voice:true}` 出气泡 `noTts:true`、点触出气泡、`/keepalive` 回明确错误、回复钮照旧，`pet.log` 零报错；恢复配置重启后 `realtime say synth=2289ms` 声音照旧。
+
 ## v0.2.7 — 2026-11-04
 
 TTS 保活：每 15 分钟打一次声，顺手把「她主动打招呼」也做了。

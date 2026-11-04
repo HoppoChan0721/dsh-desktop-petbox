@@ -440,6 +440,13 @@ function startMoodServer() {
           const text = String(j.text || '');
           if (j.voice) {
             if (voicing) { send(200, { ok: false, busy: true }); return; }
+            // 没配 TTS 的人：等价于一条普通气泡，不排三个点、不算 busy、不回 queued —— 别让人以为卡住了
+            if (!voiceEnabled()) {
+              send(200, { ok: true, queued: false, noTts: true });
+              say(text, false, ms);
+              runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, j.emotion, j.mouth, j.gesture) }, true).catch(() => {});
+              return;
+            }
             send(200, { ok: true, queued: true, early: !!j.early });
             petWait();   // 气泡先变三个点（合成期间就是这个等待态，说好过）
             // early：表情和手势不用等合成，先把脸换过去、手抬起来，省得那几秒像块木头。
@@ -1309,8 +1316,11 @@ function say(text, voice, ms) {
   if (!win || win.isDestroyed()) return;
   const t = compactBubble(text).slice(0, 300);
   win.webContents.executeJavaScript(`window.__petSay && window.__petSay(${JSON.stringify(t)}, ${Number(ms) || 6000})`).catch(() => {});
-  if (voice) {
-    try { spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', loadCfg().notifyVoice, '-Text', t], { windowsHide: true, stdio: 'ignore' }); } catch {}
+  // 旧的一次性播报脚本（notifyVoice）只有配了才用；没配就只是气泡，绝不让它变成报错。
+  // 2026-11-04 主人要求：TTS 全程可选，没有本地合成服务的人也必须能正常用桌宠。
+  const notify = String(loadCfg().notifyVoice || '').trim();
+  if (voice && notify) {
+    try { spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', notify, '-Text', t], { windowsHide: true, stdio: 'ignore' }); } catch {}
   }
 }
 function petWait() {
