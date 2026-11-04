@@ -309,7 +309,8 @@ function buildPlan(kind, face) {
   // 引擎一次只跑一份 plan，时长就是「占用窗口」：长状态 5.5s 一版、每 6.5s 续一次
   const d = HOLD_KINDS.has(kind) ? 5.5 : 2.5;
   const actions = [];
-  if (face) actions.push({ kind: 'expression', name: face, strength: 0.85, layer: 'exclusive', at: 0, duration: d });
+  // strength 必须 1：表情是按键式图层开关，0.85 会让原眼和替换眼同时半透明 → 眼睛叠加
+  if (face) actions.push({ kind: 'expression', name: face, strength: 1, layer: 'exclusive', at: 0, duration: d });
   const title = `联动 · ${kind}${face ? ' · ' + face : ''}`;
   return { version: 1, title, intent: title, summary: title, actions };
 }

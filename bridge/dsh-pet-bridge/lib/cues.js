@@ -134,7 +134,7 @@ function parseOne(raw) {
       if (!name) return null;
       return {
         kind: 'expr', name,
-        strength: clamp(toNum(parts[1], 0.9), 0, 1),
+        strength: clamp(toNum(parts[1], 1), 0, 1),
         seconds: toNum(parts[2], 2.6),
         layer: parts[3] === 'overlay' ? 'overlay' : 'exclusive',
       };
@@ -178,7 +178,7 @@ function parseOne(raw) {
       const sub = parseOne(parts.slice(0, -1).join(':'));
       if (!sub || sub.kind === 'at') return null;
       sub.seconds = secs;
-      if (sub.kind === 'expr' && sub.strength == null) sub.strength = 0.9;
+      if (sub.kind === 'expr' && sub.strength == null) sub.strength = 1;
       return sub;
     }
     case 'act': {

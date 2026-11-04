@@ -131,7 +131,9 @@ function scaleMoodAction(kind, opt) {
 function moodPlan(name, k) {
   const actions = (MOODS[name] || MOODS.neutral).map(([kind, opt]) => {
     const o = scaleMoodAction(kind, opt);
-    o.strength = Math.max(0.15, Math.min(1, (opt.strength || 0.5) * k));
+    // 表情走的 key1..key13 是「按键」式图层开关，只认 0/1。给 0.3 会让原眼和替换眼
+    // 同时半透明，屏幕上就是「睁着眼还能看见 > <」的叠加。强度一律满档，k 只调身体幅度。
+    o.strength = kind === 'expression' ? 1 : Math.max(0.15, Math.min(1, (opt.strength || 0.5) * k));
     return o;
   });
   const m = Object.keys(MOODS).includes(name) ? name : 'neutral';
@@ -168,11 +170,14 @@ function stopPlan() {
 }
 
 async function runPlan(plan, userAction, marginMs = 900) {
+  // 先把待机摇摆按住：它每 600ms 来抢一次舞台，说话的计划经常一上去就 400
+  // （2026-11-04 查 ＞＜ 不生效时发现：一轮重试里连着五次全是 400）
+  if (userAction) lastUserPlanAt = Date.now();
   if (userAction && Date.now() < planBusyUntil) { await stopPlan(); await sleep(140); }
   else { const w = planBusyUntil - Date.now(); if (w > 0) await sleep(w + 60); }
   let ok = await postPlan(plan);
-  // 舞台被联动 watcher 的短动作占着时会 400：说话/情绪比它优先，抢几次
-  for (let i = 0; i < 4 && !ok; i++) { await stopPlan(); await sleep(180); ok = await postPlan(plan); }
+  // 舞台被联动 watcher / 摇摆占着时会 400：说话/情绪比它优先，多抢几轮
+  for (let i = 0; i < 6 && !ok; i++) { await stopPlan(); await sleep(240); ok = await postPlan(plan); }
   const dur = planDuration(plan);
   planBusyUntil = Date.now() + (ok ? dur * 1000 + marginMs : 400);
   if (userAction) lastUserPlanAt = Date.now();
@@ -1529,6 +1534,9 @@ function sanitizeMoves(moves) {
     // 舞台的两条硬限制：眨眼太快、点头太密都会 400，这里兜一手
     if (m.kind === 'blink') m.duration = Math.max(Number(m.duration) || 0.4, (Number(m.count) || 1) * 0.35, 0.4);
     if (m.kind === 'nod' || m.kind === 'shake_head') m.duration = Math.max(Number(m.duration) || 1.4, (Number(m.count) || 2) * 0.5);
+    // 表情不带 strength 时舞台会按 0.6 编译，原眼和替换眼一起半透明 → 眼睛叠加。
+    // 这里统一补满档，跟 MOODS 那边一个道理：按键式图层只认 0/1。
+    if (m.kind === 'expression') m.strength = 1;
     out.push(m);
     if (out.length >= 22) break;
   }
@@ -1579,7 +1587,9 @@ function sayActions(ms, emotion, env, gesture, moves) {
     for (const [kind, opt] of MOODS[emotion]) {
       if (hasOwnExpr && kind === 'expression') continue;
       if (extra.length && kind === 'trajectory') continue;   // 她自己写了动作，情绪的背景摆动让位
-      actions.push(scaleMoodAction(kind, opt));
+      const mo = scaleMoodAction(kind, opt);
+      if (kind === 'expression') mo.strength = 1;   // 同 moodPlan：按键式表情必须走满档，折扣会叠眼
+      actions.push(mo);
     }
   }
   // 手势和口型可以同帧下发（不同参数），这样「说话时手放胸前」不需要排队等半天
