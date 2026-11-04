@@ -120,6 +120,11 @@ function parseOne(raw) {
   // 裸表情名：[脸红]
   if (EXPRESSIONS.includes(inner)) return { kind: 'expr', name: inner };
 
+  // 不带参数的动作也要认：[smile] [talk] 以前会原样漏进气泡，因为下面那个正则只认冒号
+  const bareVerb = normVerb(inner);
+  if (bareVerb === 'smile') return { kind: 'smile', seconds: 1.8 };
+  if (bareVerb === 'talk') return { kind: 'talk', seconds: 2.4 };
+
   const m = inner.match(/^([^:：]+)[:：](.*)$/);
   if (!m) return null;
   const verb = normVerb(m[1]);
