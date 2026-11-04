@@ -1853,6 +1853,10 @@ ipcMain.on('pet:need-smart', (e) => {
 // ---- 指针追踪：主进程轮询全局鼠标，窗口穿透也照样能看 ----
 // 归一化到桌宠窗口：x/y ∈ -1..1（右/上为正）；指针离开桌宠所在屏幕时送 null，模型自然回到待机
 let cursorTrack = true, cursorTimer = null, lastCursorKey = '', lastCursorSentAt = 0;
+// 鼠标静止超过这么久就当它离开了：视线和身体收回正前方，别一直偏着头朝着同一个方向。
+// 一动就立刻恢复追踪（位置一变就刷新 lastCursorMoveAt）。
+const CURSOR_IDLE_MS = 10000;
+let lastCursorMoveAt = 0, lastCursorX = null, lastCursorY = null;
 
 // 绕着她转圈 → 眩晕 → 嫌弃 → 黑脸生气 → 冷却（2026-11-01 主人点的玩法）
 // 判据：以**头部**为圆心（不是模型中心：头在窗口约 22% 高处），指针到头的半径 > 55px 时累计有向转角。
@@ -1961,6 +1965,7 @@ function startCursorTrack() {
     const display = screen.getDisplayNearestPoint(p);
     const petDisplay = screen.getDisplayNearestPoint({ x: wx + Math.round(ww / 2), y: wy + Math.round(wh / 2) });
     let payload = null;
+    let idleDrop = false;   // 这次 null 是「鼠标静止太久」造成的，不是离开屏幕
     if (display.id === petDisplay.id) {
       const cx = (p.x - wx) / Math.max(1, ww), cy = (p.y - wy) / Math.max(1, wh);
       let x = Math.max(-1, Math.min(1, cx * 2 - 1));
@@ -1969,7 +1974,16 @@ function startCursorTrack() {
       payload = { x: +x.toFixed(3), y: +y.toFixed(3), inside: cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1 };
       spinDetect(p, wx, wy, ww, wh);
       if (Date.now() < spinSuspendedUntil) payload = null;   // 生气/发晕期间不看鼠标
+      if (payload) {
+        if (payload.x !== lastCursorX || payload.y !== lastCursorY) {
+          lastCursorX = payload.x; lastCursorY = payload.y; lastCursorMoveAt = Date.now();
+        } else if (Date.now() - lastCursorMoveAt > CURSOR_IDLE_MS) {
+          payload = null; idleDrop = true;   // 鼠标长时间不动，当它已经离开
+        }
+      }
     }
+    // 离开本屏 / 暂停追踪：记成「刚刚动过」，回到屏幕时立刻恢复跟手
+    if (!payload && !idleDrop) lastCursorMoveAt = Date.now();
     const key = payload ? `${payload.x},${payload.y}` : 'null';
     if (key !== lastCursorKey || Date.now() - lastCursorSentAt > 400) {
       lastCursorKey = key; lastCursorSentAt = Date.now();
