@@ -15,6 +15,7 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseCues } from './cues.js';
 
 // 自带一件式日志：宿主那边的 console 很少能看到，出问题得能自己留痕
 // 默认写 $DSH_HOME/logs/pet-bridge.log；也可以给 WHALE_PET_BRIDGE_LOG 一个绝对路径，留空则不写
@@ -42,6 +43,9 @@ const DEFAULTS = {
   fallbackToMain: false,       // 桌宠会话建不起来时，要不要退回投主会话
   echoToPet: true,             // 会话里说完的话回送到桌宠气泡（不然只能在聊天窗里干看着）
   petSayUrl: 'http://127.0.0.1:61943/say',
+  petStageUrl: 'http://127.0.0.1:61942',  // 舞台：只有动作没台词时直接砸 plan 用
+  // 每条投递前要不要附一段「你现在什么状态」（当前表情、在不在说话、上次说了啥）
+  appendState: true,
   echoMaxChars: 180,           // 气泡装不下长篇，超了截断
   echoDelayMs: 900,            // 一轮里可能有好几条 assistant 消息，等最后一条再出气泡
   echoVoice: false,            // true = 气泡同时走 TTS（3~10 秒，会跟点触本地的语音撞车）
@@ -202,31 +206,42 @@ export function apply(ctx, config = {}) {
 
   // 一轮可能有好几条 assistant 消息（边说边调工具）：只用最后一条，
   // 前面的多是「我先看看」这类过程话，拼起来气泡会变成刷屏。
-  // 表情/手势用 [emotion:shy] [gesture:hand_on_chest] 写在开头，这里摘出来并剥掉。
-  const EMOTIONS = new Set(['happy', 'shy', 'excited', 'thinking', 'sleepy', 'proud', 'sad', 'annoyed', 'surprised', 'greeting', 'playful', 'neutral', 'flustered', 'confused', 'pout']);
-  const GESTURES = new Set(['hand_on_chest', 'point', 'grass']);
-  const CUE_RE = /\[\s*(emotion|gesture)\s*[:：]\s*([A-Za-z_]+)\s*\]/g;
-
-  function takeCues(t) {
-    const cues = { emotion: null, gesture: null };
-    const clean = String(t).replace(CUE_RE, (_m, k, v) => {
-      const key = String(k).toLowerCase();
-      const val = String(v).toLowerCase();
-      if (key === 'emotion' && EMOTIONS.has(val)) cues.emotion = val;
-      if (key === 'gesture' && GESTURES.has(val)) cues.gesture = val;
-      return '';
-    });
-    return { clean: clean.replace(/^[\s,，、。:：]+/, '').trim(), cues };
-  }
+  // 台词里的方括号指令交给 cues.js：认得的编译成舞台动作并从台词里剥掉，
+  // 认不得的原样留在气泡里（[图片] 这种照旧显示），绝不吞字。
+  let lastCue = null;   // /health 能看最近一次解析了什么
 
   function replyTextOf(blocksList) {
     const texts = blocksList.map((bl) => bubbleText(bl)).filter(Boolean);
-    if (!texts.length) return { text: '', emotion: null, gesture: null };
-    const last = takeCues(texts[texts.length - 1]);
-    let t = last.clean;
-    if (!t) return { text: '', emotion: null, gesture: null };
-    if (t.length > cfg.echoMaxChars) t = t.slice(0, Math.max(1, cfg.echoMaxChars - 1)).trimEnd() + '…';
-    return { text: t, emotion: last.cues.emotion, gesture: last.cues.gesture };
+    if (!texts.length) return { text: '', emotion: null, gesture: null, moves: [], notes: [] };
+    const parsed = parseCues(texts[texts.length - 1]);
+    let t = parsed.text;
+    const notes = parsed.notes.slice();
+    if (t.length > cfg.echoMaxChars) {
+      t = t.slice(0, Math.max(1, cfg.echoMaxChars - 1)).trimEnd() + '…';
+      notes.push(`台词超过 ${cfg.echoMaxChars} 字，已截断`);
+    }
+    lastCue = {
+      at: new Date().toISOString(),
+      text: t,
+      emotion: parsed.emotion,
+      gesture: parsed.gesture,
+      moves: parsed.moves.map((m) => m.kind),
+      notes,
+    };
+    return { text: t, emotion: parsed.emotion, gesture: parsed.gesture, moves: parsed.moves, notes };
+  }
+
+  // 没有台词只有动作时，直接丢给舞台演（气泡那边不需要出东西）
+  async function actOnStage(moves) {
+    const plan = { version: 1, title: 'cue · 纯动作', intent: 'cue', summary: 'cue', actions: moves };
+    const res = await fetch(`${cfg.petStageUrl}/api/execute`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ plan, backend: 'web' }),
+      signal: AbortSignal.timeout(6000),
+    }).catch(() => null);
+    if (!res || !res.ok) throw new Error('stage HTTP ' + (res ? res.status : 'n/a'));
+    return true;
   }
 
   async function sayOnPet(text, cues = {}) {
@@ -234,6 +249,8 @@ export function apply(ctx, config = {}) {
     const body = { text, ms };
     if (cues.emotion) body.emotion = cues.emotion;     // 让这句话配着脸，不只是字幕
     if (cues.gesture) body.gesture = cues.gesture;
+    // 指令解析出来的动作跟着 /say 一起走，外壳会和口型编进同一条计划，不会互相打断
+    if (Array.isArray(cues.moves) && cues.moves.length) body.moves = cues.moves;
     // 短回复念出来：early 让壳子先把气泡放出来，合成完再补声音，别让人干等三秒。
     // 超过 echoVoiceMaxChars 的只出文字——合成慢，而且一口气念长了不好听。
     const cap = Number(cfg.echoVoiceMaxChars) || 40;
@@ -242,6 +259,7 @@ export function apply(ctx, config = {}) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) throw new Error('say HTTP ' + res.status);
     return true;
@@ -271,14 +289,17 @@ export function apply(ctx, config = {}) {
       const fresh = assistantMessages(agent.session).filter((m) => !seenIds.has(m.id));
       if (!fresh.length) { log('echo: idle but no new assistant message'); return; }
       const reply = replyTextOf(fresh.map((m) => m.content));
-      if (!reply.text) { log('echo: assistant message had no text'); return; }
+      if (!reply.text && !reply.moves.length) { log('echo: assistant message had no text'); return; }
       const wait = cfg.echoDelayMs || 0;
       const gap = Date.now() - echoLastAt;
       if (gap < wait) await sleep(wait - gap);   // 连着两轮时别把气泡叠在一起
       echoLastAt = Date.now();
       try {
-        await sayOnPet(reply.text, reply);
-        log(`echoed to pet (${reply.text.length} chars${reply.emotion ? ', ' + reply.emotion : ''}${reply.gesture ? ', ' + reply.gesture : ''})`);
+        if (reply.text) await sayOnPet(reply.text, reply);
+        else await actOnStage(reply.moves);
+        log(`echoed to pet (${reply.text.length} chars, moves=${reply.moves.length}`
+          + `${reply.emotion ? ', ' + reply.emotion : ''}${reply.gesture ? ', ' + reply.gesture : ''}`
+          + `${reply.notes.length ? '，注意：' + reply.notes.join('；') : ''})`);
       } catch (e) {
         log('echo to pet failed: ' + e.message);
       }
@@ -288,12 +309,34 @@ export function apply(ctx, config = {}) {
   if (cfg.echoToPet) log('echo to pet enabled -> ' + cfg.petSayUrl);
 
   // ---- 投递 ----
-  // 桌面会话的口径（2026-11-02 主人要的）：话要短、别排版，顺带把表情/手势交给她自己挑。
-  // 2026-11-03 主人把字数从 20~40 压到 5~20：要念出来，长句合成太慢。
-  const PET_HINT = '\n（这是在桌面上说话：一句就够，5～20 字，越短越好，别用列表 / 标题 / 代码块。'
-    + '想让她带着脸说话，就在最前面写 [emotion:shy]；想加手势再写 [gesture:hand_on_chest]。'
-    + '表情可用：' + [...EMOTIONS].join(' / ') + '；手势可用：' + [...GESTURES].join(' / ') + '。'
-    + '这两个标记会被摘掉，不会出现在气泡里。）';
+  // 桌面会话的口径（2026-11-02 主人要的）：话要短、别排版。
+  // 2026-11-03 把字数从 20~40 压到 5~20：要念出来，长句合成太慢。
+  // 2026-11-04 动作语法搬进 persona\PET-STAGE.md（桌宠预设里的控制卡），
+  //            这里只留一句提醒——每条消息都附全量手册太贵了。
+  const PET_HINT = '\n（桌面上：一句 5～20 字。身体用方括号指令，像 [脸红] [nod:2] [look:down]，'
+    + '桥会执行并从气泡里摘掉，完整写法见你的控制卡。）';
+
+  // 每轮附一句「你现在什么状态」，省得她重复做同一个动作、也不知道自己刚才说过什么
+  async function petStateLine() {
+    if (!cfg.appendState) return '';
+    const bits = [];
+    try {
+      const base = String(cfg.petSayUrl).replace(/\/say\/?$/, '');
+      if (base !== String(cfg.petSayUrl)) {
+        const s = await fetch(`${base}/status`, { signal: AbortSignal.timeout(600) })
+          .then((r) => r.json()).catch(() => null);
+        if (s) {
+          if (s.voicing) bits.push('正在出声');
+          const last = s.lastSay && s.lastSay.text ? String(s.lastSay.text) : '';
+          if (last) bits.push(`刚说「${last.slice(0, 14)}${last.length > 14 ? '…' : ''}」`);
+        }
+      }
+    } catch {}
+    if (lastCue && lastCue.moves.length && Date.now() - Date.parse(lastCue.at) < 180000) {
+      bits.push(`上一次动了 ${lastCue.moves.join('+')}`);
+    }
+    return bits.length ? `（你现在：${bits.join('，')}。）` : '';
+  }
 
   async function deliverTo(sid, text, echo = false) {
     if (!sid) throw new Error('no session to wake');
@@ -319,7 +362,8 @@ export function apply(ctx, config = {}) {
     if (cfg.mode === 'pet') {
       try {
         const sid = await ensurePetSession();
-        return { ...(await deliverTo(sid, text + PET_HINT, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
+        const extra = PET_HINT + (await petStateLine().catch(() => ''));
+        return { ...(await deliverTo(sid, text + extra, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
       } catch (e) {
         petReady = false;   // 下一次点触重新建
         if (!cfg.fallbackToMain) throw e;
@@ -363,6 +407,7 @@ export function apply(ctx, config = {}) {
         petPresetWanted: cfg.agentPreset || '',
         petArchived: isArchived(petSid),
         echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
+        lastCue,
         recent: recent.slice(-10),
       });
     }
