@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCues } from './cues.js';
+import { createPeek } from './peek.js';
 
 // 自带一件式日志：宿主那边的 console 很少能看到，出问题得能自己留痕
 // 默认写 $DSH_HOME/logs/pet-bridge.log；也可以给 WHALE_PET_BRIDGE_LOG 一个绝对路径，留空则不写
@@ -53,6 +54,16 @@ const DEFAULTS = {
   minIntervalMs: 1200,         // 同一部位在这个间隔内只投一次
   maxPerMinute: 24,            // 每分钟最多投递几条，防止连点刷屏
   quiet: false,
+  // ---- 窥屏（2026-11-05）----
+  // 隔一阵自己瞄一眼前台窗口，主动在桌面上说一句。默认关，用 /peek 或托盘菜单开。
+  peek: false,
+  peekIntervalMs: 30 * 60 * 1000,   // 基准 30 分钟，实际会 ±20% 抖动
+  peekQuietFrom: 1,                 // 静默时段（整点小时）：1 点到
+  peekQuietTo: 8,                   // 8 点之间都不打扰
+  peekMaxLines: 80,                 // OCR 最多收几行，再多都是废话
+  peekMaxChars: 260,                // 塞进消息的屏幕文字上限
+  peekTimeoutMs: 12000,             // 探针整轮超时，超了就 kill 当这轮跳过
+  peekTmpDir: '',                   // 截图 + JSON 的落点，默认 $DSH_HOME/tmp/pet-peek
 };
 
 const ZONE_LABEL = {
@@ -85,17 +96,19 @@ export function apply(ctx, config = {}) {
   let windowStart = Date.now();
   let windowCount = 0;
   const recent = [];
+  let peekOn = cfg.peek === true || cfg.peek === 'on';
 
   if (statePath) {
     try {
       const st = JSON.parse(readFileSync(statePath, 'utf8'));
       if (!bound && st.sessionId) bound = st.sessionId;
       if (!petSid && st.petSessionId) petSid = st.petSessionId;
+      if (typeof st.peekOn === 'boolean') peekOn = st.peekOn;   // 开关要跨重启记住
     } catch {}
   }
   function persist() {
     if (!statePath) return;
-    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, at: new Date().toISOString() }, null, 1)); } catch {}
+    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, at: new Date().toISOString() }, null, 1)); } catch {}
   }
 
   // ---- 主会话（mode=main 才用）----
@@ -397,6 +410,16 @@ export function apply(ctx, config = {}) {
     } catch {}
   }
 
+  // ---- 窥屏（2026-11-05）----
+  // 定时瞄前台窗口 → OCR → 当成一条「事件」投给桌宠会话（跟她主动搭话一个管道）。
+  // 开关状态落 pet-bridge.json，重启也记得。
+  const peek = createPeek({
+    cfg: { ...cfg, peek: peekOn },
+    log,
+    deliver,
+    onStateChange: () => { peekOn = peek.on; persist(); },
+  });
+
   const server = createServer((req, res) => {
     const url = new URL('http://x' + (req.url || '/'));
     if (req.method === 'GET' && url.pathname === '/health') {
@@ -407,9 +430,13 @@ export function apply(ctx, config = {}) {
         petPresetWanted: cfg.agentPreset || '',
         petArchived: isArchived(petSid),
         echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
+        peek: peek.state(),
         lastCue,
         recent: recent.slice(-10),
       });
+    }
+    if (req.method === 'GET' && url.pathname === '/peek') {
+      return send(res, 200, { ok: true, ...peek.state() });
     }
     if (req.method === 'GET' && url.pathname === '/recent') {
       return send(res, 200, { ok: true, items: recent.slice(-30) });
@@ -433,6 +460,15 @@ export function apply(ctx, config = {}) {
       if (url.pathname === '/reset-pet-session') {
         petSid = ''; persist();
         return send(res, 200, { ok: true, petSessionId: '', note: 'next touch creates a new pet session' });
+      }
+      // 窥屏开关 / 立刻试一次（放在 quiet 之前：静默是点触的事，不该挡住窥屏的控制）
+      if (url.pathname === '/peek') {
+        if (typeof body.on === 'boolean') peek.setOn(body.on);
+        if (body.now) {
+          const r = await peek.run('manual').catch((e) => ({ ok: false, error: e.message }));
+          return send(res, 200, { ok: true, result: r, state: peek.state() });
+        }
+        return send(res, 200, { ok: true, ...peek.state() });
       }
       if (cfg.quiet) return send(res, 200, { ok: true, skipped: 'quiet' });
 
@@ -464,5 +500,6 @@ export function apply(ctx, config = {}) {
   server.on('error', (e) => { log('server error: ' + e.message); ctx.logger?.warn?.('pet-bridge: server error: ' + e.message); });
   server.listen(cfg.port, '127.0.0.1', () => log(`listening on 127.0.0.1:${cfg.port} (mode=${cfg.mode})`));
   ctx.logger?.info?.(`pet-bridge listening on 127.0.0.1:${cfg.port} (mode=${cfg.mode})`);
-  ctx.on('dispose', () => { try { server.close(); } catch {} });
+  peek.start();
+  ctx.on('dispose', () => { try { peek.stop(); } catch {} try { server.close(); } catch {} });
 }

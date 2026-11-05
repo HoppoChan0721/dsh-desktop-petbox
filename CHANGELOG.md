@@ -2,6 +2,14 @@
 
 ## 未发布
 
+### 窥屏：她隔一阵自己瞄一眼屏幕再搭话
+- 桥插件（`dsh-pet-bridge`）新增 `lib/peek.js` + 探针 `scripts/peek-window.ps1`：默认关，托盘「互动 → 窥屏」或 `node pet.mjs peek on` 打开，开关落 `pet-bridge.json`，重启记得。
+- 每 30 分钟基准、±20% 抖动跑一轮：取前台窗口矩形 → `CopyFromScreen` 截那一块 → Windows 自带 `Windows.Media.Ocr` 本地识别（`zh-Hans-CN`，离线、零依赖、不花钱）→ 拼成一条「你刚瞄了眼主人屏幕」的事件投给桌宠会话，回话照旧走 `echoToPet` 出气泡。
+- 为什么不用视觉模型/read_image：桌宠预设是「只有人设、没有任何工具」，她调不到；`read_image` 还要额外的视觉 token 和截图留痕；系统 OCR 认不出时降级成「进程名 + 标题」，永远不报错。
+- 跳过规则：静默时段 1~8 点、主人在 DSH 里说话（标题含 DeepSeek Harness）、桌宠自己在前台、全屏（游戏/看片）、画面跟上次一模一样。全屏独占抓出来是一片黑时只报标题，不硬猜。
+- 只截前台窗口，不截整屏；截图和探针 JSON 落在 `$DSH_HOME/tmp/pet-peek`，读完即删。
+- 接口：`GET /peek` 读状态（下次时间、上次结果、跳过原因），`POST /peek {"on":true}` 开关，`POST /peek {"now":true}` 立刻试一次。
+
 ### 联动气泡去掉顶部高光点
 - `.pet-tick` 那颗椭圆泡左上角原来挂了个 `::after` 白色高光（`left:21%;top:12%`、25%×15%、blur 1.2px），泡小字多时正好压在第一行字上，看着像字被糊掉一块。删掉这条伪元素。
 - 顺便把背景从 `radial-gradient(circle at 34% 28%, …)` 换成 `linear-gradient(158deg, …)`：原来的中心亮斑跟高光是同一个位置，只删伪元素的话顶部还是发白。泡的立体感靠 inset 描边和底部内阴影就够了。

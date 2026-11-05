@@ -2292,6 +2292,55 @@ function createPanel() {
   return panel;
 }
 
+// ---- 窥屏开关（2026-11-05）----
+// 定时器和探针都活在桥插件那边（DSH 侧，61944），壳子只当遥控器：
+// 读一眼状态、发开关、手动试一次。壳子关了也不影响那边自己判断。
+const PEEK_URL = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
+let peekOn = false, peekLive = false, peekNote = '桥插件没在跑';
+async function peekSync() {
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, { signal: AbortSignal.timeout(1500) });
+    const d = await r.json();
+    peekLive = true;
+    peekOn = !!d.on;
+    if (d.lastResult) peekNote = d.lastResult;
+    else if (d.on) peekNote = d.nextInSec > 0 ? `下次 ${Math.round(d.nextInSec / 60)} 分钟后` : '等着排期';
+    else peekNote = '已关';
+  } catch {
+    peekLive = false;
+    peekNote = '桥插件没在跑';
+  }
+}
+async function peekToggle(on) {
+  peekOn = on;
+  if (tray) { try { tray.setContextMenu(buildMenu()); } catch {} }
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ on }), signal: AbortSignal.timeout(4000),
+    });
+    const d = await r.json();
+    if (d && typeof d.on === 'boolean') peekOn = d.on;
+  } catch {}
+  peekSync();
+}
+async function peekNow() {
+  say('那我瞄一眼…', false, 2400);
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ now: true }), signal: AbortSignal.timeout(20000),
+    });
+    const d = await r.json();
+    const res = (d && d.result) || {};
+    const why = res.skipped || res.error || '';
+    say(res.delivered ? '瞄到了，等下说' : `这轮没瞄成：${why}`, false, 4200);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  peekSync();
+}
+
 function buildMenu() {
   const fitNow = loadCfg().fit === 'full' ? 'full' : 'portrait';
   const bubbleNow = loadCfg().bubblePos || 'bottom';
@@ -2311,6 +2360,9 @@ function buildMenu() {
       { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
       { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
       { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
+      { type: 'separator' },
+      { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (peekLive ? '' : ' · 桥没在跑'), type: 'checkbox', checked: peekOn, click: (item) => peekToggle(item.checked) },
+      { label: `  现在瞄一眼试试 · ${peekNote}`, enabled: peekLive, click: () => peekNow() },
     ] },
     { label: '外观', submenu: [
       { label: '全身 / 近景', submenu: [
@@ -2399,6 +2451,8 @@ app.whenReady().then(() => {
     if (autoMood) startWatcher();
     setTimeout(() => { if (voiceEnabled()) warmVoices().catch(() => {}); }, 9000);   // 舞台起来后再预合成台词
     setInterval(idleTick, 45000);
+    setTimeout(() => { peekSync().catch(() => {}); }, 2500);
+    setInterval(() => { peekSync().catch(() => {}); }, 20000);
     // TTS 保活：启动 90 秒后先热一次（省得开工第一句等 27 秒），之后每 15 分钟一次
     setTimeout(() => keepAliveTick(), 90000);
     setInterval(() => keepAliveTick(), KEEPALIVE_MS);
