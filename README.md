@@ -192,6 +192,7 @@ DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后�
   <venv目录>\Scripts\python.exe -m pip install rapidocr onnxruntime -i https://pypi.tuna.tsinghua.edu.cn/simple
   # 然后在桥插件的 config 里写：peekOcrPython: '<venv目录>\Scripts\python.exe'
   ```
+- **瞄哪一个窗口**：优先 `peekTarget`（进程名或标题片段，钉死就只瞄它）；没设就顺着**任务栏顺序**挑最靠前的那个独立窗口——判定条件是可见、不是工具窗、没有 owner、有标题、至少 320×240，所以桌宠那层透明壳、AIDA64 的 OSD 小条、桌面窗口都会被跳过。手动「现在瞄一眼试试」时前台会被托盘菜单抢成桌宠窗口，探针会按同一套规则重新挑一个，不会拍到她自己。
 - 只截前台那一块，不截整屏；探针和截图落在 `$DSH_HOME/tmp/pet-peek`，读完即删。
 - 跳过：静默时段（默认 1~8 点）、主人在 DSH 里说话、桌宠自己在前台、全屏（游戏/看片）、画面指纹跟上次一样。全屏独占抓出来是黑的时候只报标题，不硬猜。
 - 开关：托盘「说话 ▸ 窥屏」和「现在瞄一眼试试」、`node cli/pet.mjs peek on|off|now`、`GET/POST :61944/peek`（`{"on":true}` 开关，`{"now":true}` 立刻跑一轮）；状态存 `$DSH_HOME/pet-bridge.json`，重启记得。
