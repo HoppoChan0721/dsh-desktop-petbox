@@ -262,7 +262,11 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), replyAlways: replyAlwaysOn === true, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), replyAlways: replyAlwaysOn === true, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', affinity: affinityInfo(), lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    // 亲密度统计：GET /affinity（摸了多少下、今天几下、最常摸哪、连着几天）
+    if (req.method === 'GET' && req.url === '/affinity') {
+      return send(200, { ok: true, ...affinityInfo() });
+    }
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -414,6 +418,7 @@ function startMoodServer() {
       return;
     }
     // 分区点击：外部（CLI / 调试 / 测试）也能触发一次「主人点了这里」
+    // {"reset":true} 顺手把亲密度统计清零（改阈值、复测反应时用）
     if (req.method === 'POST' && req.url === '/touch') {
       let raw = '';
       req.on('data', (c) => { raw += c; if (raw.length > 2048) req.destroy(); });
@@ -421,8 +426,9 @@ function startMoodServer() {
         try {
           const j = JSON.parse(raw || '{}');
           lastTap = 0;   // 调试入口不去抖
+          if (j.reset) { touchStats = { total: 0, zoneTotal: {}, days: {}, lastTouchAt: 0, firstAt: 0 }; saveStats(); }
           const ev = handleTouch(j);
-          send(200, { ok: !!ev, event: ev || null });
+          send(200, { ok: !!ev, event: ev || null, affinity: affinityInfo() });
         } catch (e) { send(400, { ok: false, error: e.message }); }
       });
       return;
@@ -645,11 +651,81 @@ const TOUCH_MANY = {
   leg:   ['哼…', '唔…'],
   default: ['呃…', '哼…'],
 };
+// 久没被摸 / 今天被摸太多，本地语气跟着变，别每次都是同一个「唔…」
+const TOUCH_MISS = ['呀…', '诶…', '唔…'];
+const TOUCH_CLINGY = ['嘿嘿…', '嗯…', '唔…'];
 let touchSeq = 0;
 const touchRing = [];
 const touchFile = () => path.join(DATA, 'touch.jsonl');
 const touchState = { zone: '', count: 0, at: 0 };
 let bridgeWarned = false;
+
+// ---- 点触记忆 / 亲密度（2026-11-05）----
+// touch.jsonl 是原始流水，只落不聚合，所以以前每次摸反应都一模一样。
+// 这里维护一份小统计：累计摸过多少下、今天多少下、最常摸哪、隔了多久、连着几天。
+// 用途只有三个，都落在本地反应上，不联网、不依赖 TTS：
+//   1. 亲密度涨了更耐摸（同部位连击阈值从 3 下抬到 4~5 下才腻）
+//   2. 隔很久没摸，第一下会一惊一乍
+//   3. 今天已经被摸很多下，第一下就黏人
+const statsFile = () => path.join(DATA, 'touch-stats.json');
+const AFFINITY_TIERS = [1, 40, 150, 450, 1200, 3000];   // 累计到第几下升到 Lv.1..Lv.6
+const dayKey = (d) => {
+  const t = d || new Date();
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+};
+function loadStats() {
+  try {
+    const j = JSON.parse(fs.readFileSync(statsFile(), 'utf8').replace(/^\uFEFF/, '')) || {};
+    return { total: 0, zoneTotal: {}, days: {}, lastTouchAt: 0, firstAt: 0, ...j };
+  } catch { return { total: 0, zoneTotal: {}, days: {}, lastTouchAt: 0, firstAt: 0 }; }
+}
+let touchStats = loadStats();
+function saveStats() {
+  try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(statsFile(), JSON.stringify(touchStats)); } catch {}
+}
+function affinityLevel(total) { let lv = 0; for (const t of AFFINITY_TIERS) if (total >= t) lv++; return lv; }
+
+// 记一笔，返回这次反应要用到的几个数
+// 注意：gap 必须取「摸之前」的那一份——先更新 lastTouchAt 再算，间隔永远是 0
+function recordTouch(ev, now) {
+  const before = affinityInfo();
+  const k = dayKey();
+  const d = touchStats.days[k] || (touchStats.days[k] = { n: 0, zones: {} });
+  d.n++;
+  d.zones[ev.zone] = (d.zones[ev.zone] || 0) + 1;
+  touchStats.total++;
+  touchStats.zoneTotal[ev.zone] = (touchStats.zoneTotal[ev.zone] || 0) + 1;
+  touchStats.lastTouchAt = now;
+  if (!touchStats.firstAt) touchStats.firstAt = now;
+  const keys = Object.keys(touchStats.days).sort();      // 只留最近 60 天，别让文件长胖
+  while (keys.length > 60) delete touchStats.days[keys.shift()];
+  saveStats();
+  return { ...affinityInfo(), gapHours: before.gapHours };
+}
+
+function affinityInfo() {
+  const now = Date.now();
+  const today = (touchStats.days[dayKey()] || { n: 0 }).n;
+  const fav = Object.entries(touchStats.zoneTotal).sort((a, b) => b[1] - a[1])[0];
+  let streak = 0;
+  for (let i = 0; i < 400; i++) {
+    const k = dayKey(new Date(now - i * 86400000));
+    if (touchStats.days[k] && touchStats.days[k].n > 0) streak++;
+    else if (i > 0) break;                                // 今天还没摸不算断，隔天没摸才是断
+  }
+  const gapH = touchStats.lastTouchAt ? (now - touchStats.lastTouchAt) / 3600000 : null;
+  return {
+    level: affinityLevel(touchStats.total),
+    total: touchStats.total,
+    today,
+    streak,
+    favorite: fav ? fav[0] : '',
+    favoriteN: fav ? fav[1] : 0,
+    gapHours: gapH === null ? null : Math.round(gapH * 10) / 10,
+    lastTouchAt: touchStats.lastTouchAt || null,
+    firstTouchAt: touchStats.firstAt || null,
+  };
+}
 
 // ---- 分区标定：让 preload 扫一遍画布 alpha，量出模型自己的剪影 ----
 // 分区必须相对模型算，不能相对窗口：窗口拉伸、缩放、换 fit、换装都会让写死的窗口比例漂。
@@ -709,25 +785,38 @@ function forwardTouch(ev) {
   } catch {}
 }
 
-function touchReaction(ev, now) {
+function touchReaction(ev, now, aff) {
   if (ev.zone === 'body') return;   // 兜底区交给 pet:tap 的旧台词池
   const z = TOUCH_ZONES[ev.zone] || TOUCH_ZONES.body;
+  const a = aff || affinityInfo();
   if (touchState.zone === ev.zone && now - touchState.at < 1600) touchState.count++;
   else { touchState.zone = ev.zone; touchState.count = 1; }
   touchState.at = now;
-  const many = touchState.count >= 3;
+  // 亲密度越高越耐摸：Lv.4 起要连 4 下、Lv.6 起要连 5 下才翻脸
+  const manyAt = a.level >= 6 ? 5 : a.level >= 4 ? 4 : 3;
+  const many = touchState.count >= manyAt;
   // 第二下只换表情不出声，第三下才发火：避免连点把气泡刷屏
   if (touchState.count === 2 && !many) {
     sendMood(z.e, 0.55).catch(() => {});
     return;
   }
-  const pool = many ? (TOUCH_MANY[ev.zone] || TOUCH_MANY.default) : z.t;
+  // 语境语气：隔久没摸会一惊一乍，今天已经被摸很多下会黏人；两个都只作用于第一下
+  let tone = null;
+  if (touchState.count === 1) {
+    if (a.gapHours !== null && a.gapHours >= 6) tone = 'miss';
+    else if (a.today >= 15) tone = 'clingy';
+  }
+  const pool = many ? (TOUCH_MANY[ev.zone] || TOUCH_MANY.default)
+    : tone === 'miss' ? TOUCH_MISS
+      : tone === 'clingy' ? TOUCH_CLINGY
+        : z.t;
   const line = pool[Math.floor(Math.random() * pool.length)];
-  const mood = many ? 'annoyed' : z.e;
+  const mood = many ? 'annoyed' : tone === 'miss' ? 'surprised' : tone === 'clingy' ? 'shy' : z.e;
+  if (tone) plog(`touch ${ev.zone} tone=${tone} lv=${a.level} today=${a.today} gap=${a.gapHours}h`);
   if (voicing) { say(line, false, 4200); return; }
   if (!many && speakCached(line, mood)) return;   // 命中预合成：气泡/口型/声音同帧
   say(line, false, 4200);
-  sendMood(mood, many ? 0.9 : 0.65).catch(() => {});
+  sendMood(mood, many ? 0.9 : tone ? 0.75 : 0.65).catch(() => {});
 }
 
 // 分区互动总开关：关掉后点她等于点空气（不写日志、不通桥、不说话），光标回系统默认。
@@ -767,7 +856,8 @@ function handleTouch(p) {
   };
   appendTouch(ev);
   forwardTouch(ev);
-  touchReaction(ev, now);
+  const aff = recordTouch(ev, now);
+  touchReaction(ev, now, aff);
   return ev;
 }
 
@@ -798,7 +888,7 @@ function warmVoices() {
   if (warming) return warming;
   warming = (async () => {
     const cache = loadVCache();
-    for (const pool of [...TAP_LINES, ...Object.values(TOUCH_ZONES)]) {
+    for (const pool of [...TAP_LINES, ...Object.values(TOUCH_ZONES), { t: TOUCH_MISS }, { t: TOUCH_CLINGY }]) {
       for (const text of pool.t) {
         if (cache[text]) continue;
         try {
@@ -2211,6 +2301,8 @@ function buildMenu() {
     { type: 'separator' },
     // 顶层只留 5 组：互动 / 外观 / 情绪 / 设置 / 更多。开关类都收进「互动」，别越铺越长。
     { label: '互动', submenu: [
+      (() => { const a = affinityInfo(); return { label: `亲密度 Lv.${a.level} · 今天 ${a.today} 下 · 连续 ${a.streak} 天`, enabled: false }; })(),
+      { type: 'separator' },
       { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
       { label: '模型桥接（点她会叫醒 DSH 会话）', type: 'checkbox', checked: bridgeOn, click: (item) => setBridge(item.checked, true) },
       { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },

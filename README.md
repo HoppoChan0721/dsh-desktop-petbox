@@ -29,6 +29,7 @@
 - **绕圈生气**：围着她的头部转满一圈 → 眩晕 → 嫌弃 → 黑脸 + 手放胸前，进冷却
 - **分区互动**：点是哪就反应哪（头发 / 脑袋 / 脖子 / 胸口 / 腰 / 裙摆 / 腿 / 脚），分区只带情绪、台词一律是语气词（呃…／呜…／嘿嘿…／呀…）；同一处连点三下会翻脸
 - **点触事件反推**：每次点击都落盘 `data/touch.jsonl`，并可选 POST 给外部桥（`bridgeUrl`），用来唤醒别的进程
+- **亲密度记忆**：点触会聚合进 `data/touch-stats.json`（累计几下、今天几下、最常摸哪、连着几天），反应跟着变——累计越多越耐摸（同部位连击阈值从三下抬到四下、五下），隔六小时以上没摸第一下会一惊一乍，当天已经被摸十五下以上第一下会黏人。不联网、不依赖 TTS，删掉文件就当清零
 - **情绪端口**：`POST 127.0.0.1:61943/mood {"emotion":"shy","intensity":0.8}`，12 种情绪映射成鲸语 plan
 - **气泡**：`POST /say {"text":"…"}` 出对话气泡，可选接自己的 TTS
 - **阶段气泡**：`POST /tick {"text":"看 main.js","ms":3000}` 在她上半身随机位置冒一颗圆泡（头边 / 肩 / 胸口 / 手臂都可能），边往上飘边左右晃、边淡，单颗 2~4 秒、最多同时 5 颗；新泡会自动避开正在飘的旧泡，正脸也让开（联动用它说「在想 / 跑命令 / 看文件」，面板里能关）
@@ -117,8 +118,9 @@ POST /tick    {text, ms?}       阶段气泡（圆泡、上半身随机、往上
 POST /reply   {text} | {open}   在主人在桌宠里打的那句话投给桌宠专用会话；{open:true/false} 开关输入卡（调试用）
 GET  /reply                     回复钮状态：开着没、输入卡开着没、当前文字
 POST /sway    {on, phys, tilt, period}   GET /sway
-POST /touch   {zone, nx?, ny?}   模拟一次点触（zone: hair/head/neck/chest/waist/skirt/leg/foot/body）
+POST /touch   {zone, nx?, ny?}   模拟一次点触（zone: hair/head/neck/chest/waist/skirt/leg/foot/body），可带 {"reset":true} 清零亲密度
 GET  /touches?limit=20           最近的点触记录
+GET  /affinity                   亲密度：等级、累计、今天几下、连续天数、最常摸哪、距上次多久
 GET  /fps  POST /fps {fps}       舞台帧率上限（0 = 不限），改完自动重载舞台
 ```
 
