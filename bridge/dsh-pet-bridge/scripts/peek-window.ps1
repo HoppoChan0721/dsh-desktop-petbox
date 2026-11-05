@@ -3,7 +3,8 @@
   [int]$MaxLines = 80,
   [double]$Scale = 1.0,
   [string]$OcrPython = '',
-  [string]$OcrScript = ''
+  [string]$OcrScript = '',
+  [switch]$PickActive
 )
 # 窥屏探针：抓前台窗口画面 + 本地 OCR，结果写成一份 JSON 给 Node 读。
 # 设计口径（2026-11-05）：
@@ -20,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 $res = [ordered]@{
   ok = $false; at = (Get-Date).ToString('o'); error = $null
   proc = ''; pid = 0; title = ''; fullscreen = $false
-  crop = ''; win = ''; monitor = ''; scale = 1.0; avg = -1; shot = ''; lines = @()
+  crop = ''; win = ''; monitor = ''; picked = ''; scale = 1.0; avg = -1; shot = ''; lines = @()
   engine = ''; pyMs = -1; pyEngineMs = -1; pyError = ''
 }
 
@@ -47,8 +48,36 @@ public class PeekWin32 {
   [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
   [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
   [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+  delegate bool EnumProc(IntPtr h, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+  // 沿 Z 序（上到下）找第一个「真实」窗口：跳过不可见 / 最小化 / 没标题 / electron（桌宠壳子自己）。
+  // 为什么需要：点托盘菜单那一瞬前台会变成桌宠窗口，拿它去截图只会拍到她自己的空壳。
+  // 尺寸也管着：AIDA64 的 OSD、输入法候选条这类小悬浮窗常置顶，拍它等于拍了个字幕。
+  public static IntPtr FindTopCandidate() {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      if (!IsWindowVisible(h)) return true;
+      if (IsIconic(h)) return true;
+      if (GetWindowTextLength(h) < 2) return true;
+      RECT rc;
+      if (!GetWindowRect(h, out rc)) return true;
+      if ((rc.Right - rc.Left) < 320 || (rc.Bottom - rc.Top) < 240) return true;
+      int pid; GetWindowThreadProcessId(h, out pid);
+      string name = "";
+      try { name = System.Diagnostics.Process.GetProcessById(pid).ProcessName; } catch { return true; }
+      if (name == "electron") return true;
+      var sbt = new System.Text.StringBuilder(260);
+      GetWindowText(h, sbt, 260);
+      string t = sbt.ToString();
+      if (t == "Program Manager") return true;
+      found = h;
+      return false;
+    }, IntPtr.Zero);
+    return found;
+  }
 }
 '@
   }
@@ -58,6 +87,14 @@ public class PeekWin32 {
   $vr = $vl + $vw; $vb = $vt + $vh
 
   $h = [PeekWin32]::GetForegroundWindow()
+  if ($PickActive) {
+    # 手动触发时前台往往是桌宠窗口（点托盘菜单就抢焦点了），换成 Z 序里第一个真实窗口
+    $cand = [PeekWin32]::FindTopCandidate()
+    if ($cand -ne [IntPtr]::Zero) {
+      if ($cand -ne $h) { $res.picked = 'zorder' }
+      $h = $cand
+    }
+  }
   if ($h -eq [IntPtr]::Zero) { throw 'no foreground window' }
   $len = [PeekWin32]::GetWindowTextLength($h)
   $sbt = New-Object System.Text.StringBuilder ($len + 2)

@@ -24,7 +24,7 @@ const clip = (s, n) => {
 };
 
 // PowerShell 探针：抓前台窗口 + OCR，结果落 JSON，Node 读文件（避开 PS 5.1 的管道编码坑）
-function probe(cfg) {
+function probe(cfg, opts = {}) {
   return new Promise((resolve) => {
     const dir = cfg.peekTmpDir;
     try { mkdirSync(dir, { recursive: true }); } catch {}
@@ -42,6 +42,8 @@ function probe(cfg) {
       // 装了 RapidOCR 就交给它（中文准得多），没装 ps1 自己回落系统 OCR
       if (cfg.peekOcrPython) args.push('-OcrPython', String(cfg.peekOcrPython));
       if (cfg.peekOcrScript) args.push('-OcrScript', String(cfg.peekOcrScript));
+      // 手动点的时候前台会被托盘菜单抢成桌宠窗口，让探针沿 Z 序重挑一个真实窗口
+      if (opts.pickActive) args.push('-PickActive');
       child = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
     } catch (e) {
       return finish({ ok: false, error: 'spawn failed: ' + e.message });
@@ -63,12 +65,15 @@ function probe(cfg) {
 }
 
 // 「这窗口我自己」的判定：主人在跟你聊天、或者桌宠窗口在前台时别凑热闹
-function isSelf(proc, title) {
+// 两类「不该瞄」的窗口，处理不一样：
+//   dsh = 主人在跟你说话。手动点的时候他就在这儿，放行；定时那一路放行没意义，跳过。
+//   pet = 桌宠壳子自己（鲸语窗口）。任何时候都不该瞄——点托盘菜单也会把前台抢成它。
+function selfKind(proc, title) {
   const p = String(proc || '').toLowerCase();
   const t = String(title || '');
-  if (/deepseek\s*harness|dsh\b/i.test(t)) return '主人在跟你说话';
-  if (/whale-pet|桌宠|大肥鱼/i.test(t)) return '桌宠自己在前台';
-  if (p === 'electron') return '桌宠自己在前台';
+  if (/whale-pet|桌宠|大肥鱼|鲸语|live2d/i.test(t)) return 'pet';
+  if (p === 'electron') return 'pet';
+  if (/deepseek\s*harness|dsh\b/i.test(t)) return 'dsh';
   return '';
 }
 
@@ -133,7 +138,7 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
     st.busy = true;
     st.lastTryAt = Date.now();
     try {
-      const p = await probe(cfg);
+      const p = await probe(cfg, { pickActive: manual });
       if (!p.ok) {
         st.skipped++;
         st.lastSkip = p.error || 'probe failed';
@@ -142,12 +147,23 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
       }
       st.lastTitle = `${p.proc || '?'}｜${clip(p.title, 40)}`;
 
-      const self = isSelf(p.proc, p.title);
-      if (self && !manual) { st.skipped++; st.lastSkip = self; note('跳过（' + self + '）'); return { ok: false, skipped: 'self', why: self + '，先不打扰' }; }
-      if (self && manual) note('手动触发，放行 self 判定（' + self + '）');
+      const kind = selfKind(p.proc, p.title);
+      // 桌宠自己：不管手动还是定时，都不瞄自己（点托盘菜单会把前台抢成她）
+      if (kind === 'pet') {
+        st.skipped++; st.lastSkip = '桌宠自己在前台';
+        note('跳过（瞄到桌宠自己的窗口了）');
+        return { ok: false, skipped: 'self-pet', why: '瞄到我自己了，不算' };
+      }
+      if (kind === 'dsh' && !manual) {
+        st.skipped++; st.lastSkip = '主人在跟你说话';
+        note('跳过（主人在跟你说话）');
+        return { ok: false, skipped: 'self-dsh', why: '主人正在跟你说话，先不打扰' };
+      }
+      if (kind === 'dsh' && manual) note('手动触发，放行「主人在跟你说话」');
       // 手动点了就照抓：全屏标签只用来拦定时那一路（全屏独占常抓出一片黑，抓了也白抓）
       if (p.fullscreen && !manual) { st.skipped++; st.lastSkip = '全屏（大概在游戏或看片）'; note('跳过（全屏）'); return { ok: false, skipped: 'fullscreen', why: '全屏着，先不打扰' }; }
       if (p.fullscreen && manual) note('手动触发，全屏也照抓');
+      if (p.picked) note('前台是桌宠窗口，改瞄 ' + p.proc + '｜' + clip(p.title, 20));
       if (p.win || p.monitor) note(`窗口 ${p.win || '?'} / 显示器 ${p.monitor || '?'}`);
 
       const lines = Array.isArray(p.lines) ? p.lines.filter((x) => x && x.length >= 2) : [];
