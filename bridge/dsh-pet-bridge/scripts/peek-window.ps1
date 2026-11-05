@@ -1,12 +1,14 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$JsonOut,
-  [int]$MaxLines = 80
+  [int]$MaxLines = 80,
+  [double]$Scale = 1.0
 )
 # 窥屏探针：抓前台窗口画面 + 本地 OCR，结果写成一份 JSON 给 Node 读。
 # 设计口径（2026-11-05）：
 #   1. 只抓前台窗口，不抓整屏——桌面其它窗口是主人的隐私，也免得 OCR 一堆无关文字。
 #   2. OCR 用 Windows 自带的 Windows.Media.Ocr（Win10 起内置、离线、零依赖、不花钱），
 #      语言包缺了就降级成「只有进程名 + 标题」，绝不抛错。
+#      小字认不准时先按 -Scale 放大再喂给 OCR（2x 明显比 1x 准，代价是慢一点）。
 #   3. 任何一步失败都写成 ok:false + error，Node 那边当"这轮跳过"处理。
 #   4. 输出走文件（UTF-8 无 BOM），不走 stdout：PowerShell 5.1 的管道编码会把中文搞成乱码。
 
@@ -14,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $res = [ordered]@{
   ok = $false; at = (Get-Date).ToString('o'); error = $null
   proc = ''; pid = 0; title = ''; fullscreen = $false
-  crop = ''; win = ''; monitor = ''; avg = -1; shot = ''; lines = @()
+  crop = ''; win = ''; monitor = ''; scale = 1.0; avg = -1; shot = ''; lines = @()
 }
 
 function Save-Result {
@@ -104,6 +106,22 @@ public class PeekWin32 {
     }
   }
   if ($n -gt 0) { $res.avg = [Math]::Round($sum / $n, 1) }
+
+  # 小字认不准就先放大再 OCR：高清双三次插值，2x 对中文小字提升明显
+  if ($Scale -gt 1.01) {
+    $bw = [int][Math]::Round($cw * $Scale); $bh = [int][Math]::Round($ch * $Scale)
+    if ($bw -le 8000 -and $bh -le 8000) {
+      $big = New-Object System.Drawing.Bitmap $bw, $bh
+      $gb = [System.Drawing.Graphics]::FromImage($big)
+      $gb.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+      $gb.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+      $gb.DrawImage($bmp, 0, 0, $bw, $bh)
+      $gb.Dispose()
+      $bmp.Dispose()
+      $bmp = $big
+      $res.scale = $Scale
+    }
+  }
 
   $shot = Join-Path (Split-Path $JsonOut -Parent) 'shot.png'
   $bmp.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)

@@ -37,6 +37,7 @@ function probe(cfg) {
       child = spawn('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', SCRIPT, '-JsonOut', json, '-MaxLines', String(cfg.peekMaxLines || 80),
+        '-Scale', String(Number(cfg.peekScale) || 2),   // 放大再认：中文小字 2x 明显比 1x 准
       ], { windowsHide: true, stdio: 'ignore' });
     } catch (e) {
       return finish({ ok: false, error: 'spawn failed: ' + e.message });
@@ -146,18 +147,29 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
       if (p.win || p.monitor) note(`窗口 ${p.win || '?'} / 显示器 ${p.monitor || '?'}`);
 
       const lines = Array.isArray(p.lines) ? p.lines.filter((x) => x && x.length >= 2) : [];
-      const fp = createHash('sha1').update([p.proc, p.title, lines.slice(0, 12).join('|')].join('\n')).digest('hex');
+      // 去重 + 丢掉界面骨架词：OCR 会把「文件 / 编辑 / 查看 / 帮助」这类菜单项也认出来，
+      // 它们对「主人在干什么」没信息量，反而把真正有用那几行挤出字数上限。
+      const NOISE = /^(文件|编辑|查看|帮助|插入|格式|工具|窗口|关闭|最小化|最大化|新建|打开)$/;
+      const seen = new Set();
+      const picked = [];
+      for (const raw of lines) {
+        const t = String(raw).replace(/\s+/g, ' ').trim();
+        const key = t.replace(/\s+/g, '');
+        if (key.length < 2 || seen.has(key) || NOISE.test(key)) continue;
+        seen.add(key);
+        picked.push(t);
+      }
+      const fp = createHash('sha1').update([p.proc, p.title, picked.slice(0, 12).join('|')].join('\n')).digest('hex');
       if (fp === st.fingerprint && Date.now() - st.lastAt < baseInterval() * 2) {
         st.skipped++; st.lastSkip = '画面没变'; note('跳过（画面跟上次一样）');
         return { ok: false, skipped: 'same', why: '画面跟上次一样，没新东西' };
       }
 
-
-      const ocr = clip(lines.join(' / '), Number(cfg.peekMaxChars) || 260);
+      const ocr = clip(picked.join(' / '), Number(cfg.peekMaxChars) || 300);
       const head = `（桌宠｜你刚刚自己瞄了眼主人的屏幕：${p.proc || '某个程序'}`
         + (p.title ? `，窗口是「${clip(p.title, 40)}」` : '')
         + '。';
-      const body = ocr ? `屏幕上读到的字：${ocr}。）` : '（看不清上面的字。）';
+      const body = ocr ? `屏幕上认出来的字，可能有错字：${ocr}。）` : '（看不清上面的字。）';
       const tail = ' 这是你主动搭话，不是主人叫你——想接一句就接，不想接就给个表情。）';
       const text = head + body + tail;
 
@@ -166,8 +178,8 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
       st.lastAt = Date.now();
       st.count++;
       st.lastSkip = '';
-      note(`已投递 #${st.count}：${p.proc}｜${clip(p.title, 24)}（${lines.length} 行文字）`);
-      return { ok: true, delivered: true, proc: p.proc, title: p.title, lines: lines.length };
+      note(`已投递 #${st.count}：${p.proc}｜${clip(p.title, 24)}（${picked.length} 行文字）`);
+      return { ok: true, delivered: true, proc: p.proc, title: p.title, lines: picked.length };
     } catch (e) {
       st.skipped++;
       st.lastSkip = e.message;
