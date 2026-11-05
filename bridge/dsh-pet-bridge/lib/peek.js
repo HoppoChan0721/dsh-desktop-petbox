@@ -34,11 +34,15 @@ function probe(cfg) {
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     let child;
     try {
-      child = spawn('powershell.exe', [
+      const args = [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', SCRIPT, '-JsonOut', json, '-MaxLines', String(cfg.peekMaxLines || 80),
         '-Scale', String(Number(cfg.peekScale) || 2),   // 放大再认：中文小字 2x 明显比 1x 准
-      ], { windowsHide: true, stdio: 'ignore' });
+      ];
+      // 装了 RapidOCR 就交给它（中文准得多），没装 ps1 自己回落系统 OCR
+      if (cfg.peekOcrPython) args.push('-OcrPython', String(cfg.peekOcrPython));
+      if (cfg.peekOcrScript) args.push('-OcrScript', String(cfg.peekOcrScript));
+      child = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
     } catch (e) {
       return finish({ ok: false, error: 'spawn failed: ' + e.message });
     }

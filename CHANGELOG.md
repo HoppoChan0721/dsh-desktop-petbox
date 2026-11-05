@@ -18,6 +18,7 @@
 - 跳过规则：静默时段 1~8 点、主人在 DSH 里说话（标题含 DeepSeek Harness）、桌宠自己在前台、全屏（游戏/看片）、画面跟上次一模一样。全屏独占抓出来是一片黑时只报标题，不硬猜。
 - 全屏判定按**窗口所在的那块显示器**算（`MonitorFromWindow` + `GetMonitorInfo`），不拿整个虚拟屏比：多屏并排时虚拟屏是拼接尺寸，拿它比会把普通窗口误判成满屏。探针 JSON 顺带记 `win` / `monitor` 两个尺寸，出问题一眼能对。
 - 手动「现在瞄一眼试试」是主人当场点的，`self`（主人在跟你说话）和 `fullscreen` 两条都放行，只保留抓不到画面时的降级。跳过原因一律说人话，不回吐 `self` / `same` 这种键名。
+- 识别引擎可以换：给 `peekOcrPython` 一个装了 RapidOCR 的 venv 解释器，探针就先用它（`scripts/ocr.py`，PP-OCR 的 onnx 版，中文准确率高一个档次），认不出来或没装才回落系统 OCR。代价是冷启动约 5 秒，`peekTimeoutMs` 放到 20 秒。
 - 只截前台窗口，不截整屏；截图和探针 JSON 落在 `$DSH_HOME/tmp/pet-peek`，读完即删。
 - 接口：`GET /peek` 读状态（下次时间、上次结果、跳过原因），`POST /peek {"on":true}` 开关，`POST /peek {"now":true}` 立刻试一次。
 

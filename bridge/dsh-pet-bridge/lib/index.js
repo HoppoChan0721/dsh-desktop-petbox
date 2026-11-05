@@ -61,8 +61,11 @@ const DEFAULTS = {
   peekQuietFrom: 1,                 // 静默时段（整点小时）：1 点到
   peekQuietTo: 8,                   // 8 点之间都不打扰
   peekMaxLines: 80,                 // OCR 最多收几行，再多都是废话
-  peekMaxChars: 260,                // 塞进消息的屏幕文字上限
-  peekTimeoutMs: 12000,             // 探针整轮超时，超了就 kill 当这轮跳过
+  peekMaxChars: 300,                // 塞进消息的屏幕文字上限
+  peekScale: 2,                     // 截图放大倍数后再 OCR（中文小字 2x 明显更准）
+  peekOcrPython: '',                // RapidOCR 的 Python 解释器（venv 里的 python.exe），留空只用系统 OCR
+  peekOcrScript: '',                // RapidOCR 的入口脚本 ocr.py，留空同上
+  peekTimeoutMs: 20000,             // 探针整轮超时（RapidOCR 冷启动要 5 秒量级），超了就 kill 当这轮跳过
   peekTmpDir: '',                   // 截图 + JSON 的落点，默认 $DSH_HOME/tmp/pet-peek
 };
 

@@ -1,22 +1,27 @@
 ﻿param(
   [Parameter(Mandatory = $true)][string]$JsonOut,
   [int]$MaxLines = 80,
-  [double]$Scale = 1.0
+  [double]$Scale = 1.0,
+  [string]$OcrPython = '',
+  [string]$OcrScript = ''
 )
 # 窥屏探针：抓前台窗口画面 + 本地 OCR，结果写成一份 JSON 给 Node 读。
 # 设计口径（2026-11-05）：
 #   1. 只抓前台窗口，不抓整屏——桌面其它窗口是主人的隐私，也免得 OCR 一堆无关文字。
-#   2. OCR 用 Windows 自带的 Windows.Media.Ocr（Win10 起内置、离线、零依赖、不花钱），
-#      语言包缺了就降级成「只有进程名 + 标题」，绝不抛错。
-#      小字认不准时先按 -Scale 放大再喂给 OCR（2x 明显比 1x 准，代价是慢一点）。
+#   2. 识别两条路：给了 -OcrPython / -OcrScript 就先走 RapidOCR（PP-OCR 的 onnx 版，中文准得多），
+#      没装或者认不出来再回落 Windows 自带的 Windows.Media.Ocr（Win10 起内置，语言包缺了就没有）。
+#      两条都不可用时只报「进程名 + 标题」，绝不抛错。
+#      小字认不准时先按 -Scale 放大再喂（2x 明显比 1x 准，代价是慢一点）。
 #   3. 任何一步失败都写成 ok:false + error，Node 那边当"这轮跳过"处理。
 #   4. 输出走文件（UTF-8 无 BOM），不走 stdout：PowerShell 5.1 的管道编码会把中文搞成乱码。
 
+if (-not $OcrScript) { $OcrScript = Join-Path $PSScriptRoot 'ocr.py' }  # 默认用插件包自带的入口
 $ErrorActionPreference = 'Stop'
 $res = [ordered]@{
   ok = $false; at = (Get-Date).ToString('o'); error = $null
   proc = ''; pid = 0; title = ''; fullscreen = $false
   crop = ''; win = ''; monitor = ''; scale = 1.0; avg = -1; shot = ''; lines = @()
+  engine = ''; pyMs = -1; pyEngineMs = -1; pyError = ''
 }
 
 function Save-Result {
@@ -135,6 +140,50 @@ public class PeekWin32 {
     return
   }
 
+  # ---- 识别：优先 RapidOCR（PP-OCR 模型的 onnx 版，中文准得多），装不出来就回落系统 OCR ----
+  $lines = New-Object System.Collections.ArrayList
+  if ($OcrPython -and $OcrScript -and (Test-Path $OcrPython) -and (Test-Path $OcrScript)) {
+    $d = Split-Path $JsonOut -Parent
+    $pyJson = Join-Path $d 'ocr.json'
+    $pyOut = Join-Path $d 'py.out'
+    $pyErrFile = Join-Path $d 'py.err'
+    foreach ($f in @($pyJson, $pyOut, $pyErrFile)) { try { if (Test-Path $f) { Remove-Item $f -Force } } catch {} }
+    $t0 = Get-Date
+    # 用 Start-Process 而不是 &：RapidOCR 会把 [INFO] 打去 stderr，
+    # 在 $ErrorActionPreference='Stop' 下这会被当成错误、把命令打断（踩过，表现为「no ocr json」）。
+    try {
+      $proc = Start-Process -FilePath $OcrPython -ArgumentList @($OcrScript, $shot, $pyJson) `
+        -NoNewWindow -Wait -PassThru -RedirectStandardOutput $pyOut -RedirectStandardError $pyErrFile
+      $res.pyExit = $proc.ExitCode
+    } catch { $res.pyError = 'spawn failed: ' + $_.Exception.Message }
+    $res.pyMs = [int]((Get-Date) - $t0).TotalMilliseconds
+    if (Test-Path $pyJson) {
+      try {
+        $pj = Get-Content $pyJson -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($pj.ok) {
+          foreach ($t in @($pj.lines)) { $s = [string]$t; if ($s.Trim().Length -ge 2) { [void]$lines.Add($s.Trim()) } }
+          $res.engine = 'rapidocr'
+          $res.pyEngineMs = $pj.ms
+        } else { $res.pyError = [string]$pj.error }
+      } catch { $res.pyError = 'bad ocr json' }
+    } elseif (-not $res.pyError) {
+      $tail = ''
+      try { $tail = [string](Get-Content $pyErrFile -Raw -Encoding UTF8) } catch {}
+      $tail = $tail.Trim()
+      if ($tail.Length -gt 160) { $tail = $tail.Substring(0, 160) }
+      if ($tail) { $res.pyError = 'no ocr json: ' + $tail } else { $res.pyError = 'no ocr json' }
+    }
+    foreach ($f in @($pyJson, $pyOut, $pyErrFile)) { try { if (Test-Path $f) { Remove-Item $f -Force } } catch {} }
+  }
+
+  if ($lines.Count -gt 0) {
+    $res.lines = @($lines | Select-Object -First $MaxLines)
+    $res.ok = $true
+    Save-Result
+    return
+  }
+
+  $res.engine = 'windowsocr'
   Add-Type -AssemblyName System.Runtime.WindowsRuntime
   $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
   $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType = WindowsRuntime]

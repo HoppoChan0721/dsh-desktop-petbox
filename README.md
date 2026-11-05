@@ -1,4 +1,4 @@
-﻿# whale-pet-shell
+# whale-pet-shell
 
 把 **鲸语（Jingyu Live2D Agent）** 的 `?stage=1` 舞台变成 Windows 桌面上的透明桌宠外壳。
 
@@ -185,6 +185,13 @@ DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后�
 **她也会自己瞄一眼屏幕**（`peek`，默认关）：桥隔 30 分钟（±20% 抖动）抓一张**前台窗口**的截图，跑 Windows 自带的 `Windows.Media.Ocr` 本地识别，再拼成一条「你刚瞄了眼主人屏幕」的事件投给桌宠会话——于是她会主动开口，而不是等你摸。回话照旧走 `echoToPet` 出气泡 + 语音。
 
 - 为什么是本地 OCR 而不是视觉模型：桌宠预设「只有人设、没有工具」，她调不到 `read_image`；每半小时一张图给模型是稳定的视觉 token 开销，截图还会进会话记录；系统 OCR 是全离线、零依赖、不花钱，认不出就降级成「进程名 + 窗口标题」，永远不报错。
+- **想认得更准**：装 [RapidOCR](https://github.com/RapidAI/RapidOCR)（PP-OCR 的 onnx 版，纯 CPU、离线、模型三十来兆），把 `peekOcrPython` 指到那个 venv 的 `python.exe` 就行，探针会用包里的 `scripts/ocr.py` 先跑它，失败再回落系统 OCR。冷启动约 5 秒，`peekTimeoutMs` 记得放宽到 20 秒。
+
+  ```powershell
+  python -m venv <venv目录>
+  <venv目录>\Scripts\python.exe -m pip install rapidocr onnxruntime -i https://pypi.tuna.tsinghua.edu.cn/simple
+  # 然后在桥插件的 config 里写：peekOcrPython: '<venv目录>\Scripts\python.exe'
+  ```
 - 只截前台那一块，不截整屏；探针和截图落在 `$DSH_HOME/tmp/pet-peek`，读完即删。
 - 跳过：静默时段（默认 1~8 点）、主人在 DSH 里说话、桌宠自己在前台、全屏（游戏/看片）、画面指纹跟上次一样。全屏独占抓出来是黑的时候只报标题，不硬猜。
 - 开关：托盘「说话 ▸ 窥屏」和「现在瞄一眼试试」、`node cli/pet.mjs peek on|off|now`、`GET/POST :61944/peek`（`{"on":true}` 开关，`{"now":true}` 立刻跑一轮）；状态存 `$DSH_HOME/pet-bridge.json`，重启记得。
