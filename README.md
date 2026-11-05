@@ -154,6 +154,8 @@ node cli/pet.mjs fps 30            # 舞台帧率上限（0 = 不限）
 
 提示词正文已剥离角色设定，方括号里的表情名是示例，换你自己的模型照那份文档改 `cues.js` 的白名单即可。
 
+**但「零工具」不是挂个只有 persona 的 preset 就到手的。** DSH 的工具注册表在宿主平面：插件一注册，工具就对所有 agent 可见，preset 只能选呈现方式（native / ptc），选不了内容。所以那条会话默认会继承整套干活工具——实测 41 个、schema 合计 37934 字符，约等于九千多 token，每轮都付，而她只要说十个字。要真的收窄，得在同一个 preset 里再挂 [`bridge/dsh-pet-trim`](bridge/dsh-pet-trim)，它调一次 `ctx.tools.restrict({ allow })` 把目录砍到只剩需要的几个。留什么由你自己定，默认只留记忆召回；没装记忆插件的部署会自动退化成「全部拒绝」，不会因为名字对不上而崩。
+
 ## 可选：反向桥（把她变成输入设备）
 
 她不只是被指挥，也可以反过来叫醒别的进程。填了 `bridgeUrl` 之后，每一次点触都会 POST 到那个地址：
@@ -168,7 +170,7 @@ node cli/pet.mjs fps 30            # 舞台帧率上限（0 = 不限）
 
 DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后按 `sessionController.resolveAgent → agent.followup → sessions.flush` 投一条 user 消息，于是「摸头」真的会触发一次模型调用。它带同部位 2.5 秒合并、每分钟 8 条上限，避免连点刷屏。
 
-**默认投专用会话，不碰主会话**（`mode: pet`）：第一次点触时它会 `sessionController.create()` 建一个固定会话（自动改名「桌宠互动」，用 `agentPreset` 指定的预设，默认 `bigfish-pet` —— 只有人设、没有工具，免得桌宠那股劲儿跟你写代码那股劲儿混在一起），之后所有点触都投那儿。这样正在写代码的主会话不会被「主人刚刚碰了你的胸口」插进等候区。会话 id 落在 `$DSH_HOME/pet-bridge.json`，重启沿用；`POST :61944/reset-pet-session` 换一个干净的；把 `mode` 改成 `main` 就退回旧行为（投最近活跃会话）。预设名没在这个进程里注册时，`/health` 的 `petPreset` 会和 `petPresetWanted` 对不上，日志里也会留一行警告。
+**默认投专用会话，不碰主会话**（`mode: pet`）：第一次点触时它会 `sessionController.create()` 建一个固定会话（自动改名「桌宠互动」，用 `agentPreset` 指定的预设，默认 `bigfish-pet` —— 只有人设，工具由 `dsh-pet-trim` 收窄，免得桌宠那股劲儿跟你写代码那股劲儿混在一起），之后所有点触都投那儿。这样正在写代码的主会话不会被「主人刚刚碰了你的胸口」插进等候区。会话 id 落在 `$DSH_HOME/pet-bridge.json`，重启沿用；`POST :61944/reset-pet-session` 换一个干净的；把 `mode` 改成 `main` 就退回旧行为（投最近活跃会话）。预设名没在这个进程里注册时，`/health` 的 `petPreset` 会和 `petPresetWanted` 对不上，日志里也会留一行警告。
 
 **回复回流成气泡**（`echoToPet`，默认开）：那个会话里我一旦说话，桥就等到这一轮结束，把最后一段文本洗掉 markdown / 贴纸 / 代码块、截到 `echoMaxChars`，再 `POST` 回 `:61943/say`——于是桌面真的会出现气泡 + 口型，而不是只躺在聊天窗口里。一轮多条只出最后一条；被打断的残句不播。
 
@@ -184,7 +186,7 @@ DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后�
 
 **她也会自己瞄一眼屏幕**（`peek`，默认关）：桥隔 30 分钟（±20% 抖动）抓一张**前台窗口**的截图，跑 Windows 自带的 `Windows.Media.Ocr` 本地识别，再拼成一条「你刚瞄了眼主人屏幕」的事件投给桌宠会话——于是她会主动开口，而不是等你摸。回话照旧走 `echoToPet` 出气泡 + 语音。
 
-- 为什么是本地 OCR 而不是视觉模型：桌宠预设「只有人设、没有工具」，她调不到 `read_image`；每半小时一张图给模型是稳定的视觉 token 开销，截图还会进会话记录；系统 OCR 是全离线、零依赖、不花钱，认不出就降级成「进程名 + 窗口标题」，永远不报错。
+- 为什么是本地 OCR 而不是视觉模型：桌宠预设不给工具（`dsh-pet-trim` 把目录砍到只剩说话用得上的那几个），她调不到 `read_image`；每半小时一张图给模型是稳定的视觉 token 开销，截图还会进会话记录；系统 OCR 是全离线、零依赖、不花钱，认不出就降级成「进程名 + 窗口标题」，永远不报错。
 - **想认得更准**：装 [RapidOCR](https://github.com/RapidAI/RapidOCR)（PP-OCR 的 onnx 版，纯 CPU、离线、模型三十来兆），把 `peekOcrPython` 指到那个 venv 的 `python.exe` 就行，探针会用包里的 `scripts/ocr.py` 先跑它，失败再回落系统 OCR。冷启动约 5 秒，`peekTimeoutMs` 记得放宽到 20 秒。
 
   ```powershell

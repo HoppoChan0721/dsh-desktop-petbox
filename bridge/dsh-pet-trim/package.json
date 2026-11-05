@@ -1,0 +1,13 @@
+{
+  "name": "dsh-pet-trim",
+  "version": "0.1.0",
+  "description": "Trim the desktop-pet agent's tool catalog down to what a talking pet actually needs.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "private": true,
+  "license": "MIT"
+}
