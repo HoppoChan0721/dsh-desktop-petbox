@@ -2300,6 +2300,7 @@ let peekOn = false, peekLive = false, peekNote = '桥插件没在跑';
 async function peekSync() {
   try {
     const r = await fetch(`${PEEK_URL}/peek`, { signal: AbortSignal.timeout(1500) });
+    if (!r.ok) throw new Error('peek ' + r.status);   // 旧版插件没有这个端点，别当它是活的
     const d = await r.json();
     peekLive = true;
     peekOn = !!d.on;
@@ -2319,6 +2320,7 @@ async function peekToggle(on) {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ on }), signal: AbortSignal.timeout(4000),
     });
+    if (!r.ok) throw new Error('peek ' + r.status);
     const d = await r.json();
     if (d && typeof d.on === 'boolean') peekOn = d.on;
   } catch {}
@@ -2331,6 +2333,7 @@ async function peekNow() {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ now: true }), signal: AbortSignal.timeout(20000),
     });
+    if (!r.ok) throw new Error('peek ' + r.status);
     const d = await r.json();
     const res = (d && d.result) || {};
     const why = res.skipped || res.error || '';
