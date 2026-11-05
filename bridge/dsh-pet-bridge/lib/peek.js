@@ -140,7 +140,10 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
       const self = isSelf(p.proc, p.title);
       if (self && !manual) { st.skipped++; st.lastSkip = self; note('跳过（' + self + '）'); return { ok: false, skipped: 'self', why: self + '，先不打扰' }; }
       if (self && manual) note('手动触发，放行 self 判定（' + self + '）');
-      if (p.fullscreen) { st.skipped++; st.lastSkip = '全屏（大概在游戏或看片）'; note('跳过（全屏）'); return { ok: false, skipped: 'fullscreen', why: '全屏着，先不打扰' }; }
+      // 手动点了就照抓：全屏标签只用来拦定时那一路（全屏独占常抓出一片黑，抓了也白抓）
+      if (p.fullscreen && !manual) { st.skipped++; st.lastSkip = '全屏（大概在游戏或看片）'; note('跳过（全屏）'); return { ok: false, skipped: 'fullscreen', why: '全屏着，先不打扰' }; }
+      if (p.fullscreen && manual) note('手动触发，全屏也照抓');
+      if (p.win || p.monitor) note(`窗口 ${p.win || '?'} / 显示器 ${p.monitor || '?'}`);
 
       const lines = Array.isArray(p.lines) ? p.lines.filter((x) => x && x.length >= 2) : [];
       const fp = createHash('sha1').update([p.proc, p.title, lines.slice(0, 12).join('|')].join('\n')).digest('hex');

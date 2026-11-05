@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $res = [ordered]@{
   ok = $false; at = (Get-Date).ToString('o'); error = $null
   proc = ''; pid = 0; title = ''; fullscreen = $false
-  crop = ''; avg = -1; shot = ''; lines = @()
+  crop = ''; win = ''; monitor = ''; avg = -1; shot = ''; lines = @()
 }
 
 function Save-Result {
@@ -38,7 +38,10 @@ public class PeekWin32 {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
+  [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+  [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
 }
 '@
   }
@@ -61,7 +64,22 @@ public class PeekWin32 {
   $r = New-Object PeekWin32+RECT
   [void][PeekWin32]::GetWindowRect($h, [ref]$r)
   $winW = $r.Right - $r.Left; $winH = $r.Bottom - $r.Top
-  $res.fullscreen = (($winW -ge ($vw - 8)) -and ($winH -ge ($vh - 8)))
+  $res.win = "$winW`x$winH"
+  # 全屏判定要比**窗口所在的那块显示器**，不能比整个虚拟屏：
+  # 多屏并排时虚拟屏是各屏拼起来的，用虚拟屏比会把普通窗口也当成满屏（2026-11-05 误报过）。
+  $mw = 0; $mh = 0
+  try {
+    $mon = [PeekWin32]::MonitorFromWindow($h, 2)   # MONITOR_DEFAULTTONEAREST
+    $mi = New-Object PeekWin32+MONITORINFO
+    $mi.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($mi)
+    if ([PeekWin32]::GetMonitorInfo($mon, [ref]$mi)) {
+      $mw = $mi.rcMonitor.Right - $mi.rcMonitor.Left
+      $mh = $mi.rcMonitor.Bottom - $mi.rcMonitor.Top
+    }
+  } catch {}
+  if ($mw -le 0 -or $mh -le 0) { $mw = $vw; $mh = $vh }
+  $res.monitor = "$mw`x$mh"
+  $res.fullscreen = (($winW -ge ($mw - 8)) -and ($winH -ge ($mh - 8)))
 
   if ([PeekWin32]::IsIconic($h) -or $winW -le 40 -or $winH -le 40) { throw 'window minimized or too small' }
 
