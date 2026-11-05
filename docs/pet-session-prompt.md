@@ -88,6 +88,43 @@ ctx.tools.restrict({ allow?: string[], deny?: string[] })
 
 插件优先走 `allow`，因为 `allow` 不依赖「此刻哪些工具已经注册」，宣布完剩下的全被移走。名字里有一个不存在会整个失败（没装记忆插件就属于这种），这时它退到 `deny` 当时可见的全量并记一行日志，不会把会话搞崩。
 
+### 同一套口子还能治提示词和快照
+
+工具只是三块里最贵的一块。同一条会话的请求体里还有两笔：
+
+| 来源 | 每轮多少 | 里面是什么 |
+|---|---|---|
+| 系统提示段 | 约 8000 字符 | gate 的安装扫描说明、搜索插件的引擎名单和 fallback 链、present 的图片链接规矩、harness 源码路径、Web 表层说明、记忆写入协议 |
+| 运行时快照 | 4021 字符 | 热记忆（用户画像加记忆正文）、时间戳 |
+
+前者走 `ctx.on('system-prompt/assemble', …)`。那是 `dsh-system-prompt` 的 waterfall，**按作用域分发**——scoped listener 只收到自己那条 agent 的装配，而插件的挂载作用域就是 preset。拿到 `assembly.sections` 按名字过滤再返回，剩下的由你说了算。
+
+第一方段名就三个：
+
+| 段名 | 内容 |
+|---|---|
+| `harness:identity` | `You are an AI agent powered by DeepSeek Harness.` |
+| `deployment:persona-prefix` | 人设正文，`dsh-persona` 的 `prefix` 落在这儿 |
+| `deployment:persona-suffix` | `suffix`，桌宠预设里是空串 |
+
+`dsh-pet-trim` 默认只留这三个，其余全丢。一个段名都没匹配上时它原样放行，不会把提示词删空。
+
+后者更省事——**不用插件**。`dsh-persona` 自己带 `includeRuntimeContext`，设 false 等价于调 `ctx.systemPrompt.suppressRuntimeContext()`：
+
+```yaml
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              suffix: ''
+              includeRuntimeContext: false
+              prefix: |-
+                <人设 + 提示词正文>
+```
+
+代价是模型收不到时间戳，也收不到沙箱和审批策略——桌宠只用来说话，这些本来就用不上。要是希望她知道现在几点，删掉这一行，快照会连热记忆一起回来。
+
+三块一起收，固定开销从约 54k 字符降到 5k 出头。
+
 改完要重启 DSH，preset 是启动时装配的。
 
 ---
@@ -172,9 +209,8 @@ ctx.tools.restrict({ allow?: string[], deny?: string[] })
 
 ## 相关待办
 
-- **热记忆快照还没法按会话关。** 前面「只挂 persona 为什么还不是零工具」解决的是工具 schema，快照是另一条路：它由记忆插件在每轮往消息里追加一段，实测单次 4021 字符，没有 per-agent 开关，要关只能全局关。那份快照里大半是项目细节，对一句「嗯」是纯开销。等插件长出口子再说
-- 系统提示词里还有约八千字符是各插件无条件塞的：gate 的安装扫描说明、搜索插件的引擎名单和 fallback 链、present 的图片链接规矩、checkout 路径加上 Web GUI 那一段。同样没有按预设关的开关，只能等上游
-- 如果以后真有了「按会话关快照」，上面「可选：让她记得住事」那一节要跟着改成「默认关、按需开」
+- **提示词段和快照的收法已经在前面写全了**，剩下的是取舍不是能力：丢了运行时快照，她也就不知道当前时间了；想留着就把 `includeRuntimeContext` 那行删掉
+- 这些口子都算半个内部约定（`system-prompt/assemble` 的 waterfall 签名、三个第一方段名），DSH 大版本升级后先跑一遍再信它。`dsh-pet-trim` 每步都 try/catch + 记日志，最坏情况是收不动而照样说话
 
 ---
 

@@ -2,11 +2,14 @@
 
 ## 未发布
 
-### 桌宠会话的工具目录真的收窄了（新增 `bridge/dsh-pet-trim`）
+### 桌宠会话瘦身：工具、提示词段、运行时快照一起收（新增 `bridge/dsh-pet-trim`）
 - 起因：查桌宠会话的请求体，发现「只有人设、零工具」的预设根本没换来零工具。DSH 的工具注册表在宿主平面，插件一注册就对所有 agent 可见，preset 只能选呈现方式（native / ptc）、选不了内容。实测那条会话挂了 **41 个工具、schema 合计 37934 字符**，粗算九千多 token，每轮都付，而她的输出是十个字。
 - 新插件 `dsh-pet-trim`：挂进同一个 preset，`apply` 里调 `ctx.tools.restrict({ allow })`。限制落在调用作用域上，而挂载作用域就是 preset，所以只影响桌宠 agent。优先走 `allow`（不看此刻哪些工具已注册），名字对不上整个失败时退回 `deny` 当时可见的全量并留日志，不会把会话搞崩。
 - 默认 `allow: [mnemon_recall]`，配合桌宠卡里「想不起就问」那一段：能回忆，不能干活。改留什么由配置决定。
-- 系统提示词里另外约八千字符（gate 说明、搜索引擎名单、present 规矩、checkout 路径 + Web GUI 段）和每轮 4021 字符的热记忆快照依旧关不掉，没有 per-agent 开关，只能等上游。
+- 系统提示词里另外约八千字符（gate 说明、搜索引擎名单、present 规矩、checkout 路径 + Web GUI 段）和每轮 4021 字符的热记忆快照，第一版没治，第二版一起收了：
+  - 提示词段走 `ctx.on('system-prompt/assemble', …)`，同样是按作用域分发的 waterfall。默认只留 `harness:identity` / `deployment:persona-prefix` / `deployment:persona-suffix` 三个段，其余全丢；一个段都没匹配上时原样放行，不把提示词删空。
+  - 运行时快照不用插件：`dsh-persona` 自带 `includeRuntimeContext: false`，等价于 `ctx.systemPrompt.suppressRuntimeContext()`，桌宠预设里写在 persona 那一行。代价是收不到时间戳和沙箱/审批策略，桌宠用不上。
+  - 三块一起收，固定开销从约 54k 字符降到 5k 出头。
 - 桌面壳这边的 `tools\build-preset.mjs --pet` 会把这行插件一起写进 `preset-pet.patch.yml`；改完要重启 DSH（preset 是启动时装配的）。
 
 ### 设置项重排：托盘放开关，面板放填值
