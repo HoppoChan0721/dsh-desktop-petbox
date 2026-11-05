@@ -1002,13 +1002,14 @@ const BUBBLE_JS = `(() => {
     '#pet-bubble .dot{display:inline-block;width:5px;height:5px;margin:0 2px;border-radius:50%;background:#2b3d3a;opacity:.3;animation:petDot 1.1s infinite}' +
     '#pet-bubble .dot:nth-child(2){animation-delay:.15s}#pet-bubble .dot:nth-child(3){animation-delay:.3s}@keyframes petDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}';
   // 阶段气泡：圆滚滚的泡，从上半身任意位置冒出来，边往上飘边左右晃。几颗一起，各自 2~4 秒飘完消失。
-  // 外框 .pet-puff 只做位移（左右摆 + 上浮），.pet-tick 是那颗泡本体（圆/椭圆 + 高光）。
+  // 外框 .pet-puff 只做位移（左右摆 + 上浮），.pet-tick 是那颗泡本体（圆/椭圆）。
+  // 2026-11-05 去掉了左上角那个白色高光点（.pet-tick::after）和背景里的中心亮斑：
+  // 泡小字多时高光正好压在顶部那行字上，看着像字被糊掉一块；改成整体渐变后字清楚多了。
   style.textContent += '.pet-puff{position:fixed;left:0;top:0;pointer-events:none;z-index:99998;will-change:transform,opacity}' +
     '.pet-tick{position:relative;display:flex;align-items:center;justify-content:center;border-radius:50%;overflow:hidden;box-sizing:border-box;' +
-    'background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.94),rgba(230,245,255,.82) 44%,rgba(172,212,242,.68) 100%);' +
+    'background:linear-gradient(158deg,rgba(246,252,255,.9),rgba(228,244,255,.84) 48%,rgba(172,212,242,.72) 100%);' +
     'color:#1c3550;font:13px/1.22 system-ui,"Microsoft YaHei";pointer-events:none;' +
     'box-shadow:0 5px 14px rgba(26,74,128,.16),inset 0 0 0 1.5px rgba(255,255,255,.7),inset 0 -9px 16px rgba(140,190,235,.22)}' +
-    '.pet-tick::after{content:"";position:absolute;left:21%;top:12%;width:25%;height:15%;border-radius:50%;background:rgba(255,255,255,.92);filter:blur(1.2px);transform:rotate(-22deg)}' +
     '.pet-tick-txt{display:flex;align-items:center;justify-content:center;text-align:center;overflow:hidden;word-break:break-word;overflow-wrap:anywhere;white-space:pre-line}';
   // 回复她：气泡角上的小蓝钮 + 窗口内直接打字的输入卡。
   // 这两个是整窗唯一允许吃鼠标的 DOM（pointer-events:auto + data-pet-ui），
@@ -1427,7 +1428,7 @@ const BUBBLE_JS = `(() => {
     if (!tickOn) for (const el of tickPool.splice(0)) el.remove();
     return tickOn;
   };
-  // 一颗泡 = 外框 .pet-puff（只负责飘：上浮 + 左右摆 + 微转）+ 泡本体 .pet-tick（圆/椭圆 + 高光）
+  // 一颗泡 = 外框 .pet-puff（只负责飘：上浮 + 左右摆 + 微转）+ 泡本体 .pet-tick（圆/椭圆）
   window.__petTick = (text, ms) => {
     if (!tickOn) return null;
     const full = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim().slice(0, 40);
