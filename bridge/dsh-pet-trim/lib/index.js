@@ -30,10 +30,12 @@
 //         - deployment:persona-prefix
 //         - deployment:persona-suffix
 //       suppressContext: true   # 关掉每轮的运行时快照（时间戳、热记忆…）
+//       clock: true             # 自己补一行「现在是 …」，补上被压掉的时间
 //
-// 注意运行时快照那条：dsh-persona 自己就有 `includeRuntimeContext: false`，是官方开关，
-// 桌宠预设里直接写在 persona 那一行更省事。所以本插件的 suppressContext 默认关着，
-// 只在想不装 persona 开关、或者要单独压制时打开。
+// 时间那条要多说一句：运行时快照被压掉之后模型不知道现在几点，桌宠就会问「天亮了没」
+// 这种没法接的话，而快照里有用的也就时间这一条。所以默认注册一个 pet:now 段，文本是
+// 「现在是 {{petNow}}。」，变量每次组装求值。段和变量都是作用域的，主会话看不到。
+// `clock: false` 关掉它，模型就真的两眼一抹黑了。
 // 每一项都能单独关：`allow: []` 什么都不留，`keepSections: '*'` 保留全部段，
 // `suppressContext: false` 不动快照。
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -52,9 +54,37 @@ export const name = 'pet-trim'
 export const inject = ['tools', 'systemPrompt']
 
 const DEFAULT_TOOLS = ['mnemon_recall']
-// harness:identity 是第一方那句固定开场白；另外两段是 persona 插件落前缀和后缀的地方。
+// harness:identity 是第一方那句固定开场白；中间两段是 persona 插件落前缀和后缀的地方；
+// pet:now 是本插件自己补的一行时间（详见 trimClock）。
 // 其余段（工具指导、插件各自的规矩、harness 源码路径、Web 表层说明…）桌宠一条也用不上。
-const DEFAULT_SECTIONS = ['harness:identity', 'deployment:persona-prefix', 'deployment:persona-suffix']
+const DEFAULT_SECTIONS = ['harness:identity', 'deployment:persona-prefix', 'deployment:persona-suffix', 'pet:now']
+
+// ---- 0) 时间 ----
+// 运行时快照被整段压掉之后（persona 的 includeRuntimeContext: false），模型连现在几点都
+// 不知道，桌宠就会问「天亮了没」这种没法接的话。而快照里真正有用也就时间这一条。
+// 所以这里自己补：注册一个变量，每次组装求值，再放一个只在这个 agent 生效的段引用它。
+// 变量与段都是作用域的，主会话看不到，不会污染那边的提示词。
+const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+function nowText() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} ${WEEK[d.getDay()]}`
+}
+
+function trimClock(ctx) {
+  try {
+    ctx.effect(() => ctx.systemPrompt.variable('petNow', () => nowText()), 'pet-trim.variable()')
+    // order 10300 排在 persona 后缀（10200）之后，等于人设尾巴上补一句
+    ctx.effect(() => ctx.systemPrompt.section({
+      name: 'pet:now',
+      order: 10300,
+      text: '现在是 {{petNow}}。',
+    }), 'pet-trim.section()')
+    log('clock: section pet:now registered')
+  } catch (e) {
+    log('clock: failed: ' + (e && e.message))
+  }
+}
 
 // ---- 1) 工具目录 ----
 function trimTools(ctx, want) {
@@ -118,7 +148,9 @@ function trimSections(ctx, keep) {
 
 // ---- 3) 运行时快照 ----
 // 热记忆快照走的是 runtime context（user 角色的快照，不是系统提示段），每轮追加一次。
-// suppressRuntimeContext() 把调用作用域的动态上下文整体压制，时间戳也一起去。
+// 桌宠预设里用 dsh-persona 的 includeRuntimeContext: false 就压掉了，那边更省事。
+// 这个开关留着给「不挂 persona、想单独压制」的场景，默认关。
+// 时间不会再丢：trimClock 补了一个只在这个 agent 生效的时间段。
 function trimContext(ctx) {
   try {
     const lift = ctx.systemPrompt.suppressRuntimeContext()
@@ -135,8 +167,10 @@ export function apply(ctx, config = {}) {
     ? config.keepSections
     : Array.isArray(config.keepSections) ? config.keepSections : DEFAULT_SECTIONS
   const suppressContext = config.suppressContext === true
+  const clock = config.clock !== false
 
   trimTools(ctx, allow)
+  if (clock) trimClock(ctx)
   trimSections(ctx, keepSections)
   if (suppressContext) trimContext(ctx)
 }

@@ -8,7 +8,7 @@
 - 默认 `allow: [mnemon_recall]`，配合桌宠卡里「想不起就问」那一段：能回忆，不能干活。改留什么由配置决定。
 - 系统提示词里另外约八千字符（gate 说明、搜索引擎名单、present 规矩、checkout 路径 + Web GUI 段）和每轮 4021 字符的热记忆快照，第一版没治，第二版一起收了：
   - 提示词段走 `ctx.on('system-prompt/assemble', …)`，同样是按作用域分发的 waterfall。默认只留 `harness:identity` / `deployment:persona-prefix` / `deployment:persona-suffix` 三个段，其余全丢；一个段都没匹配上时原样放行，不把提示词删空。
-  - 运行时快照不用插件：`dsh-persona` 自带 `includeRuntimeContext: false`，等价于 `ctx.systemPrompt.suppressRuntimeContext()`，桌宠预设里写在 persona 那一行。代价是收不到时间戳和沙箱/审批策略，桌宠用不上。
+  - 运行时快照不用插件：`dsh-persona` 自带 `includeRuntimeContext: false`，等价于 `ctx.systemPrompt.suppressRuntimeContext()`，桌宠预设里写在 persona 那一行。快照里连时间戳一起没了，所以 `dsh-pet-trim` 又补了一个只在这个 agent 生效的 `pet:now` 段，文本是 `现在是 {{petNow}}。`，变量每次组装求值——时间照旧知道，记忆正文和沙箱/审批策略不要了。
   - 三块一起收，固定开销从约 54k 字符降到 5k 出头。
 - 桌面壳这边的 `tools\build-preset.mjs --pet` 会把这行插件一起写进 `preset-pet.patch.yml`；改完要重启 DSH（preset 是启动时装配的）。
 

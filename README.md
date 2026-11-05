@@ -156,7 +156,7 @@ node cli/pet.mjs fps 30            # 舞台帧率上限（0 = 不限）
 
 **但「零工具」不是挂个只有 persona 的 preset 就到手的。** DSH 的工具注册表在宿主平面：插件一注册，工具就对所有 agent 可见，preset 只能选呈现方式（native / ptc），选不了内容。所以那条会话默认会继承整套干活工具——实测 41 个、schema 合计 37934 字符，约等于九千多 token，每轮都付，而她只要说十个字。要真的收窄，得在同一个 preset 里再挂 [`bridge/dsh-pet-trim`](bridge/dsh-pet-trim)，它调一次 `ctx.tools.restrict({ allow })` 把目录砍到只剩需要的几个。留什么由你自己定，默认只留记忆召回；没装记忆插件的部署会自动退化成「全部拒绝」，不会因为名字对不上而崩。
 
-同一个插件顺手把系统提示段也过滤了：只剩 `harness:identity` 和人设的前后缀三段，gate 说明、搜索引擎名单、present 规矩、harness 源码路径、Web 表层那约八千字符全丢。每轮追加的运行时快照走 `dsh-persona` 自带的 `includeRuntimeContext: false`，热记忆和时间戳一起压掉。三块一起收，固定开销从约 54k 字符降到 5k 出头，写法和代价在 [docs/pet-session-prompt.md](docs/pet-session-prompt.md)。
+同一个插件顺手把系统提示段也过滤了：只剩 `harness:identity` 和人设的前后缀三段，gate 说明、搜索引擎名单、present 规矩、harness 源码路径、Web 表层那约八千字符全丢。每轮追加的运行时快照走 `dsh-persona` 自带的 `includeRuntimeContext: false`，热记忆和沙箱策略一起压掉，时间则由插件补一行 `现在是 …`，她还是知道现在几点。三块一起收，固定开销从约 54k 字符降到 5k 出头，写法和代价在 [docs/pet-session-prompt.md](docs/pet-session-prompt.md)。
 
 ## 可选：反向桥（把她变成输入设备）
 
