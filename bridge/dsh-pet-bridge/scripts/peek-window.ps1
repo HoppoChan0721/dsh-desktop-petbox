@@ -4,6 +4,7 @@
   [double]$Scale = 1.0,
   [string]$OcrPython = '',
   [string]$OcrScript = '',
+  [string]$Target = '',
   [switch]$PickActive
 )
 # 窥屏探针：抓前台窗口画面 + 本地 OCR，结果写成一份 JSON 给 Node 读。
@@ -50,18 +51,60 @@ public class PeekWin32 {
   [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int idx);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
   delegate bool EnumProc(IntPtr h, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+
+  const int GWL_EXSTYLE = -20;
+  const int WS_EX_TOOLWINDOW = 0x00000080;
+  const int WS_EX_APPWINDOW = 0x00040000;
+  const uint GW_OWNER = 4;
+
+  // 「任务栏上真有一格」的判定：可见、不是工具窗、没有 owner（对话框跟着主人窗走，不算独立一格）。
+  // 桌宠自己那层透明壳是 skipTaskbar + 无边框，天然被这组条件排除。
+  static bool IsTaskbarWindow(IntPtr h) {
+    if (!IsWindowVisible(h)) return false;
+    if (IsIconic(h)) return false;
+    if (GetWindowTextLength(h) < 2) return false;
+    int ex = GetWindowLong(h, GWL_EXSTYLE);
+    bool tool = (ex & WS_EX_TOOLWINDOW) != 0;
+    bool app = (ex & WS_EX_APPWINDOW) != 0;
+    if (tool && !app) return false;
+    if (GetWindow(h, GW_OWNER) != IntPtr.Zero && !app) return false;
+    return true;
+  }
+
+  // 按「进程名 / 标题片段」找窗口：主人想钉死某个窗口时用（peekTarget）。
+  public static IntPtr FindByTarget(string target) {
+    if (string.IsNullOrEmpty(target)) return IntPtr.Zero;
+    string want = target.ToLowerInvariant();
+    IntPtr best = IntPtr.Zero;
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      if (!IsTaskbarWindow(h)) return true;
+      int pid; GetWindowThreadProcessId(h, out pid);
+      string name = "";
+      try { name = System.Diagnostics.Process.GetProcessById(pid).ProcessName; } catch { return true; }
+      var sbt = new System.Text.StringBuilder(260);
+      GetWindowText(h, sbt, 260);
+      string t = sbt.ToString();
+      if (name.ToLowerInvariant().Contains(want) || t.ToLowerInvariant().Contains(want)) {
+        best = h;
+        return false;
+      }
+      return true;
+    }, IntPtr.Zero);
+    return best;
+  }
+
   // 沿 Z 序（上到下）找第一个「真实」窗口：跳过不可见 / 最小化 / 没标题 / electron（桌宠壳子自己）。
   // 为什么需要：点托盘菜单那一瞬前台会变成桌宠窗口，拿它去截图只会拍到她自己的空壳。
   // 尺寸也管着：AIDA64 的 OSD、输入法候选条这类小悬浮窗常置顶，拍它等于拍了个字幕。
   public static IntPtr FindTopCandidate() {
     IntPtr found = IntPtr.Zero;
     EnumWindows(delegate(IntPtr h, IntPtr l) {
-      if (!IsWindowVisible(h)) return true;
-      if (IsIconic(h)) return true;
-      if (GetWindowTextLength(h) < 2) return true;
+      if (!IsTaskbarWindow(h)) return true;
       RECT rc;
       if (!GetWindowRect(h, out rc)) return true;
       if ((rc.Right - rc.Left) < 320 || (rc.Bottom - rc.Top) < 240) return true;
@@ -86,9 +129,14 @@ public class PeekWin32 {
   $vw = [PeekWin32]::GetSystemMetrics(78); $vh = [PeekWin32]::GetSystemMetrics(79)
   $vr = $vl + $vw; $vb = $vt + $vh
 
+  # 选窗口，三层优先：钉死的 target > 手动触发的「任务栏最近窗口」 > 前台窗口
   $h = [PeekWin32]::GetForegroundWindow()
-  if ($PickActive) {
-    # 手动触发时前台往往是桌宠窗口（点托盘菜单就抢焦点了），换成 Z 序里第一个真实窗口
+  if ($Target) {
+    $cand = [PeekWin32]::FindByTarget($Target)
+    if ($cand -ne [IntPtr]::Zero) { $h = $cand; $res.picked = 'target' }
+  }
+  if (-not $res.picked -and $PickActive) {
+    # 手动触发时前台往往是桌宠窗口（点托盘菜单就抢焦点了），换成任务栏里最靠前的那个真实窗口
     $cand = [PeekWin32]::FindTopCandidate()
     if ($cand -ne [IntPtr]::Zero) {
       if ($cand -ne $h) { $res.picked = 'zorder' }

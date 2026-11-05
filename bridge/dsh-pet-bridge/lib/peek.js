@@ -42,7 +42,9 @@ function probe(cfg, opts = {}) {
       // 装了 RapidOCR 就交给它（中文准得多），没装 ps1 自己回落系统 OCR
       if (cfg.peekOcrPython) args.push('-OcrPython', String(cfg.peekOcrPython));
       if (cfg.peekOcrScript) args.push('-OcrScript', String(cfg.peekOcrScript));
-      // 手动点的时候前台会被托盘菜单抢成桌宠窗口，让探针沿 Z 序重挑一个真实窗口
+      // 钉死窗口：给了 target 就只瞄它（进程名或标题片段），找不到再退回常规挑法
+      if (cfg.peekTarget) args.push('-Target', String(cfg.peekTarget));
+      // 手动点的时候前台会被托盘菜单抢成桌宠窗口，让探针沿任务栏顺序重挑一个真实窗口
       if (opts.pickActive) args.push('-PickActive');
       child = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
     } catch (e) {

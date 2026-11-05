@@ -65,6 +65,7 @@ const DEFAULTS = {
   peekScale: 2,                     // 截图放大倍数后再 OCR（中文小字 2x 明显更准）
   peekOcrPython: '',                // RapidOCR 的 Python 解释器（venv 里的 python.exe），留空只用系统 OCR
   peekOcrScript: '',                // RapidOCR 的入口脚本 ocr.py，留空同上
+  peekTarget: '',                   // 钉死要瞄的窗口（进程名或标题片段），留空就跟任务栏顺序走
   peekTimeoutMs: 20000,             // 探针整轮超时（RapidOCR 冷启动要 5 秒量级），超了就 kill 当这轮跳过
   peekTmpDir: '',                   // 截图 + JSON 的落点，默认 $DSH_HOME/tmp/pet-peek
 };
