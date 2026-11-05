@@ -2352,17 +2352,22 @@ function buildMenu() {
   return Menu.buildFromTemplate([
     { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return createWindow(); win.isVisible() ? win.hide() : win.show(); } },
     { type: 'separator' },
-    // 顶层只留 5 组：互动 / 外观 / 情绪 / 设置 / 更多。开关类都收进「互动」，别越铺越长。
+    // 2026-11-05 重排：托盘只放「随手拨的开关」，按她怎么干活分组；
+    // 要填值、要读说明、设一次就不动的东西全部收进「设置…」面板（尺寸滑杆 / 路径 / 帧率 / 联动）。
+    // 口径：互动 = 她怎么回应你；说话 = 她怎么开口；外观 = 长相和位置；情绪 = 现在逗她一下。
     { label: '互动', submenu: [
       (() => { const a = affinityInfo(); return { label: `亲密度 Lv.${a.level} · 今天 ${a.today} 下 · 连续 ${a.streak} 天`, enabled: false }; })(),
       { type: 'separator' },
       { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
       { label: '模型桥接（点她会叫醒 DSH 会话）', type: 'checkbox', checked: bridgeOn, click: (item) => setBridge(item.checked, true) },
-      { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },
-      { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
       { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
       { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
       { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
+    ] },
+    { label: '说话', submenu: [
+      { label: '阶段气泡（会话进度冒小泡）', type: 'checkbox', checked: tickBubbleOn(), click: (item) => { saveCfg({ tickBubble: item.checked }); syncTickBubble(); } },
+      { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },
+      { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
       { type: 'separator' },
       { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (peekLive ? '' : ' · 桥没在跑'), type: 'checkbox', checked: peekOn, click: (item) => peekToggle(item.checked) },
       { label: `  现在瞄一眼试试 · ${peekNote}`, enabled: peekLive, click: () => peekNow() },
@@ -2399,7 +2404,7 @@ function buildMenu() {
       { label: '随机来一个', click: () => { const ks = Object.keys(MOODS); sendMood(ks[Math.floor(Math.random() * ks.length)], 0.7); } },
     ] },
     { label: '复原服装（衣服回默认档）', click: () => resetOutfit() },
-    { label: '设置…（尺寸 / 鲸语 / 模型 / 端口）', click: () => createPanel() },
+    { label: '设置…（尺寸滑杆 / 路径 / 帧率 / 联动）', click: () => createPanel() },
     { type: 'separator' },
     { label: '更多', submenu: [
       { label: '重新载入', click: () => loadStage() },

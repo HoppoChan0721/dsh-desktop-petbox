@@ -1,4 +1,4 @@
-# whale-pet-shell
+﻿# whale-pet-shell
 
 把 **鲸语（Jingyu Live2D Agent）** 的 `?stage=1` 舞台变成 Windows 桌面上的透明桌宠外壳。
 
@@ -162,7 +162,7 @@ node cli/pet.mjs fps 30            # 舞台帧率上限（0 = 不限）
 {"ts":"2026-11-01T07:15:04.608Z","seq":4,"zone":"head","nx":0.501,"ny":0.2}
 ```
 
-这条线可以单独关掉：`config.bridge`（托盘「互动 ▸ 模型桥接」/ 设置面板「互动」里的第二个勾选框 / `node cli/pet.mjs bridge off` / `POST :61943/bridge {"on":false}`）。关掉后表情、台词、`touch.jsonl` 全都照旧，只是不再叫醒会话——适合想自己逗她玩、又不想每摸一下都烧一次模型的时候。它和 `interactive` 是两层开关：`interactive` 关了是连本地反应都没有。
+这条线可以单独关掉：`config.bridge`（托盘「互动 ▸ 模型桥接」/ `node cli/pet.mjs bridge off` / `POST :61943/bridge {"on":false}`）。关掉后表情、台词、`touch.jsonl` 全都照旧，只是不再叫醒会话——适合想自己逗她玩、又不想每摸一下都烧一次模型的时候。它和 `interactive` 是两层开关：`interactive` 关了是连本地反应都没有。
 
 同一份数据也会追加进 `data/touch.jsonl`（超过 256KB 自动轮转成 `touch.jsonl.1`），随时可以 `GET /touches` 或 `node cli/pet.mjs touches` 回看主人都点了哪儿。
 
@@ -180,14 +180,14 @@ DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后�
 
 - 输入卡用 `Esc` 取消，点别处（窗口失焦）也会收掉；发送失败（DSH 没开、端口不通）时卡片不关，原因写在下面一行，文字留在框里。
 - 打字期间窗口不穿透；关掉卡片、鼠标离开就恢复。那颗钮是整窗唯一吃鼠标的 DOM（标了 `data-pet-ui`），气泡正文和其它位置照旧穿透，不影响在上面摸她。
-- 入口：托盘「互动 ▸ 气泡回复钮」、设置面板「互动」里的勾选框、`config.replyBtn`；`node cli/pet.mjs reply "在吗"` 和 `POST :61943/reply {"text":"…"}` 是同一件事，方便脚本里用。
+- 入口：托盘「说话 ▸ 气泡回复钮」、`config.replyBtn`；`node cli/pet.mjs reply "在吗"` 和 `POST :61943/reply {"text":"…"}` 是同一件事，方便脚本里用。
 
 **她也会自己瞄一眼屏幕**（`peek`，默认关）：桥隔 30 分钟（±20% 抖动）抓一张**前台窗口**的截图，跑 Windows 自带的 `Windows.Media.Ocr` 本地识别，再拼成一条「你刚瞄了眼主人屏幕」的事件投给桌宠会话——于是她会主动开口，而不是等你摸。回话照旧走 `echoToPet` 出气泡 + 语音。
 
 - 为什么是本地 OCR 而不是视觉模型：桌宠预设「只有人设、没有工具」，她调不到 `read_image`；每半小时一张图给模型是稳定的视觉 token 开销，截图还会进会话记录；系统 OCR 是全离线、零依赖、不花钱，认不出就降级成「进程名 + 窗口标题」，永远不报错。
 - 只截前台那一块，不截整屏；探针和截图落在 `$DSH_HOME/tmp/pet-peek`，读完即删。
 - 跳过：静默时段（默认 1~8 点）、主人在 DSH 里说话、桌宠自己在前台、全屏（游戏/看片）、画面指纹跟上次一样。全屏独占抓出来是黑的时候只报标题，不硬猜。
-- 开关：托盘「互动 ▸ 窥屏」和「现在瞄一眼试试」、`node cli/pet.mjs peek on|off|now`、`GET/POST :61944/peek`（`{"on":true}` 开关，`{"now":true}` 立刻跑一轮）；状态存 `$DSH_HOME/pet-bridge.json`，重启记得。
+- 开关：托盘「说话 ▸ 窥屏」和「现在瞄一眼试试」、`node cli/pet.mjs peek on|off|now`、`GET/POST :61944/peek`（`{"on":true}` 开关，`{"now":true}` 立刻跑一轮）；状态存 `$DSH_HOME/pet-bridge.json`，重启记得。
 
 安装（DSH 侧）：
 
