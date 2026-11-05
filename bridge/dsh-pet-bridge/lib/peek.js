@@ -119,9 +119,12 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
   function note(msg) { st.lastResult = msg; log('peek: ' + msg); }
 
   async function run(reason) {
-    if (st.busy) return { ok: false, skipped: 'busy' };
-    if (!st.on) return { ok: false, skipped: 'off' };
-    if (inQuietHours(cfg)) { st.lastSkip = '静默时段'; return { ok: false, skipped: 'quiet-hours' }; }
+    // 手动触发（托盘「现在瞄一眼试试」/ /peek {"now":true}）是主人自己点的，等于当场授权：
+    // 这时候别拿「主人在跟你说话」把自己挡住——他点的那一刻前台必然就是 DSH 窗口。
+    const manual = reason === 'manual';
+    if (st.busy) return { ok: false, skipped: 'busy', why: '上一轮还没跑完' };
+    if (!st.on) return { ok: false, skipped: 'off', why: '窥屏开关是关着的' };
+    if (!manual && inQuietHours(cfg)) { st.lastSkip = '静默时段'; return { ok: false, skipped: 'quiet-hours', why: '静默时段' }; }
     st.busy = true;
     st.lastTryAt = Date.now();
     try {
@@ -130,20 +133,22 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
         st.skipped++;
         st.lastSkip = p.error || 'probe failed';
         note('探针失败：' + (p.error || '?'));
-        return { ok: false, skipped: 'probe-failed', error: p.error || '' };
+        return { ok: false, skipped: 'probe-failed', why: '屏幕没抓到', error: p.error || '' };
       }
       st.lastTitle = `${p.proc || '?'}｜${clip(p.title, 40)}`;
 
-      const why = isSelf(p.proc, p.title);
-      if (why) { st.skipped++; st.lastSkip = why; note('跳过（' + why + '）'); return { ok: false, skipped: 'self', why }; }
-      if (p.fullscreen) { st.skipped++; st.lastSkip = '全屏（大概在游戏或看片）'; note('跳过（全屏）'); return { ok: false, skipped: 'fullscreen' }; }
+      const self = isSelf(p.proc, p.title);
+      if (self && !manual) { st.skipped++; st.lastSkip = self; note('跳过（' + self + '）'); return { ok: false, skipped: 'self', why: self + '，先不打扰' }; }
+      if (self && manual) note('手动触发，放行 self 判定（' + self + '）');
+      if (p.fullscreen) { st.skipped++; st.lastSkip = '全屏（大概在游戏或看片）'; note('跳过（全屏）'); return { ok: false, skipped: 'fullscreen', why: '全屏着，先不打扰' }; }
 
       const lines = Array.isArray(p.lines) ? p.lines.filter((x) => x && x.length >= 2) : [];
       const fp = createHash('sha1').update([p.proc, p.title, lines.slice(0, 12).join('|')].join('\n')).digest('hex');
       if (fp === st.fingerprint && Date.now() - st.lastAt < baseInterval() * 2) {
         st.skipped++; st.lastSkip = '画面没变'; note('跳过（画面跟上次一样）');
-        return { ok: false, skipped: 'same' };
+        return { ok: false, skipped: 'same', why: '画面跟上次一样，没新东西' };
       }
+
 
       const ocr = clip(lines.join(' / '), Number(cfg.peekMaxChars) || 260);
       const head = `（桌宠｜你刚刚自己瞄了眼主人的屏幕：${p.proc || '某个程序'}`

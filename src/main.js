@@ -2336,7 +2336,7 @@ async function peekNow() {
     if (!r.ok) throw new Error('peek ' + r.status);
     const d = await r.json();
     const res = (d && d.result) || {};
-    const why = res.skipped || res.error || '';
+    const why = res.why || res.skipped || res.error || '不知道为啥';
     say(res.delivered ? '瞄到了，等下说' : `这轮没瞄成：${why}`, false, 4200);
   } catch {
     say('桥插件没在跑', false, 3600);
