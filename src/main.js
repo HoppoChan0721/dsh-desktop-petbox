@@ -2412,6 +2412,25 @@ async function peekNow() {
   peekSync();
 }
 
+// 托盘上的两个动态标签：状态写在组名里，菜单里就不用塞灰行占位。
+// 菜单每 3 秒重建一次，所以这两个函数每 3 秒会被调一次，别在这里发请求。
+function moodMenuLabel() {
+  if (!moodLive) return moodSummary || '没读到';
+  const base = moodSummary || '平静';
+  // 平静的时候没什么可解释的，别把「因为被摸了一下」也挂上去
+  const why = (moodReason && !base.startsWith('平静')) ? '·' + moodReason : '';
+  const t = base + why;
+  return t.length > 24 ? t.slice(0, 23) + '…' : t;
+}
+function urgeMenuLabel() {
+  if (!moodUrge || !moodUrge.enabled) return '没开';
+  const name = ({ quiet: '安静', normal: '正常', clingy: '黏人', chatty: '话痨' })[moodUrge.intensity]
+    || moodUrge.intensity || '正常';
+  const cap = moodUrge.dayCap ? `/${moodUrge.dayCap}` : '';
+  const burst = moodUrge.burst ? `　正说第 ${moodUrge.burst.step + 1} 句` : '';
+  return `${name}　今天 ${moodUrge.today || 0}${cap} 句${burst}`;
+}
+
 function buildMenu() {
   const fitNow = loadCfg().fit === 'full' ? 'full' : 'portrait';
   const bubbleNow = loadCfg().bubblePos || 'bottom';
@@ -2422,7 +2441,9 @@ function buildMenu() {
     { type: 'separator' },
     // 2026-11-05 重排：托盘只放「随手拨的开关」，按她怎么干活分组；
     // 要填值、要读说明、设一次就不动的东西全部收进「设置…」面板（尺寸滑杆 / 路径 / 帧率 / 联动）。
-    // 口径：互动 = 她怎么回应你；说话 = 她怎么开口；外观 = 长相和位置；情绪 = 现在逗她一下。
+    // 口径：互动 = 她怎么回应你；说话 = 她怎么开口；外观 = 长相和位置；情绪 = 她现在怎么了。
+    // 2026-11-06 补一条硬规矩：**状态一律写进组名，组里只放能点的**。
+    // 灰行夹在开关中间最难认，一眼看不出哪个能按。
     { label: '互动', submenu: [
       (() => { const a = affinityInfo(); return { label: `亲密度 Lv.${a.level} · 今天 ${a.today} 下 · 连续 ${a.streak} 天`, enabled: false }; })(),
       { type: 'separator' },
@@ -2439,18 +2460,6 @@ function buildMenu() {
       { type: 'separator' },
       { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (peekLive ? '' : ' · 桥没在跑'), type: 'checkbox', checked: peekOn, click: (item) => peekToggle(item.checked) },
       { label: `  现在瞄一眼试试 · ${peekNote}`, enabled: peekLive, click: () => peekNow() },
-      { type: 'separator' },
-      { label: `心情 · ${moodSummary || '没读到'}`, enabled: false },
-      ...(moodReason ? [{ label: `  因为 ${moodReason}`, enabled: false }] : []),
-      { label: '  哄好她（清空情绪账本）', enabled: moodLive, click: () => moodReset() },
-      { label: `  主动开口 · 今天 ${(moodUrge && moodUrge.today) || 0} 次${(moodUrge && moodUrge.enabled) ? '' : '（没开）'}`, enabled: false },
-      { label: '  多说点 / 少说点', enabled: moodLive && !!(moodUrge && moodUrge.enabled), submenu: [
-        { label: '安静（一天四五句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'quiet', click: () => moodIntensity('quiet') },
-        { label: '正常（默认）', type: 'radio', checked: !moodUrge || !moodUrge.intensity || moodUrge.intensity === 'normal', click: () => moodIntensity('normal') },
-        { label: '黏人', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'clingy', click: () => moodIntensity('clingy') },
-        { label: '话痨', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'chatty', click: () => moodIntensity('chatty') },
-      ] },
-      { label: '  现在让她说一句', enabled: moodLive && !!(moodUrge && moodUrge.enabled), click: () => moodUrgeNow() },
     ] },
     { label: '外观', submenu: [
       { label: '全身 / 近景', submenu: [
@@ -2478,10 +2487,18 @@ function buildMenu() {
       { type: 'separator' },
       { label: '置顶显示', type: 'checkbox', checked: alwaysOnTop, click: (item) => { alwaysOnTop = item.checked; saveCfg({ onTop: alwaysOnTop }); if (win) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver'); } },
     ] },
-    { label: '情绪', submenu: [
-      ...[['happy','开心'],['shy','害羞'],['excited','兴奋'],['thinking','思考'],['sleepy','困'],['proud','得意'],['annoyed','嫌弃'],['surprised','吃惊']].map(([e, label]) => ({ label, click: () => sendMood(e, 0.7) })),
+    // 「情绪」这一组只放能动手的：状态写在组名上，菜单里不留灰行。
+    // 原来那八个预设表情触发器撤了——手动逗她那一下没什么用，表情本来就跟着会话走。
+    { label: `情绪 · ${moodMenuLabel()}`, submenu: [
+      { label: '哄好她（清空情绪账本）', enabled: moodLive, click: () => moodReset() },
       { type: 'separator' },
-      { label: '随机来一个', click: () => { const ks = Object.keys(MOODS); sendMood(ks[Math.floor(Math.random() * ks.length)], 0.7); } },
+      { label: `主动开口 · ${urgeMenuLabel()}`, enabled: moodLive && !!(moodUrge && moodUrge.enabled), submenu: [
+        { label: '安静（一天四五句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'quiet', click: () => moodIntensity('quiet') },
+        { label: '正常（默认，八句左右）', type: 'radio', checked: !moodUrge || !moodUrge.intensity || moodUrge.intensity === 'normal', click: () => moodIntensity('normal') },
+        { label: '黏人（十几句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'clingy', click: () => moodIntensity('clingy') },
+        { label: '话痨（二三十句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'chatty', click: () => moodIntensity('chatty') },
+      ] },
+      { label: '现在让她说一句', enabled: moodLive && !!(moodUrge && moodUrge.enabled), click: () => moodUrgeNow() },
     ] },
     { label: '复原服装（衣服回默认档）', click: () => resetOutfit() },
     { label: '设置…（尺寸滑杆 / 路径 / 帧率 / 联动）', click: () => createPanel() },
