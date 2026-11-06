@@ -234,14 +234,29 @@ async function main() {
   if (cmd === 'peek') {
     // 窥屏：她自己隔一阵瞄一眼屏幕再主动开口。node pet.mjs peek on|off|now|（空=读状态）
     // 走桥插件（61944），不是桌宠壳——定时器活在 DSH 那边，壳子关了也不影响判断。
+    // peek interval <分钟> 换基准间隔：热改，不用重启，落 pet-bridge.json。
     const BRIDGE = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
     const a = String(F._[0] || '').toLowerCase();
     let r;
     if (a === 'on' || a === 'off') r = await jpost(`${BRIDGE}/peek`, { on: a === 'on' });
     else if (a === 'now') r = await jpost(`${BRIDGE}/peek`, { now: true });
-    else r = await jget(`${BRIDGE}/peek`);
+    else if (a === 'interval') {
+      const m = Number(F._[1]);
+      if (!Number.isFinite(m) || m <= 0) {
+        const cur = await jget(`${BRIDGE}/peek`);
+        const base = cur.data && cur.data.baseMs;
+        console.log(base ? `现在是 ${Math.round(base / 60000)} 分钟一次` : '读不到当前间隔');
+        return;
+      }
+      r = await jpost(`${BRIDGE}/peek`, { minutes: m });
+    } else r = await jget(`${BRIDGE}/peek`);
     if (r.status !== 200) {
       console.log('失败：桥插件没在跑？(' + ((r.data && r.data.error) || r.status) + ')');
+      return;
+    }
+    if (a === 'interval' && r.data && r.data.baseMs) {
+      console.log(`好了，每 ${Math.round(r.data.baseMs / 60000)} 分钟瞄一次`
+        + (r.data.factor !== 1 ? `（情绪让它缩到 ${Math.max(1, Math.round(r.data.intervalMs / 60000))} 分钟）` : ''));
       return;
     }
     console.log(JSON.stringify(r.data, null, 2));
@@ -501,7 +516,7 @@ const USAGE = `
   fit <full|portrait>            全身 / 近景
   cursor [on|off]                指针追踪（眼睛+头+身子跟着鼠标；不带参数=读）
   volume [0..1 或 0..100]        语音音量（不带参数=读）
-  peek [on|off|now]              窥屏：隔一阵自己瞄屏幕再主动开口（不带参数=读状态）
+  peek [on|off|now|interval <分>] 窥屏：隔一阵自己瞄屏幕再搭话；interval 换间隔（不用重启）
   mood [reset|urge|intensity <档>]  心情 / 哄好 / 立刻问她想不想开口 / 换主动开口的浓度
   stop                           停住并回待机
 

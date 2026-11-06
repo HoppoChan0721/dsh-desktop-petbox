@@ -88,12 +88,24 @@ function inQuietHours(cfg) {
   return from < to ? (h >= from && h < to) : (h >= from || h < to);
 }
 
+// 间隔的合法范围：一分钟到一天。再短就是拿探针刷自己的盘，再长等于关了。
+// 界面上只给几档预设，但接口照收任意值，方便调参时直接砸数字。
+const MIN_INTERVAL_MS = 60 * 1000;
+const MAX_INTERVAL_MS = 24 * 3600 * 1000;
+const clampInterval = (ms) => {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return 30 * 60 * 1000;
+  return Math.min(MAX_INTERVAL_MS, Math.max(MIN_INTERVAL_MS, Math.round(n)));
+};
+
 export function createPeek({ cfg, log, deliver, onStateChange, onScene, intervalFactor }) {
   const dir = cfg.peekTmpDir || join(process.env.DSH_HOME || tmpdir(), 'tmp', 'pet-peek');
   cfg.peekTmpDir = dir;
 
   const st = {
     on: cfg.peek === true || cfg.peek === 'on',
+    // 基准间隔。可以运行时改（托盘 / CLI / HTTP），不用重启；改完落 pet-bridge.json。
+    intervalMs: clampInterval(cfg.peekIntervalMs),
     nextAt: 0,
     lastAt: 0,
     lastTryAt: 0,
@@ -115,13 +127,15 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, interval
       return Number.isFinite(f) && f > 0 ? Math.min(6, Math.max(0.2, f)) : 1;
     } catch { return 1; }
   };
-  const baseInterval = () => (Number(cfg.peekIntervalMs) || 30 * 60 * 1000) * factor();
+  const baseInterval = () => st.intervalMs * factor();
   const scheduleNext = () => { st.nextAt = Date.now() + rand(baseInterval()); };
 
   function state() {
     return {
       on: st.on,
-      intervalMs: baseInterval(),
+      intervalMs: baseInterval(),      // 生效值：基准 × 情绪倍率
+      baseMs: st.intervalMs,           // 主人设定的基准，界面上拨的就是它
+      factor: factor(),
       nextAt: st.nextAt ? new Date(st.nextAt).toISOString() : '',
       nextInSec: st.nextAt ? Math.max(0, Math.round((st.nextAt - Date.now()) / 1000)) : 0,
       lastAt: st.lastAt ? new Date(st.lastAt).toISOString() : '',
@@ -255,5 +269,14 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, interval
 
   function stop() { if (ticker) { clearInterval(ticker); ticker = null; } }
 
-  return { start, stop, run, state, setOn, get on() { return st.on; } };
+  /** 换基准间隔。立刻重排下一次，不用重启；返回真正生效的值。 */
+  function setIntervalMs(ms) {
+    st.intervalMs = clampInterval(ms);
+    if (st.on) scheduleNext();
+    log('peek interval -> ' + Math.round(st.intervalMs / 60000) + 'min');
+    try { onStateChange && onStateChange(state()); } catch {}
+    return st.intervalMs;
+  }
+
+  return { start, stop, run, state, setOn, setIntervalMs, get on() { return st.on; } };
 }

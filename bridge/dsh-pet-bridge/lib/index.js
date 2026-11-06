@@ -120,6 +120,8 @@ export function apply(ctx, config = {}) {
   let peekOn = cfg.peek === true || cfg.peek === 'on';
   // 主动开口的浓度。配置里给了就用配置的，否则沿用上一次拨到的那档（跨重启记得）
   let urgeIntensity = cfg.moodUrgeIntensity || '';
+  // 窥屏基准间隔。同样可以运行时改，改完落盘
+  let peekIntervalMs = Number(cfg.peekIntervalMs) || 30 * 60 * 1000;
 
   if (statePath) {
     try {
@@ -127,12 +129,13 @@ export function apply(ctx, config = {}) {
       if (!bound && st.sessionId) bound = st.sessionId;
       if (!petSid && st.petSessionId) petSid = st.petSessionId;
       if (typeof st.peekOn === 'boolean') peekOn = st.peekOn;   // 开关要跨重启记住
+      if (Number(st.peekIntervalMs) > 0) peekIntervalMs = Number(st.peekIntervalMs);
       if (!urgeIntensity && st.urgeIntensity) urgeIntensity = st.urgeIntensity;
     } catch {}
   }
   function persist() {
     if (!statePath) return;
-    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, urgeIntensity, at: new Date().toISOString() }, null, 1)); } catch {}
+    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, peekIntervalMs, urgeIntensity, at: new Date().toISOString() }, null, 1)); } catch {}
   }
 
   // ---- 情绪（2026-11-06）----
@@ -464,14 +467,18 @@ export function apply(ctx, config = {}) {
   // 定时瞄前台窗口 → OCR → 当成一条「事件」投给桌宠会话（跟她主动搭话一个管道）。
   // 开关状态落 pet-bridge.json，重启也记得。
   const peek = createPeek({
-    cfg: { ...cfg, peek: peekOn },
+    cfg: { ...cfg, peek: peekOn, peekIntervalMs },
     log,
     deliver,
     // 窥屏看到了什么 → 给情绪记一笔。看见了在忙还是摸鱼，是两回事。
     onScene: (p) => { if (mood) { try { mood.peekScene(p); } catch (e) { log('mood scene failed: ' + e.message); } } },
     // 主动程度跟着情绪走：冷战降频，黏人时加倍。mood 关着就是恒等 1。
     intervalFactor: () => (mood ? (mood.gate('proactive').intervalFactor || 1) : 1),
-    onStateChange: () => { peekOn = peek.on; persist(); },
+    onStateChange: (s) => {
+      peekOn = peek.on;
+      if (s && Number(s.baseMs) > 0) peekIntervalMs = Number(s.baseMs);
+      persist();
+    },
   });
 
   // ---- 主动开口（2026-11-06）----
@@ -589,9 +596,17 @@ export function apply(ctx, config = {}) {
         petSid = ''; persist();
         return send(res, 200, { ok: true, petSessionId: '', note: 'next touch creates a new pet session' });
       }
-      // 窥屏开关 / 立刻试一次（放在 quiet 之前：静默是点触的事，不该挡住窥屏的控制）
+      // 窥屏开关 / 间隔 / 立刻试一次（放在 quiet 之前：静默是点触的事，不该挡住窥屏的控制）
       if (url.pathname === '/peek') {
         if (typeof body.on === 'boolean') peek.setOn(body.on);
+        // {"intervalMs": 900000} 或者 {"minutes": 15} 都收，界面上拨分钟更顺
+        if (body.intervalMs != null || body.minutes != null) {
+          const ms = body.minutes != null ? Number(body.minutes) * 60000 : Number(body.intervalMs);
+          const applied = peek.setIntervalMs(ms);
+          peekIntervalMs = applied;
+          persist();
+          return send(res, 200, { ok: true, intervalMs: applied, ...peek.state() });
+        }
         if (body.now) {
           const r = await peek.run('manual').catch((e) => ({ ok: false, error: e.message }));
           return send(res, 200, { ok: true, result: r, state: peek.state() });

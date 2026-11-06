@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { apply } from '../lib/index.js';
@@ -255,6 +255,25 @@ test('浓度能随手拨，写错了只回 400 不炸', async () => {
     assert.equal(bad.status, 400);
     assert.ok(Array.isArray(bad.json.options));
     assert.equal((await get(62111, '/mood')).json.urge.intensity, 'chatty', '写错了不该把原来那档弄丢');
+  } finally { ctx.dispose(); }
+});
+
+test('窥屏间隔能拨，拨完落盘', async () => {
+  const stateFile = join(TMP, 's-62112.json');
+  const { ctx } = await boot(62112, { peek: false, peekIntervalMs: 1800000, statePath: stateFile });
+  try {
+    assert.equal((await get(62112, '/peek')).json.baseMs, 1800000, '默认半小时');
+
+    const r = await post(62112, '/peek', { minutes: 15 });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.intervalMs, 900000);
+    assert.equal((await get(62112, '/peek')).json.baseMs, 900000);
+
+    const ms = await post(62112, '/peek', { intervalMs: 5000 });
+    assert.equal(ms.json.baseMs, 60000, '太短要夹住');
+
+    const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
+    assert.equal(saved.peekIntervalMs, 60000, '拨过的档要能跨重启');
   } finally { ctx.dispose(); }
 });
 

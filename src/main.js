@@ -2297,6 +2297,8 @@ function createPanel() {
 // 读一眼状态、发开关、手动试一次。壳子关了也不影响那边自己判断。
 const PEEK_URL = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
 let peekOn = false, peekLive = false, peekNote = '桥插件没在跑';
+let peekBaseMs = 30 * 60 * 1000;      // 主人拨的基准间隔，不是乘过情绪倍率那个
+let peekFactor = 1;                    // 情绪给它的倍率，只用来在菜单里说明
 async function peekSync() {
   try {
     const r = await fetch(`${PEEK_URL}/peek`, { signal: AbortSignal.timeout(1500) });
@@ -2304,6 +2306,8 @@ async function peekSync() {
     const d = await r.json();
     peekLive = true;
     peekOn = !!d.on;
+    if (Number(d.baseMs) > 0) peekBaseMs = Number(d.baseMs);
+    peekFactor = Number(d.factor) > 0 ? Number(d.factor) : 1;
     if (d.lastResult) peekNote = d.lastResult;
     else if (d.on) peekNote = d.nextInSec > 0 ? `下次 ${Math.round(d.nextInSec / 60)} 分钟后` : '等着排期';
     else peekNote = '已关';
@@ -2312,6 +2316,26 @@ async function peekSync() {
     peekNote = '桥插件没在跑';
   }
 }
+// 换窥屏间隔。跟浓度一样是热改，落 pet-bridge.json，跨重启记得。
+async function peekSetInterval(minutes) {
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ minutes }), signal: AbortSignal.timeout(4000),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || ('peek ' + r.status));
+    // 老版本桥会忽略 minutes 并照样回 200，别拿它的话当成功
+    const got = Number(d.baseMs) || 0;
+    if (!got) { say('桥插件还是旧的，得重启 DSH', false, 3600); peekSync(); return; }
+    peekBaseMs = got;
+    say(`那就每 ${Math.round(peekBaseMs / 60000)} 分钟瞄一次`, false, 2600);
+  } catch {
+    say('这个没拨过去', false, 2400);
+  }
+  peekSync();
+}
+const peekMinutes = () => Math.max(1, Math.round(peekBaseMs / 60000));
 async function peekToggle(on) {
   peekOn = on;
   if (tray) { try { tray.setContextMenu(buildMenu()); } catch {} }
@@ -2459,6 +2483,9 @@ function buildMenu() {
       { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
       { type: 'separator' },
       { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (peekLive ? '' : ' · 桥没在跑'), type: 'checkbox', checked: peekOn, click: (item) => peekToggle(item.checked) },
+      { label: `  多久瞄一次 · ${peekMinutes()} 分钟` + (peekFactor !== 1 ? `（情绪缩到 ${Math.max(1, Math.round(peekBaseMs * peekFactor / 60000))} 分）` : ''), enabled: peekLive, submenu: [5, 15, 30, 60, 120].map((m) => ({
+        label: m >= 60 ? `${m / 60} 小时` : `${m} 分钟`, type: 'radio', checked: peekMinutes() === m, click: () => peekSetInterval(m),
+      })) },
       { label: `  现在瞄一眼试试 · ${peekNote}`, enabled: peekLive, click: () => peekNow() },
     ] },
     { label: '外观', submenu: [
