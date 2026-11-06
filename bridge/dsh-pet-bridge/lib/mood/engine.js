@@ -257,6 +257,31 @@ export function resolve(state, profile, now = Date.now()) {
   const clamped = (n) => Math.max(0, Math.min(1, n));
   const neg = negForTier(profile, view);
 
+  // ── PAD 的两个派生轴 ────────────────────────────────────────────────
+  // 每种情绪带一个 [P, A, D] 向量，按当前强度加权，除以总强度得到混合后的方向。
+  // P 不用：valence 已经是它了。只用 A 激活 和 D 支配。
+  //
+  // 为什么除以 max(1, 总强度) 而不是直接求和：情绪能同时存在好几样，
+  // 求和会让「又气又心疼」直接顶到饱和；除以总量等于取方向，两股相反的力会抵消回中间。
+  // 抵消是对的 —— 身体确实卡在两种状态之间；说话挑哪一种由 dominant 决定，不会变糊。
+  //
+  // 档案里没写 pad 的自定义情绪不参与，不报错。
+  // bond（亲近）不参与：它是关系本身，不是「这会儿」的情绪。它数值常年偏高，
+  // 让它进混合会把当下的形态稀释掉——亲密度高不代表此刻不生气。
+  let ax = 0;
+  let dx = 0;
+  let weight = 0;
+  for (const [name, def] of Object.entries(profile.emotions)) {
+    const v = view[name] || 0;
+    if (!v || !Array.isArray(def.pad)) continue;
+    if (def.axis === 'bond') continue;
+    ax += v * (Number(def.pad[1]) || 0);
+    dx += v * (Number(def.pad[2]) || 0);
+    weight += v;
+  }
+  const denom = Math.max(1, weight);
+  const clamp1 = (n) => Math.max(-1, Math.min(1, n));
+
   const recent = (fresh.log || []).slice(-12);
   const maxReasons = (profile.cue && profile.cue.maxReasons) || 3;
   const reasons = [];
@@ -274,6 +299,9 @@ export function resolve(state, profile, now = Date.now()) {
       closeness: clamped(bond),
       valence: Math.max(-1, Math.min(1, pos - neg)),
       expression: clamped(pos * (1 - neg * 0.5) - neg * 0.3),
+      // 派生轴：不是新账本，是从上面几个强度算出来的「形态」
+      arousal: clamp1(ax / denom),
+      dominance: clamp1(dx / denom),
     },
     values: view,
     reasons,

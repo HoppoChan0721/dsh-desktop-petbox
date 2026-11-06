@@ -291,6 +291,9 @@ async function main() {
     const pct = (n) => (n >= 0 ? '+' : '') + Math.round((Number(n) || 0) * 100);
     console.log(`${d.summary || ''}`);
     console.log(`档位 ${snap.tier || '-'}　亲近 ${pct(axes.closeness)}　心情 ${pct(axes.valence)}　想说话 ${pct(axes.expression)}`);
+    if (axes.arousal != null || axes.dominance != null) {
+      console.log(`形态　绷 ${pct(axes.arousal)}　势 ${pct(axes.dominance)}`);
+    }
     if (snap.idleMinutes != null) console.log(`已经 ${Math.floor(snap.idleMinutes / 60)} 小时 ${snap.idleMinutes % 60} 分钟没人理她`);
     const vals = Object.entries(snap.values || {}).filter(([, v]) => v > 0.01);
     if (vals.length) console.log('账本：' + vals.map(([k, v]) => `${k}=${v.toFixed(2)}`).join('　'));

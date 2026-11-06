@@ -86,22 +86,27 @@ export const DEFAULT_PROFILE = {
   version: SCHEMA_VERSION,
 
   emotions: {
-    joy: { halfLife: 2, polarity: 1, drives: ['tier', 'tone'], label: '开心' },
-    moved: { halfLife: 12, polarity: 1, drives: ['tone'], label: '感动' },
-    upset: { halfLife: 6, polarity: -1, drives: ['tier', 'tone'], label: '委屈' },
+    // pad: [P 愉悦, A 激活, D 支配]，每个轴 -1 ~ 1。借的是 Mehrabian 那套 PAD 空间。
+    // 这里只用 A 和 D：P 已经有 valence 了，没必要再来一条。
+    // 账本里每种情绪各自带一个向量，快照时按强度加权求和，得到「这会儿有多绷」「谁占上风」。
+    // 好处是归因一点没丢——数字是从「因为什么」那几条推出来的，不是替代它们。
+    joy: { halfLife: 2, polarity: 1, drives: ['tier', 'tone'], label: '开心', pad: [0.8, 0.5, 0.2] },
+    moved: { halfLife: 12, polarity: 1, drives: ['tone'], label: '感动', pad: [0.6, -0.2, -0.4] },
+    upset: { halfLife: 6, polarity: -1, drives: ['tier', 'tone'], label: '委屈', pad: [-0.6, -0.3, -0.5] },
     anger: {
       halfLife: 3,
       polarity: -1,
       drives: ['tier', 'tone', 'expression'],
       label: '生气',
+      pad: [-0.7, 0.6, 0.5],
       // 委屈没攒够就只是更委屈，不会转化成气。
       // 阈值取 0.3 而不是 0.4：一天没人理委屈大约稳在 0.44，衰减一小时后会掉到 0.39，
       // 卡在 0.4 上会让「看见在玩却不生气」变得很随机。归因要稳，宁可早一点。
       requires: { path: 'mood.upset', gt: 0.3 },
     },
-    worried: { halfLife: 5, polarity: -1, drives: ['tone'], label: '担心' },
-    jealous: { halfLife: 24, polarity: -1, drives: ['tone'], label: '吃醋' },
-    bond: { halfLife: 240, polarity: 0, axis: 'bond', drives: [], label: '亲近' },
+    worried: { halfLife: 5, polarity: -1, drives: ['tone'], label: '担心', pad: [-0.3, 0.4, -0.4] },
+    jealous: { halfLife: 24, polarity: -1, drives: ['tone'], label: '吃醋', pad: [-0.4, 0.5, 0.4] },
+    bond: { halfLife: 240, polarity: 0, axis: 'bond', drives: [], label: '亲近', pad: [0.5, -0.1, 0.1] },
   },
 
   // ── 记账规则 ───────────────────────────────────────────────────────────
