@@ -2326,6 +2326,40 @@ async function peekToggle(on) {
   } catch {}
   peekSync();
 }
+// ---- 情绪（2026-11-06）----
+// 账本和决策都在桥插件那边，壳子只读一眼：菜单里显示她现在什么心情、因为什么。
+// 不在这里算任何东西，也不拿它去改表情——表情由会话里的 [emotion:...] 决定，两套别打架。
+let moodLive = false, moodSummary = '', moodReason = '';
+async function moodSync() {
+  try {
+    const r = await fetch(`${PEEK_URL}/mood`, { signal: AbortSignal.timeout(1500) });
+    if (!r.ok) throw new Error('mood ' + r.status);
+    const d = await r.json();
+    if (d.enabled === false) { moodLive = false; moodSummary = '情绪没开'; moodReason = ''; return; }
+    moodLive = true;
+    moodSummary = d.summary || '';
+    const snap = d.snapshot || {};
+    moodReason = (snap.reasons && snap.reasons.length) ? snap.reasons[0] : '';
+  } catch {
+    moodLive = false;
+    moodSummary = '桥插件没在跑';
+    moodReason = '';
+  }
+}
+async function moodReset() {
+  try {
+    const r = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reset: true }), signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) throw new Error('mood ' + r.status);
+    say('这次就原谅主人了', false, 3600);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  moodSync();
+}
+
 async function peekNow() {
   say('那我瞄一眼…', false, 2400);
   try {
@@ -2371,6 +2405,10 @@ function buildMenu() {
       { type: 'separator' },
       { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (peekLive ? '' : ' · 桥没在跑'), type: 'checkbox', checked: peekOn, click: (item) => peekToggle(item.checked) },
       { label: `  现在瞄一眼试试 · ${peekNote}`, enabled: peekLive, click: () => peekNow() },
+      { type: 'separator' },
+      { label: `心情 · ${moodSummary || '没读到'}`, enabled: false },
+      ...(moodReason ? [{ label: `  因为 ${moodReason}`, enabled: false }] : []),
+      { label: '  哄好她（清空情绪账本）', enabled: moodLive, click: () => moodReset() },
     ] },
     { label: '外观', submenu: [
       { label: '全身 / 近景', submenu: [
@@ -2461,6 +2499,8 @@ app.whenReady().then(() => {
     setInterval(idleTick, 45000);
     setTimeout(() => { peekSync().catch(() => {}); }, 2500);
     setInterval(() => { peekSync().catch(() => {}); }, 20000);
+    setTimeout(() => { moodSync().catch(() => {}); }, 6000);
+    setInterval(() => { moodSync().catch(() => {}); }, 60000);
     // TTS 保活：启动 90 秒后先热一次（省得开工第一句等 27 秒），之后每 15 分钟一次
     setTimeout(() => keepAliveTick(), 90000);
     setInterval(() => keepAliveTick(), KEEPALIVE_MS);

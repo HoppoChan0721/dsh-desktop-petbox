@@ -454,6 +454,8 @@ export function apply(ctx, config = {}) {
     deliver,
     // 窥屏看到了什么 → 给情绪记一笔。看见了在忙还是摸鱼，是两回事。
     onScene: (p) => { if (mood) { try { mood.peekScene(p); } catch (e) { log('mood scene failed: ' + e.message); } } },
+    // 主动程度跟着情绪走：冷战降频，黏人时加倍。mood 关着就是恒等 1。
+    intervalFactor: () => (mood ? (mood.gate('proactive').intervalFactor || 1) : 1),
     onStateChange: () => { peekOn = peek.on; persist(); },
   });
 

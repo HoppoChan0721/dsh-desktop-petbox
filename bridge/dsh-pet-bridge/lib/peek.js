@@ -88,7 +88,7 @@ function inQuietHours(cfg) {
   return from < to ? (h >= from && h < to) : (h >= from || h < to);
 }
 
-export function createPeek({ cfg, log, deliver, onStateChange, onScene }) {
+export function createPeek({ cfg, log, deliver, onStateChange, onScene, intervalFactor }) {
   const dir = cfg.peekTmpDir || join(process.env.DSH_HOME || tmpdir(), 'tmp', 'pet-peek');
   cfg.peekTmpDir = dir;
 
@@ -107,7 +107,15 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene }) {
   };
 
   const rand = (ms) => Math.round(ms * (0.8 + Math.random() * 0.4));   // ±20% 抖动：别像闹钟一样整点出现
-  const baseInterval = () => Number(cfg.peekIntervalMs) || 30 * 60 * 1000;
+  // 每次调度都现问一次倍率：情绪不同时她的主动程度不一样（冷战降频，黏人时加倍）。
+  // 回调坏了就当 1，别因为情绪模块出问题把窥屏也带崩。
+  const factor = () => {
+    try {
+      const f = Number(intervalFactor && intervalFactor());
+      return Number.isFinite(f) && f > 0 ? Math.min(6, Math.max(0.2, f)) : 1;
+    } catch { return 1; }
+  };
+  const baseInterval = () => (Number(cfg.peekIntervalMs) || 30 * 60 * 1000) * factor();
   const scheduleNext = () => { st.nextAt = Date.now() + rand(baseInterval()); };
 
   function state() {
