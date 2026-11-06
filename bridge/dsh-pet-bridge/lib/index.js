@@ -396,13 +396,13 @@ export function apply(ctx, config = {}) {
   }
 
   async function deliver(text) {
-    // 情绪卡：平静时是空串，不占 token。放在行为口径后面、状态行前面，
-    // 让它离模型的输出更近一点，更容易照做。
-    const moodCue = mood ? safeCue() : '';
     if (cfg.mode === 'pet') {
       try {
         const sid = await ensurePetSession();
-        const extra = PET_HINT + moodCue + (await petStateLine().catch(() => ''));
+        // 情绪卡只在桌宠会话里拼。main 模式是把点触投进主人正在写代码的那个会话，
+        // 往里塞一句「你现在有点不痛快」既污染上下文，也让她在干活时突然演情绪。
+        // 平静时 cue() 返回空串，不占 token。
+        const extra = PET_HINT + (mood ? safeCue() : '') + (await petStateLine().catch(() => ''));
         return { ...(await deliverTo(sid, text + extra, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
       } catch (e) {
         petReady = false;   // 下一次点触重新建
@@ -411,7 +411,7 @@ export function apply(ctx, config = {}) {
       }
     }
     const sid = await currentSession();
-    return { ...(await deliverTo(sid, text + moodCue)), target: 'main' };
+    return { ...(await deliverTo(sid, text)), target: 'main' };
   }
 
   /** 取情绪卡。任何异常都吞掉：情绪是附加的，不该让投递失败。 */

@@ -94,7 +94,9 @@ test('情绪关着的时候，投递内容里一个字都不多', async () => {
   try {
     await post(62101, '/event', { zone: 'head' });
     const text = calls.followup.at(-1).text;
-    assert.ok(!/你现在/.test(text), '关着就不该出现情绪卡');
+    // 注意：原有的 petStateLine 本来就会写「（你现在：表情…）」，所以不能按「你现在」判，
+    // 只按情绪卡特有的说法判。
+    assert.ok(!/不痛快|真在生气|心情不错|在担心|吃醋/.test(text), '关着就不该出现情绪卡');
     const m = await get(62101, '/mood');
     assert.equal(m.json.enabled, false);
     assert.equal(m.json.ok, true, '关着也回 200，不是 404');
@@ -175,6 +177,19 @@ test('情绪模块出问题也不会挡住宿主流程', async () => {
     ctx.dispose();
     rmSync(join(TMP, 'no-such-dir'), { recursive: true, force: true });
   }
+});
+
+test('main 模式下不往主人的工作会话里塞情绪卡', async () => {
+  const file = join(TMP, 'cold-main.json');
+  writeColdState(file);
+  const { ctx, calls } = await boot(62107, { mode: 'main', mood: true, moodFile: file, sessionId: 'main-1' });
+  try {
+    const r = await post(62107, '/event', { zone: 'head' });
+    assert.equal(r.status, 200);
+    const text = calls.followup.at(-1).text;
+    assert.ok(!/你现在/.test(text), 'main 模式只投点触描述，不演情绪');
+    assert.match(text, /碰了你的/, '原来的点触描述还得在');
+  } finally { ctx.dispose(); }
 });
 
 test.after(() => { rmSync(TMP, { recursive: true, force: true }); });
