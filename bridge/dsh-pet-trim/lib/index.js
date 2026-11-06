@@ -34,7 +34,7 @@
 //
 // 时间那条要多说一句：运行时快照被压掉之后模型不知道现在几点，桌宠就会问「天亮了没」
 // 这种没法接的话，而快照里有用的也就时间这一条。所以默认注册一个 pet:now 段，文本是
-// 「现在是 {{petNow}}。」，变量每次组装求值。段和变量都是作用域的，主会话看不到。
+// 「现在是 {{pet_now}}。」，变量每次组装求值。段和变量都是作用域的，主会话看不到。
 // `clock: false` 关掉它，模型就真的两眼一抹黑了。
 // 每一项都能单独关：`allow: []` 什么都不留，`keepSections: '*'` 保留全部段，
 // `suppressContext: false` 不动快照。
@@ -73,12 +73,14 @@ function nowText() {
 
 function trimClock(ctx) {
   try {
-    ctx.effect(() => ctx.systemPrompt.variable('petNow', () => nowText()), 'pet-trim.variable()')
+    // 变量名有硬格式：/^[a-z][a-z0-9_]*$/，小写开头、只许下划线和数字。
+    // 写成 petNow 会被直接拒掉，段里引用了不存在的变量时整条提示词组装都会失败。
+    ctx.effect(() => ctx.systemPrompt.variable('pet_now', () => nowText()), 'pet-trim.variable()')
     // order 10300 排在 persona 后缀（10200）之后，等于人设尾巴上补一句
     ctx.effect(() => ctx.systemPrompt.section({
       name: 'pet:now',
       order: 10300,
-      text: '现在是 {{petNow}}。',
+      text: '现在是 {{pet_now}}。',
     }), 'pet-trim.section()')
     log('clock: section pet:now registered')
   } catch (e) {
