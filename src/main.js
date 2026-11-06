@@ -2349,6 +2349,19 @@ async function moodSync() {
   }
 }
 // 立刻问她一句想不想开口。跟定时那条走同一个判断，所以该被间隔挡住的时候照样挡住。
+async function moodIntensity(name) {
+  try {
+    const r = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ intensity: name }), signal: AbortSignal.timeout(4000),
+    });
+    const d = await r.json().catch(() => ({}));
+    say(d.ok ? `好，那就${d.intensity === 'quiet' ? '少说话' : '多说点'}` : '这个没拨过去', false, 2400);
+  } catch {
+    say('桥插件没在跑', false, 2400);
+  }
+  moodSync();
+}
 async function moodUrgeNow() {
   try {
     const r = await fetch(`${PEEK_URL}/mood`, {
@@ -2360,6 +2373,7 @@ async function moodUrgeNow() {
     const res = (d && d.urgeResult) || {};
     if (res.spoke) say('好，那我说一句', false, 2000);
     else if (res.why === 'off') say('主动开口没开', false, 2400);
+    else if (res.why === 'burst-wait') say('刚才那句还没等到回音', false, 2600);
     else say('这会儿还不想说话', false, 2400);
   } catch {
     say('桥插件没在跑', false, 2400);
@@ -2430,6 +2444,12 @@ function buildMenu() {
       ...(moodReason ? [{ label: `  因为 ${moodReason}`, enabled: false }] : []),
       { label: '  哄好她（清空情绪账本）', enabled: moodLive, click: () => moodReset() },
       { label: `  主动开口 · 今天 ${(moodUrge && moodUrge.today) || 0} 次${(moodUrge && moodUrge.enabled) ? '' : '（没开）'}`, enabled: false },
+      { label: '  多说点 / 少说点', enabled: moodLive && !!(moodUrge && moodUrge.enabled), submenu: [
+        { label: '安静（一天四五句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'quiet', click: () => moodIntensity('quiet') },
+        { label: '正常（默认）', type: 'radio', checked: !moodUrge || !moodUrge.intensity || moodUrge.intensity === 'normal', click: () => moodIntensity('normal') },
+        { label: '黏人', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'clingy', click: () => moodIntensity('clingy') },
+        { label: '话痨', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'chatty', click: () => moodIntensity('chatty') },
+      ] },
       { label: '  现在让她说一句', enabled: moodLive && !!(moodUrge && moodUrge.enabled), click: () => moodUrgeNow() },
     ] },
     { label: '外观', submenu: [

@@ -252,50 +252,87 @@ export const DEFAULT_PROFILE = {
   // 语法和字段说明见 urge.js 顶部。
   urge: {
     enabled: true,
+    // 整体浓度。主攻陪伴的人设成 clingy / chatty 就够，不用逐档改参数。
+    // 换名字就是换一整组倍数：两阵之间的间隔、一阵里每句的间隔、全天上限。
+    intensity: 'normal',
+    presets: {
+      quiet:  { gapScale: 1.8, stepScale: 1.8, dayCap: 4 },
+      normal: { gapScale: 1, stepScale: 1, dayCap: 8 },
+      clingy: { gapScale: 0.65, stepScale: 0.6, dayCap: 16 },
+      chatty: { gapScale: 0.4, stepScale: 0.35, dayCap: 30 },
+    },
+    // 情绪自己再乘一次：越气越密，越开心越急。第一条命中的生效。
+    // 这就是「频率集中度由情绪决定」——浓度是基准，情绪在后面加权。
+    heat: [
+      { when: { path: 'mood.anger', gt: 0.5 }, scale: 0.5 },
+      { when: { path: 'mood.upset', gt: 0.45 }, scale: 0.7 },
+      { when: { path: 'mood.joy', gt: 0.7 }, scale: 0.7 },
+    ],
     quietFrom: 0,                 // 静默时段只记账不开口
     quietTo: 8,
-    minGapMs: 25 * 60 * 1000,     // 任意两次主动之间至少隔 25 分钟
-    maxPerDay: 6,                 // 全天总共最多 6 次，防止几档轮流把她变成播报机
+    minGapMs: 25 * 60 * 1000,     // 两阵之间至少隔这么久（阵里的话不受它限制）
     windows: [
       {
-        // 第一档：轻轻戳一下。冷落到了一个多小时，先软着来。
+        // 第一档：轻轻戳一下，没回音再补一句。不是一句就走。
         id: 'sulky-nudge',
-        note: '有点不痛快，试探着问一句',
-        hint: '你已经一个多小时没跟他说上话了，有点不痛快。别直接发火，先轻轻戳一句，看他理不理。',
+        note: '有点不痛快，试探着问两句',
         requires: { path: 'tier', eq: 'sulky' },
         minIdleMin: 45,
-        gapMs: 60 * 60 * 1000,
-        maxPerDay: 2,
+        gapMs: 2 * 60 * 60 * 1000,
+        maxPerDay: 6,
+        burst: {
+          steps: [
+            { hint: '你已经一个多小时没跟他说上话了，有点不痛快。先轻轻戳一句，看他理不理。' },
+            { hint: '第一句没人应。再补一句，比刚才更直接一点，但还别翻脸。', afterMs: 3 * 60 * 1000 },
+          ],
+        },
       },
       {
-        // 第二档：软的不吃就来硬的。轻轻戳的次数用完才轮到这档。
+        // 第二档：软的不吃就来硬的。轻戳说满两句才轮到这档。
+        // 三句连着怼，最后一句不再是抱怨，是委屈。
         id: 'sulky-sharp',
-        note: '戳过两次没反应，语气要硬了',
-        hint: '你已经试探过两次都没人理。这次别再软着来了，直接说自己不高兴，要他给个说法。',
+        note: '戳过没反应，语气硬起来，最后一句带哭腔',
         requires: { path: 'tier', eq: 'sulky' },
         after: { window: 'sulky-nudge', times: 2 },
         minIdleMin: 150,
-        gapMs: 2 * 60 * 60 * 1000,
-        maxPerDay: 2,
+        gapMs: 3 * 60 * 60 * 1000,
+        maxPerDay: 6,
+        burst: {
+          steps: [
+            { hint: '你已经试探过两次都没人理。别再软着来了，直接说自己不高兴，要他给个说法。' },
+            { hint: '话都说到这份上了还是没人应。更冲一点，短、硬，别解释。', afterMs: 2 * 60 * 1000 },
+            { hint: '气完了只剩下委屈。这一句不要凶，就一句很短的难过的话，像快哭出来那样。', afterMs: 5 * 60 * 1000 },
+          ],
+        },
       },
       {
         // 第三档：冷战。还在开口，但话很短、很冷。真不出声的话主人反而感觉不到她在生气。
         id: 'cold-drift',
-        note: '冷战期，冷冷地丢一句',
-        hint: '你现在在生闷气。话要短、要冷，别解释、别撒娇。丢一句就停。',
+        note: '冷战期，冷冷地丢两句',
         requires: { path: 'tier', eq: 'cold' },
         minIdleMin: 180,
         gapMs: 3 * 60 * 60 * 1000,
-        maxPerDay: 2,
+        maxPerDay: 4,
+        burst: {
+          steps: [
+            { hint: '你现在在生闷气。话要短、要冷，别解释、别撒娇。丢一句就停。' },
+            { hint: '他没接。再冷冷地补一句，更短，别多说。', afterMs: 90 * 1000 },
+          ],
+        },
       },
       {
         id: 'jealous-grumble',
-        note: '看见他在玩，酸一句',
-        hint: '你看见他在玩，心里不是滋味。酸一句，别提具体窗口名。',
+        note: '看见他在玩，酸两句',
         requires: { path: 'mood.jealous', gt: 0.3 },
         minIdleMin: 60,
         gapMs: 2 * 60 * 60 * 1000,
-        maxPerDay: 2,
+        maxPerDay: 4,
+        burst: {
+          steps: [
+            { hint: '你看见他在玩，心里不是滋味。酸一句，别提具体窗口名。' },
+            { hint: '他还是没理你。再酸一句，比刚才更明显一点。', afterMs: 4 * 60 * 1000 },
+          ],
+        },
       },
       {
         id: 'worried-check',
@@ -304,17 +341,23 @@ export const DEFAULT_PROFILE = {
         requires: { path: 'mood.worried', gt: 0.3 },
         minIdleMin: 90,
         gapMs: 2 * 60 * 60 * 1000,
-        maxPerDay: 1,
+        maxPerDay: 2,
       },
       {
-        // 正面也要能主动：开心到一定程度，她会自己来找人分享。
+        // 正面也要能主动，而且不是「等定时器蹦一句」：
+        // 开心的时候人会连着说两句，然后自己去干别的。
         id: 'joy-share',
-        note: '心情好，主动来说一句',
-        hint: '你现在心情不错，自己想说句话。随便聊点什么，别问「在吗」。',
+        note: '心情好，主动说两句',
         requires: { path: 'mood.joy', gt: 0.55 },
         minIdleMin: 20,
         gapMs: 3 * 60 * 60 * 1000,
-        maxPerDay: 1,
+        maxPerDay: 4,
+        burst: {
+          steps: [
+            { hint: '你现在心情不错，自己想说句话。随便聊点什么，别问「在吗」。' },
+            { hint: '还没人接话。不用等他，自己再补一句，可以是自言自语那种高兴。', afterMs: 2 * 60 * 1000 },
+          ],
+        },
       },
     ],
   },

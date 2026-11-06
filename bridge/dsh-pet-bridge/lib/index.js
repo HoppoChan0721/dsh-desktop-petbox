@@ -80,7 +80,10 @@ const DEFAULTS = {
   // 光有情绪还是被动的：生气要等被摸一下才发作。开了这个，情绪够了她自己会把话送到桌面上。
   // 默认关，它真的会打断主人正在干的事，要不要开是使用者的决定，不是插件的。
   moodUrge: false,
-  moodUrgeTickMs: 60 * 1000,        // 多久问一次「她想不想开口」。问一次只是纯计算，很便宜
+  moodUrgeTickMs: 20 * 1000,        // 多久问一次「她想不想开口」。纯计算，20 秒一次也不心疼
+  // 整体浓度：quiet / normal / clingy / chatty。主打陪伴的人设成 clingy 就够了，
+  // 不用逐档改参数。留空 = 用 profile 里写的那档。
+  moodUrgeIntensity: '',
   moodUrgeCooldownMs: 10 * 60 * 1000, // 投递失败后先歇一会儿，别每分钟重试
 };
 
@@ -115,6 +118,8 @@ export function apply(ctx, config = {}) {
   let windowCount = 0;
   const recent = [];
   let peekOn = cfg.peek === true || cfg.peek === 'on';
+  // 主动开口的浓度。配置里给了就用配置的，否则沿用上一次拨到的那档（跨重启记得）
+  let urgeIntensity = cfg.moodUrgeIntensity || '';
 
   if (statePath) {
     try {
@@ -122,11 +127,12 @@ export function apply(ctx, config = {}) {
       if (!bound && st.sessionId) bound = st.sessionId;
       if (!petSid && st.petSessionId) petSid = st.petSessionId;
       if (typeof st.peekOn === 'boolean') peekOn = st.peekOn;   // 开关要跨重启记住
+      if (!urgeIntensity && st.urgeIntensity) urgeIntensity = st.urgeIntensity;
     } catch {}
   }
   function persist() {
     if (!statePath) return;
-    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, at: new Date().toISOString() }, null, 1)); } catch {}
+    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, urgeIntensity, at: new Date().toISOString() }, null, 1)); } catch {}
   }
 
   // ---- 情绪（2026-11-06）----
@@ -136,6 +142,7 @@ export function apply(ctx, config = {}) {
     ? createMood({
         file: cfg.moodFile || (process.env.DSH_HOME ? join(process.env.DSH_HOME, 'pet-mood.json') : ''),
         profileFile: cfg.moodProfile || '',
+        urgeIntensity,
         log,
       })
     : null;
@@ -480,8 +487,13 @@ export function apply(ctx, config = {}) {
   function urgePrompt(d) {
     const mins = Math.max(1, Math.round(d.idleMin));
     const nth = d.attempt + 1;
+    const inBurst = (Number(d.step) || 0) > 0;
     return '（桌宠｜这次不是主人叫你，是你自己想开口。'
-      + `${d.hint}离上次有人跟你说上话已经 ${mins} 分钟了，这是你自己第 ${nth} 次搭话。`
+      + `${d.hint}`
+      + (inBurst
+        // 一阵里的第二、三句：不提醒的话模型容易一次把想说的全说完，后面就空了
+        ? `这是这一阵的第 ${d.step + 1} 句。只说你这一句，别把后面想说的都一次说完。`
+        : `离上次有人跟你说上话已经 ${mins} 分钟了，这是你今天第 ${nth} 次自己搭话。`)
       + '说完就等着，别连发。）';
   }
 
@@ -490,9 +502,10 @@ export function apply(ctx, config = {}) {
     if (urgeBusy) return { ok: false, why: 'busy' };
     if (cfg.quiet) return { ok: false, why: 'quiet' };
     if (urgeBackoffUntil && Date.now() < urgeBackoffUntil) return { ok: false, why: 'backoff' };
-    // 窥屏刚替她说过话就别再补一句：两条管道汇到同一个气泡，会像复读
+    // 窥屏刚替她说过话就别再补一句：两条管道汇到同一个气泡，会像复读。
+    // 只挡「新开一阵」，一阵里接着说的那几句要放行，不然连怼就断了。
     const lastPeek = Date.parse((peek.state() || {}).lastAt || '') || 0;
-    if (lastPeek && Date.now() - lastPeek < 10 * 60 * 1000) return { ok: false, why: 'just-spoke' };
+    const inBurst = !!(mood.state().urge || {}).burst;
 
     let d;
     try {
@@ -502,15 +515,23 @@ export function apply(ctx, config = {}) {
       return { ok: false, why: 'error' };
     }
     if (!d.speak) { lastUrgeNote = '不想开口（' + d.why + '）'; return { ok: true, spoke: false, why: d.why }; }
+    if (!inBurst && lastPeek && Date.now() - lastPeek < 10 * 60 * 1000) {
+      return { ok: false, why: 'just-spoke' };
+    }
 
     urgeBusy = true;
     try {
       const r = await deliver(urgePrompt(d));
       // 投递成功才记账：失败一次还想再试一次，不该直接扣掉她一次机会
-      mood.markUrge(d.window);
-      lastUrgeNote = `开口 ${d.window}（${Math.round(d.idleMin)} 分钟没人理）`;
-      log(`urge spoke window=${d.window} tier=${d.tier} idle=${Math.round(d.idleMin)}min attempt=${d.attempt} via=${reason} target=${r.target}`);
-      return { ok: true, spoke: true, window: d.window, tier: d.tier, idleMin: Math.round(d.idleMin), target: r.target };
+      mood.markUrge(d);
+      const where = d.steps > 1 ? `${d.window} 第${d.step + 1}/${d.steps}句` : d.window;
+      lastUrgeNote = `开口 ${where}`;
+      log(`urge spoke window=${d.window} step=${d.step + 1}/${d.steps} tier=${d.tier} `
+        + `idle=${Math.round(d.idleMin)}min preset=${d.preset} heat=${d.heat} via=${reason} target=${r.target}`);
+      return {
+        ok: true, spoke: true, window: d.window, step: d.step, steps: d.steps,
+        tier: d.tier, idleMin: Math.round(d.idleMin), target: r.target,
+      };
     } catch (e) {
       urgeBackoffUntil = Date.now() + Math.max(60000, Number(cfg.moodUrgeCooldownMs) || 600000);
       lastUrgeNote = '开口失败：' + e.message;
@@ -593,6 +614,15 @@ export function apply(ctx, config = {}) {
           const r = await urgeStep('manual').catch((e) => ({ ok: false, error: e.message }));
           return send(res, 200, { ok: true, urgeResult: r, ...mood.state() });
         }
+        // {"intensity":"clingy"} = 换主动开口的浓度。随手拨，不用重启
+        if (body.intensity) {
+          const r = mood.setIntensity(body.intensity);
+          if (!r.ok) return send(res, 400, { ok: false, ...r });
+          urgeIntensity = r.intensity;
+          persist();
+          log('mood urge intensity -> ' + r.intensity);
+          return send(res, 200, { ok: true, ...r, ...mood.state() });
+        }
         return send(res, 200, { ok: true, enabled: true, ...mood.state() });
       }
       if (cfg.quiet) return send(res, 200, { ok: true, skipped: 'quiet' });
@@ -667,9 +697,10 @@ export function apply(ctx, config = {}) {
   if (mood && cfg.moodUrge) {
     urgeTimer = setInterval(() => {
       urgeStep('timer').catch((e) => log('urge tick failed: ' + e.message));
-    }, Math.max(30000, Number(cfg.moodUrgeTickMs) || 60000));
+    }, Math.max(5000, Number(cfg.moodUrgeTickMs) || 20000));
     if (urgeTimer.unref) urgeTimer.unref();
-    log('mood urge enabled (tick=' + (Number(cfg.moodUrgeTickMs) || 60000) + 'ms)');
+    const inten = (mood.state().urge || {}).intensity || 'normal';
+    log(`mood urge enabled (tick=${Number(cfg.moodUrgeTickMs) || 20000}ms intensity=${inten})`);
   }
 
   ctx.on('dispose', () => {

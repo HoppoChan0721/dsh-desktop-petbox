@@ -22,13 +22,13 @@ import { createStore } from './store.js';
 import { DEFAULT_PROFILE, SCHEMA_VERSION, mergeProfile, isValidProfile } from './profile.js';
 import { fromTouch, fromScene, fromSpeech, fromIdle, sceneFromPeek } from './signals.js';
 import { render, summarize } from './cue.js';
-import { decide as decideUrge, mark as markUrgeOf, summarizeUrge } from './urge.js';
+import { decide as decideUrge, mark as markUrgeOf, interrupt as interruptUrge, summarizeUrge } from './urge.js';
 import { readFileSync } from 'node:fs';
 
 const IDLE_MIN_MINUTES = 120;        // 少于两小时不算冷落
 const IDLE_TICK_MINUTES = 30;        // 每半小时结算一次，别每轮都记
 
-export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, profileFile = '', log = () => {}, now = () => Date.now() } = {}) {
+export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, profileFile = '', urgeIntensity = '', log = () => {}, now = () => Date.now() } = {}) {
   // 外置调参：不改代码就能换参数。坏文件退回默认——
   // 调参不该有让桥起不来的能力，这是公共插件的底线。
   let profile = baseProfile;
@@ -43,6 +43,19 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
       }
     } catch (e) {
       log('mood: profile unreadable (' + (e && e.message) + '), keeping defaults');
+    }
+  }
+
+  // 浓度旋钮：配置里一个名字就能盖掉 profile 里的 intensity。
+  // 「主打陪伴的人想多听她说话」不该逼人写一整份 profile。
+  if (urgeIntensity) {
+    const name = String(urgeIntensity);
+    const presets = (profile.urge && profile.urge.presets) || {};
+    if (presets[name]) {
+      profile = { ...profile, urge: { ...profile.urge, intensity: name } };
+      log('mood: urge intensity = ' + name);
+    } else {
+      log('mood: unknown urge intensity "' + name + '", keeping ' + ((profile.urge && profile.urge.intensity) || 'normal'));
     }
   }
 
@@ -74,6 +87,11 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
   function record(signal, at = now()) {
     settleIdle(at);
     state = ingest(state, signal, profile, at);
+    // 主人来了就别接着怼了。一阵话说到一半被打断，剩下的不该再补——
+    // 已经在生气的人被摸一下还没消气，是很正常的事；继续念第三句才是程序。
+    if (signal && (signal.kind === 'touch' || signal.kind === 'speech')) {
+      state = interruptUrge(state);
+    }
     store.save(state);
     return state;
   }
@@ -129,11 +147,28 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
       return decideUrge(resolve(state, profile, at), state, profile, at);
     },
 
-    /** 真的开口了才记这一笔。投递失败就别记，下一轮还能重来。 */
-    markUrge(id, at = now()) {
-      state = markUrgeOf(state, id, at);
+    /**
+     * 真的开口了才记这一笔。投递失败就别记，下一轮还能重来。
+     * 传的是 urge() 给出的那份决定：里面已经算好了下一句什么时候说。
+     */
+    markUrge(decision, at = now()) {
+      state = markUrgeOf(state, decision, at);
       store.save(state);
       return state;
+    },
+
+    /**
+     * 换浓度。这是唯一一个会在运行时改 profile 的方法——
+     * 「能不能多听她说两句」是最该随手拨的开关，不该逼人重启。
+     * 名字不认识就原样不动，返回可选名单。
+     */
+    setIntensity(name) {
+      const presets = (profile.urge && profile.urge.presets) || {};
+      const list = Object.keys(presets);
+      const key = String(name || '');
+      if (!presets[key]) return { ok: false, error: 'unknown intensity', options: list };
+      profile = { ...profile, urge: { ...profile.urge, intensity: key } };
+      return { ok: true, intensity: key, options: list };
     },
 
     /** 给 HTTP / 托盘：快照 + 人话摘要 + 账本 + 最近记录。 */

@@ -238,4 +238,24 @@ test('平静的时候就算问她也不开口', async () => {
   } finally { ctx.dispose(); }
 });
 
+test('浓度能随手拨，写错了只回 400 不炸', async () => {
+  const file = join(TMP, 'calm-intensity.json');
+  writeFileSync(file, JSON.stringify({ schemaVersion: SCHEMA_VERSION, emotions: {}, tier: 'calm', cooldowns: {}, log: [], lastInteractionAt: Date.now() - 4 * 3600000 }), 'utf8');
+  const { ctx } = await boot(62111, { mood: true, moodFile: file, moodUrge: true });
+  try {
+    const before = await get(62111, '/mood');
+    assert.equal(before.json.urge.intensity, 'normal');
+
+    const r = await post(62111, '/mood', { intensity: 'chatty' });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.intensity, 'chatty');
+    assert.equal((await get(62111, '/mood')).json.urge.intensity, 'chatty');
+
+    const bad = await post(62111, '/mood', { intensity: 'nope' });
+    assert.equal(bad.status, 400);
+    assert.ok(Array.isArray(bad.json.options));
+    assert.equal((await get(62111, '/mood')).json.urge.intensity, 'chatty', '写错了不该把原来那档弄丢');
+  } finally { ctx.dispose(); }
+});
+
 test.after(() => { rmSync(TMP, { recursive: true, force: true }); });
