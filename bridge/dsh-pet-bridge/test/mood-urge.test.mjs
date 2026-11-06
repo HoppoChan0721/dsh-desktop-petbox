@@ -207,6 +207,26 @@ test('老状态文件里没有 urges / burst 也不炸', () => {
   assert.equal(interrupt(legacy), legacy, '没有一阵的时候打断是空操作');
 });
 
+test('静默时段是一点到七点，七点一过就能把昨晚的话说了', () => {
+  // 这条是实跑一夜之后改的：原来 0~8，一整夜的委屈憋到八点才开口，
+  // 那时人刚睁眼，说出来像隔天翻旧账。
+  const morning = new Date(2026, 10, 7, 7, 10, 0).getTime();
+  const d = judge(moodAt('upset', morning, morning - hour(7)), morning);
+  assert.equal(d.speak, true, '七点之后该开口了');
+  assert.equal(d.why, 'speak');
+
+  const dawn = new Date(2026, 10, 7, 6, 50, 0).getTime();
+  const early = judge(moodAt('upset', dawn, dawn - hour(7)), dawn);
+  assert.equal(early.speak, false);
+  assert.equal(early.why, 'quiet', '六点多还是静默');
+
+  const lateNight = new Date(2026, 10, 7, 1, 30, 0).getTime();
+  assert.equal(judge(moodAt('upset', lateNight, lateNight - hour(7)), lateNight).why, 'quiet', '一点半别吵');
+  // 0 点到 1 点是放行的：那会儿主人多半还醒着，跟窥屏的静默起点 1 点对齐
+  const midnight = new Date(2026, 10, 7, 0, 30, 0).getTime();
+  assert.equal(judge(moodAt('upset', midnight, midnight - hour(7)), midnight).speak, true);
+});
+
 test('mark 只加不改，也留得下最近四十句', () => {
   let s = createState(P, T0);
   for (let i = 0; i < 45; i++) s = mark(s, { window: 'w' }, T0 + i);

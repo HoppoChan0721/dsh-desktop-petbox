@@ -268,8 +268,10 @@ export const DEFAULT_PROFILE = {
       { when: { path: 'mood.upset', gt: 0.45 }, scale: 0.7 },
       { when: { path: 'mood.joy', gt: 0.7 }, scale: 0.7 },
     ],
-    quietFrom: 0,                 // 静默时段只记账不开口
-    quietTo: 8,
+    // 静默时段：只记账不开口。原来 0~8，早上八点一开口说的全是昨晚的事，
+    // 时机不对——人刚睁眼，那口气已经过夜了。收到 1~7：半夜照样不吵，七点一过就能把话说了。
+    quietFrom: 1,
+    quietTo: 7,
     minGapMs: 25 * 60 * 1000,     // 两阵之间至少隔这么久（阵里的话不受它限制）
     windows: [
       {

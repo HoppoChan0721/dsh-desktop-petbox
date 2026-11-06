@@ -265,7 +265,7 @@ gates: {
 |---|---|---|
 | `intensity` | `profile.urge.intensity` 或配置 `moodUrgeIntensity` | 一个名字换整体浓度 |
 | `heat` | `profile.urge.heat` | 情绪自己再乘一次：越气越密 |
-| `minGapMs` / 静默时段 | `profile.urge` | 兜底，不许刷屏、不许半夜说话 |
+| `minGapMs` / 静默时段 | `profile.urge` | 兜底，不许刷屏、不许半夜说话。静默默认 1~7 点，七点一过就能把昨晚攒的话说了 |
 
 浓度四档，说的是**一天的句数量级**：
 
