@@ -88,7 +88,7 @@ function inQuietHours(cfg) {
   return from < to ? (h >= from && h < to) : (h >= from || h < to);
 }
 
-export function createPeek({ cfg, log, deliver, onStateChange }) {
+export function createPeek({ cfg, log, deliver, onStateChange, onScene }) {
   const dir = cfg.peekTmpDir || join(process.env.DSH_HOME || tmpdir(), 'tmp', 'pet-peek');
   cfg.peekTmpDir = dir;
 
@@ -194,6 +194,10 @@ export function createPeek({ cfg, log, deliver, onStateChange }) {
       const body = ocr ? `屏幕上认出来的字，可能有错字：${ocr}。）` : '（看不清上面的字。）';
       const tail = ' 这是你主动搭话，不是主人叫你——想接一句就接，不想接就给个表情。）';
       const text = head + body + tail;
+
+      // 先记账再投递：这样刚被这一幕激起来的情绪，能跟着这一句话一起送到。
+      // 回调挂了不算失败，情绪是附加的，不该影响窥屏本身。
+      try { onScene && onScene(p); } catch (e) { log('peek: onScene failed: ' + e.message); }
 
       await deliver(text);
       st.fingerprint = fp;

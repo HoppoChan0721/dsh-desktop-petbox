@@ -17,6 +17,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path';
 import { parseCues } from './cues.js';
 import { createPeek } from './peek.js';
+import { createMood } from './mood/index.js';
 
 // 自带一件式日志：宿主那边的 console 很少能看到，出问题得能自己留痕
 // 默认写 $DSH_HOME/logs/pet-bridge.log；也可以给 WHALE_PET_BRIDGE_LOG 一个绝对路径，留空则不写
@@ -68,6 +69,11 @@ const DEFAULTS = {
   peekTarget: '',                   // 钉死要瞄的窗口（进程名或标题片段），留空就跟任务栏顺序走
   peekTimeoutMs: 20000,             // 探针整轮超时（RapidOCR 冷启动要 5 秒量级），超了就 kill 当这轮跳过
   peekTmpDir: '',                   // 截图 + JSON 的落点，默认 $DSH_HOME/tmp/pet-peek
+  // ---- 情绪（2026-11-06）----
+  // 是不是会因为你冷落她而真的不高兴。默认关：老用户拉下来行为一个字不变。
+  mood: false,
+  moodFile: '',                     // 状态文件，默认 $DSH_HOME/pet-mood.json
+  moodTickMs: 5 * 60 * 1000,        // 多久结算一次衰减（也顺手把状态落盘）
 };
 
 const ZONE_LABEL = {
@@ -114,6 +120,17 @@ export function apply(ctx, config = {}) {
     if (!statePath) return;
     try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, at: new Date().toISOString() }, null, 1)); } catch {}
   }
+
+  // ---- 情绪（2026-11-06）----
+  // 只在这里建一次。默认关着，关着的时候 mood 是 null，下面每处都靠这个判断短路，
+  // 老用户拉下来行为和以前完全一样。
+  const mood = cfg.mood === true || cfg.mood === 'on'
+    ? createMood({
+        file: cfg.moodFile || (process.env.DSH_HOME ? join(process.env.DSH_HOME, 'pet-mood.json') : ''),
+        log,
+      })
+    : null;
+  let moodTimer = null;
 
   // ---- 主会话（mode=main 才用）----
   async function currentSession() {
@@ -376,10 +393,13 @@ export function apply(ctx, config = {}) {
   }
 
   async function deliver(text) {
+    // 情绪卡：平静时是空串，不占 token。放在行为口径后面、状态行前面，
+    // 让它离模型的输出更近一点，更容易照做。
+    const moodCue = mood ? safeCue() : '';
     if (cfg.mode === 'pet') {
       try {
         const sid = await ensurePetSession();
-        const extra = PET_HINT + (await petStateLine().catch(() => ''));
+        const extra = PET_HINT + moodCue + (await petStateLine().catch(() => ''));
         return { ...(await deliverTo(sid, text + extra, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
       } catch (e) {
         petReady = false;   // 下一次点触重新建
@@ -388,7 +408,17 @@ export function apply(ctx, config = {}) {
       }
     }
     const sid = await currentSession();
-    return { ...(await deliverTo(sid, text)), target: 'main' };
+    return { ...(await deliverTo(sid, text + moodCue)), target: 'main' };
+  }
+
+  /** 取情绪卡。任何异常都吞掉：情绪是附加的，不该让投递失败。 */
+  function safeCue() {
+    try {
+      return mood.cue();
+    } catch (e) {
+      log('mood cue failed: ' + e.message);
+      return '';
+    }
   }
 
   function describe(ev) {
@@ -421,6 +451,8 @@ export function apply(ctx, config = {}) {
     cfg: { ...cfg, peek: peekOn },
     log,
     deliver,
+    // 窥屏看到了什么 → 给情绪记一笔。看见了在忙还是摸鱼，是两回事。
+    onScene: (p) => { if (mood) { try { mood.peekScene(p); } catch (e) { log('mood scene failed: ' + e.message); } } },
     onStateChange: () => { peekOn = peek.on; persist(); },
   });
 
@@ -435,6 +467,7 @@ export function apply(ctx, config = {}) {
         petArchived: isArchived(petSid),
         echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
         peek: peek.state(),
+        mood: mood ? mood.state().summary : 'off',
         lastCue,
         recent: recent.slice(-10),
       });
@@ -444,6 +477,10 @@ export function apply(ctx, config = {}) {
     }
     if (req.method === 'GET' && url.pathname === '/recent') {
       return send(res, 200, { ok: true, items: recent.slice(-30) });
+    }
+    // 她现在什么心情。默认关着的时候返回 enabled:false，不是 404 —— 前端不用分两种错误处理。
+    if (req.method === 'GET' && url.pathname === '/mood') {
+      return send(res, 200, { ok: true, enabled: !!mood, ...(mood ? mood.state() : {}) });
     }
     if (req.method !== 'POST') return send(res, 404, { ok: false, error: 'not found' });
 
@@ -474,6 +511,15 @@ export function apply(ctx, config = {}) {
         }
         return send(res, 200, { ok: true, ...peek.state() });
       }
+      // 情绪：只有「哄好」和「喂一笔」两个动作，参数改了要重启，避免线上参数漂移
+      if (url.pathname === '/mood') {
+        if (!mood) return send(res, 200, { ok: true, enabled: false, note: 'mood 没开，配置里把 mood 设成 true' });
+        if (body.reset) return send(res, 200, { ok: true, ...mood.state(), reset: true, note: '已经哄好了' });
+        if (body.scene) {
+          try { mood.scene(body.scene); } catch (e) { return send(res, 500, { ok: false, error: e.message }); }
+        }
+        return send(res, 200, { ok: true, enabled: true, ...mood.state() });
+      }
       if (cfg.quiet) return send(res, 200, { ok: true, skipped: 'quiet' });
 
       const isEvent = url.pathname === '/event';
@@ -481,12 +527,21 @@ export function apply(ctx, config = {}) {
       if (!text) return send(res, 400, { ok: false, error: 'empty' });
 
       if (isEvent) {
+        // 被摸了这个事实先记下来，哪怕下面因为限流不投递 —— 她该记得有人来找过她。
+        // 同一部位两分钟内只记一次，防止连点把情绪点爆。
+        if (mood) {
+          try { mood.touch(body); } catch (e) { log('mood touch failed: ' + e.message); }
+        }
         const verdict = shouldWake(body);
         recent.push({ at: new Date().toISOString(), zone: body.zone || '', verdict });
         if (recent.length > 60) recent.shift();
         if (verdict !== 'ok') return send(res, 200, { ok: true, skipped: verdict, zone: body.zone || '' });
       }
       const now = Date.now();
+      // 主人在气泡里回她一句 = 一次真心互动，够把委屈清零
+      if (!isEvent && mood) {
+        try { mood.speech(text, now); } catch (e) { log('mood speech failed: ' + e.message); }
+      }
       try {
         const r = await deliver(text);
         lastAt = now; lastZone = isEvent ? (body.zone || '') : lastZone;
@@ -505,5 +560,20 @@ export function apply(ctx, config = {}) {
   server.listen(cfg.port, '127.0.0.1', () => log(`listening on 127.0.0.1:${cfg.port} (mode=${cfg.mode})`));
   ctx.logger?.info?.(`pet-bridge listening on 127.0.0.1:${cfg.port} (mode=${cfg.mode})`);
   peek.start();
-  ctx.on('dispose', () => { try { peek.stop(); } catch {} try { server.close(); } catch {} });
+
+  // 情绪需要一个「即使没人点也会自己走」的时钟：衰减、攒委屈、落盘。
+  // 读的时候也会顺手结算一次，所以这个定时器挂了也不会让情绪停在原地，只是落盘晚一点。
+  if (mood) {
+    moodTimer = setInterval(() => {
+      try { mood.tick(); } catch (e) { log('mood tick failed: ' + e.message); }
+    }, Math.max(60000, Number(cfg.moodTickMs) || 300000));
+    if (moodTimer.unref) moodTimer.unref();
+    log('mood enabled: ' + (cfg.moodFile || '$DSH_HOME/pet-mood.json'));
+  }
+
+  ctx.on('dispose', () => {
+    try { peek.stop(); } catch {}
+    try { if (moodTimer) clearInterval(moodTimer); } catch {}
+    try { server.close(); } catch {}
+  });
 }

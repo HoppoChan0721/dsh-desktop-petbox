@@ -9,5 +9,8 @@
     "./package.json": "./package.json"
   },
   "private": true,
+  "scripts": {
+    "test": "node --test"
+  },
   "license": "MIT"
 }
