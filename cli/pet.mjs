@@ -248,6 +248,40 @@ async function main() {
     return;
   }
 
+  if (cmd === 'mood') {
+    // 情绪：她现在什么心情、因为什么。node pet.mjs mood | reset
+    // reset = 一键哄好，把账本清空。走桥插件（61944），状态活在 DSH 那边。
+    const BRIDGE = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
+    const a = String(F._[0] || '').toLowerCase();
+    const r = a === 'reset' ? await jpost(`${BRIDGE}/mood`, { reset: true }) : await jget(`${BRIDGE}/mood`);
+    if (r.status !== 200) {
+      console.log('失败：桥插件没在跑？(' + ((r.data && r.data.error) || r.status) + ')');
+      return;
+    }
+    const d = r.data || {};
+    if (d.enabled === false) {
+      console.log('情绪没开。配置里给 pet-bridge 加 mood: true，然后重启 DSH。');
+      return;
+    }
+    const snap = d.snapshot || {};
+    const axes = snap.axes || {};
+    const pct = (n) => (n >= 0 ? '+' : '') + Math.round((Number(n) || 0) * 100);
+    console.log(`${d.summary || ''}`);
+    console.log(`档位 ${snap.tier || '-'}　亲近 ${pct(axes.closeness)}　心情 ${pct(axes.valence)}　想说话 ${pct(axes.expression)}`);
+    if (snap.idleMinutes != null) console.log(`已经 ${Math.floor(snap.idleMinutes / 60)} 小时 ${snap.idleMinutes % 60} 分钟没人理她`);
+    const vals = Object.entries(snap.values || {}).filter(([, v]) => v > 0.01);
+    if (vals.length) console.log('账本：' + vals.map(([k, v]) => `${k}=${v.toFixed(2)}`).join('　'));
+    if (d.log && d.log.length) {
+      console.log('最近：');
+      for (const e of d.log.slice(0, 5)) {
+        const t = new Date(e.at).toLocaleTimeString('zh-CN');
+        console.log(`  ${t}　${e.emotion} ${e.delta > 0 ? '+' : ''}${Number(e.delta).toFixed(2)}　${e.reason || ''}`);
+      }
+    }
+    if (a === 'reset') console.log('（已经哄好了）');
+    return;
+  }
+
   if (cmd === 'fps') {
     // 舞台帧率上限：不设就是跟着显示器刷新率跑（144/165Hz 会白烧 CPU）
     const a = String(F._[0] || '').toLowerCase();
@@ -437,6 +471,7 @@ const USAGE = `
   cursor [on|off]                指针追踪（眼睛+头+身子跟着鼠标；不带参数=读）
   volume [0..1 或 0..100]        语音音量（不带参数=读）
   peek [on|off|now]              窥屏：隔一阵自己瞄屏幕再主动开口（不带参数=读状态）
+  mood [reset]                   她现在什么心情、因为什么（reset=一键哄好）
   stop                           停住并回待机
 
   任意动作可追加： --at 秒  --duration 秒  --and look=down --and tilt=right

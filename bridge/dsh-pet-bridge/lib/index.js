@@ -73,6 +73,7 @@ const DEFAULTS = {
   // 是不是会因为你冷落她而真的不高兴。默认关：老用户拉下来行为一个字不变。
   mood: false,
   moodFile: '',                     // 状态文件，默认 $DSH_HOME/pet-mood.json
+  moodGates: false,                 // 闸门：冷战期真的按概率不理人。参数调好之前别开
   moodTickMs: 5 * 60 * 1000,        // 多久结算一次衰减（也顺手把状态落盘）
 };
 
@@ -536,6 +537,21 @@ export function apply(ctx, config = {}) {
         recent.push({ at: new Date().toISOString(), zone: body.zone || '', verdict });
         if (recent.length > 60) recent.shift();
         if (verdict !== 'ok') return send(res, 200, { ok: true, skipped: verdict, zone: body.zone || '' });
+
+        // 情绪闸门：她可能真的不理人。概率和延迟都从 profile 的 gates.touch 里读，
+        // 这里只负责照做，不自己发明规则。默认关着，等参数调顺了再打开。
+        if (mood && cfg.moodGates) {
+          const g = mood.gate('touch');
+          const respond = typeof g.respond === 'number' ? g.respond : 1;
+          if (respond < 1 && Math.random() > respond) {
+            recent.push({ at: new Date().toISOString(), zone: body.zone || '', verdict: 'mood-silent' });
+            log(`mood gate: 不理 zone=${body.zone || '-'} tier=${mood.snapshot().tier}`);
+            return send(res, 200, { ok: true, skipped: 'mood-silent', why: '她现在不太想理人', zone: body.zone || '' });
+          }
+          // 延迟最多 3 秒：再长挂着的 HTTP 请求会被壳子判超时
+          const delay = Math.min(3000, Number(g.extraDelayMs) || 0);
+          if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        }
       }
       const now = Date.now();
       // 主人在气泡里回她一句 = 一次真心互动，够把委屈清零
