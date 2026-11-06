@@ -119,6 +119,20 @@ test('形态词能靠 profile 换掉', () => {
   assert.deepEqual(words.includes('炸毛'), true);
 });
 
+test('晾一整天那种最常见的委屈，要能显出蔫', () => {
+  // 实跑账本：没人理一整天，委屈稳定在 0.44 左右。这个强度必须出形态词，
+  // 不然「不痛快」这一整段都只剩同一句提示词，等于白加两条轴。
+  const snap = withMood({ upset: 0.44 });
+  const words = shapesOf(snap, P);
+  assert.ok(words.includes('蔫着'), '憋了一整天该是蔫的');
+  assert.ok(words.includes('气势低'));
+});
+
+test('刚有一点不满的时候不硬套形态词', () => {
+  const snap = withMood({ upset: 0.2, joy: 0.1 });
+  assert.deepEqual(shapesOf(snap, P), [], '轻微波动别硬说成蔫');
+});
+
 test('冷落久了先蔫，攒到一定程度才绷', () => {
   // 三小时没人理：有点委屈，还是蔫的
   const t1 = T0 + min(180);
