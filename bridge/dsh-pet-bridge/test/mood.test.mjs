@@ -29,6 +29,7 @@ test('空账本是平静的，也不占字数', () => {
   const s = createState(P, T0);
   const snap = resolve(s, P, T0);
   assert.equal(snap.tier, 'calm');
+  assert.equal(snap.dominant, null, '全零的时候不该有主情绪');
   assert.equal(snap.axes.valence, 0);
   assert.equal(render(snap, P), '');
 });

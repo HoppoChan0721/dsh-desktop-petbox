@@ -238,8 +238,10 @@ export function resolve(state, profile, now = Date.now()) {
       peak = v;
       dominant = name;
     }
-    // 能推档位的负面情绪优先当主情绪：生气和委屈一样大时，该说自己是在生气
-    if (v >= tierPeak && (def.drives || []).includes('tier') && def.polarity < 0) {
+    // 能推档位的负面情绪优先当主情绪：生气和委屈一样大时，该说自己是在生气。
+    // 必须带 v > 0：光靠 >= 的话全零账本也会命中（0 >= 0），平静时主情绪会被写成
+    // 最后一个负面情绪，托盘上看着像「明明没事却在生气」。
+    if (v > 0 && v >= tierPeak && (def.drives || []).includes('tier') && def.polarity < 0) {
       tierPeak = v;
       dominant = name;
     }
