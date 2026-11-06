@@ -17,14 +17,32 @@
 
 import { ingest, resolve, gate as gateOf, tick as tickOf } from './engine.js';
 import { createStore } from './store.js';
-import { DEFAULT_PROFILE, SCHEMA_VERSION } from './profile.js';
+import { DEFAULT_PROFILE, SCHEMA_VERSION, mergeProfile, isValidProfile } from './profile.js';
 import { fromTouch, fromScene, fromSpeech, fromIdle, sceneFromPeek } from './signals.js';
 import { render, summarize } from './cue.js';
+import { readFileSync } from 'node:fs';
 
 const IDLE_MIN_MINUTES = 120;        // 少于两小时不算冷落
 const IDLE_TICK_MINUTES = 30;        // 每半小时结算一次，别每轮都记
 
-export function createMood({ file = '', profile = DEFAULT_PROFILE, log = () => {}, now = () => Date.now() } = {}) {
+export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, profileFile = '', log = () => {}, now = () => Date.now() } = {}) {
+  // 外置调参：不改代码就能换参数。坏文件退回默认——
+  // 调参不该有让桥起不来的能力，这是公共插件的底线。
+  let profile = baseProfile;
+  if (profileFile) {
+    try {
+      const merged = mergeProfile(baseProfile, JSON.parse(readFileSync(profileFile, 'utf8')));
+      if (isValidProfile(merged)) {
+        profile = merged;
+        log('mood: profile loaded from ' + profileFile);
+      } else {
+        log('mood: profile at ' + profileFile + ' unusable, keeping defaults');
+      }
+    } catch (e) {
+      log('mood: profile unreadable (' + (e && e.message) + '), keeping defaults');
+    }
+  }
+
   const store = createStore({ file, profile, log });
   let state = store.open(now());
 

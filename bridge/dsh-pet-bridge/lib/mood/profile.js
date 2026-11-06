@@ -23,6 +23,63 @@
 
 export const SCHEMA_VERSION = 1;
 
+/**
+ * 把一份外部配置合并到默认表上。
+ *
+ * 存在的意义：调参不该改代码。别人拉下仓库想把她改得迟钝一点，只要写个 JSON
+ * 放进 moodProfile，不用碰这个文件——改代码的人一多，冲突就来了。
+ *
+ * 合并规则（刻意简单，好预期）：
+ *   - 对象按键合并，emotions / gates / cue 再多深一层，加一种情绪不用重写别的
+ *   - 数组整体替换，不拼接 —— 规则表拼接会让顺序变得不可控
+ *   - 值是 null 的键删掉
+ *   - patch 里没写的键保持默认
+ *
+ * @param {object} base   DEFAULT_PROFILE
+ * @param {object} patch  moodProfile 读出来的 JSON
+ * @returns {object} 新对象，不改入参
+ */
+export function mergeProfile(base, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return base;
+
+  const out = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) { delete out[key]; continue; }
+    if (Array.isArray(value)) { out[key] = value; continue; }
+
+    const cur = base[key];
+    const bothPlain = value && typeof value === 'object'
+      && cur && typeof cur === 'object' && !Array.isArray(cur);
+
+    if (!bothPlain) { out[key] = value; continue; }
+
+    if (key === 'emotions' || key === 'gates' || key === 'cue') {
+      const merged = { ...cur };
+      for (const [k, v] of Object.entries(value)) {
+        if (v === null) { delete merged[k]; continue; }
+        const prev = merged[k];
+        merged[k] = (v && typeof v === 'object' && !Array.isArray(v) && prev && typeof prev === 'object' && !Array.isArray(prev))
+          ? { ...prev, ...v }
+          : v;
+      }
+      out[key] = merged;
+    } else {
+      out[key] = { ...cur, ...value };
+    }
+  }
+  return out;
+}
+
+/** 合并后的表还活着吗。坏掉的 profile 宁可不用，也不能让桥起不来。 */
+export function isValidProfile(profile) {
+  if (!profile || typeof profile !== 'object') return false;
+  if (!profile.emotions || typeof profile.emotions !== 'object') return false;
+  if (!Object.keys(profile.emotions).length) return false;
+  if (!Array.isArray(profile.tiers) || !profile.tiers.length) return false;
+  return true;
+}
+
 export const DEFAULT_PROFILE = {
   version: SCHEMA_VERSION,
 

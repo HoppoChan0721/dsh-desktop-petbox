@@ -73,6 +73,7 @@ const DEFAULTS = {
   // 是不是会因为你冷落她而真的不高兴。默认关：老用户拉下来行为一个字不变。
   mood: false,
   moodFile: '',                     // 状态文件，默认 $DSH_HOME/pet-mood.json
+  moodProfile: '',                  // 外置情绪表（JSON），和默认表合并；改参数不用动代码
   moodGates: false,                 // 闸门：冷战期真的按概率不理人。参数调好之前别开
   moodTickMs: 5 * 60 * 1000,        // 多久结算一次衰减（也顺手把状态落盘）
 };
@@ -128,6 +129,7 @@ export function apply(ctx, config = {}) {
   const mood = cfg.mood === true || cfg.mood === 'on'
     ? createMood({
         file: cfg.moodFile || (process.env.DSH_HOME ? join(process.env.DSH_HOME, 'pet-mood.json') : ''),
+        profileFile: cfg.moodProfile || '',
         log,
       })
     : null;
