@@ -42,7 +42,7 @@ test('没互动会攒委屈，但前两小时不算', () => {
   assert.ok(resolve(s2, P, T0).values.upset > 0.1);
 });
 
-test('委屈不到 0.4 时，看见在玩也不会生气', () => {
+test('委屈不到线时，看见在玩也不会生气', () => {
   const s = ingest(createState(P, T0), fromIdle(6 * 60), P, T0);   // 委屈 0.12
   const after = ingest(s, fromScene({ category: 'leisure', label: 'Steam' }), P, T0 + 1000);
   assert.equal(resolve(after, P, T0 + 1000).values.anger, 0);

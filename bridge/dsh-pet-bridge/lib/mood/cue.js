@@ -11,9 +11,9 @@
 /** 默认语气模板。可以在 profile.cue.tones 里整段替换。 */
 export const DEFAULT_TONES = {
   sulky: '说话短一点，可以带点刺，但不主动翻旧账',
-  cold: '只回极短的一句，不主动示好，主人追问也冷着，别解释为什么生气',
+  cold: '只回极短的一句，不主动示好，被追问也冷着，别解释为什么生气',
   warm: '语气软一点，愿意多说两句',
-  worried: '语气软，关心一下，催主人早点休息',
+  worried: '语气软，关心一下，催他早点休息',
   jealous: '有点酸，别直接承认',
 };
 
@@ -42,14 +42,14 @@ export function render(snapshot, profile, opts = {}) {
     return wrap(`你现在有点不痛快，${because}。${tones.sulky}`, opts);
   }
   if ((values.worried || 0) > 0.3) {
-    return wrap(`你在担心主人，${because}。${tones.worried}`, opts);
+    return wrap(`你在担心他，${because}。${tones.worried}`, opts);
   }
   if ((values.jealous || 0) > 0.3) {
     return wrap(`你有点吃醋，${because}。${tones.jealous}`, opts);
   }
-  // 心疼优先于单纯的高兴：看见主人在忙，该是软下来的那种心情，不是雀跃
+  // 心疼优先于单纯的高兴：看见对方在忙，该是软下来的那种心情，不是雀跃
   if ((values.moved || 0) > 0.3 && (values.moved || 0) >= (values.joy || 0)) {
-    return wrap(`你有点心疼主人，${because}。${tones.warm}`, opts);
+    return wrap(`你有点心疼他，${because}。${tones.warm}`, opts);
   }
   if ((values.joy || 0) > 0.3) {
     return wrap(`你现在心情不错，${because}。${tones.warm}`, opts);

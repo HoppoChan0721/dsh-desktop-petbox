@@ -4,8 +4,8 @@
 //
 //   createMood({ file, profile, log, now })
 //     .touch(evt)        被摸了一下
-//     .scene(peekResult) 看见主人在干什么
-//     .speech(text)      主人说了句话
+//     .scene(peekResult) 看见使用者在干什么
+//     .speech(text)      使用者说了句话
 //     .cue()             取情绪卡，平静时返回空串
 //     .gate(name)        问闸门，返回 { respond, intervalFactor, ... }
 //     .state()           给 HTTP / 托盘看的完整快照，含账本

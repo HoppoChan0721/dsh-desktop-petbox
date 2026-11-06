@@ -37,13 +37,13 @@ export function fromIdle(minutes, now = Date.now(), weightHours) {
   };
 }
 
-/** 会话里说了句话。主人的回应一律算正面刺激，清账的事写在规则里。 */
+/** 会话里说了句话。对方的回应一律算正面刺激，清账的事写在规则里。 */
 export function fromSpeech(text, now = Date.now()) {
   return { kind: 'speech', at: now, text: String(text || ''), weight: 1 };
 }
 
 /**
- * 看见主人在干什么。
+ * 看见使用者在干什么。
  * scene 是 { category, label, night }，category 至少要有 leisure / work / social 三种，
  * 分类由 classifyScene 判定，也可以在配置里覆盖。
  */

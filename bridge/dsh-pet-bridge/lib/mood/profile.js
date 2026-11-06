@@ -35,8 +35,10 @@ export const DEFAULT_PROFILE = {
       polarity: -1,
       drives: ['tier', 'tone', 'expression'],
       label: '生气',
-      // 委屈没攒够就只是更委屈，不会转化成气
-      requires: { path: 'mood.upset', gt: 0.4 },
+      // 委屈没攒够就只是更委屈，不会转化成气。
+      // 阈值取 0.3 而不是 0.4：一天没人理委屈大约稳在 0.44，衰减一小时后会掉到 0.39，
+      // 卡在 0.4 上会让「看见在玩却不生气」变得很随机。归因要稳，宁可早一点。
+      requires: { path: 'mood.upset', gt: 0.3 },
     },
     worried: { halfLife: 5, polarity: -1, drives: ['tone'], label: '担心' },
     jealous: { halfLife: 24, polarity: -1, drives: ['tone'], label: '吃醋' },
@@ -85,12 +87,12 @@ export const DEFAULT_PROFILE = {
       when: { path: 'signal.minutes', gt: 120 },
     },
     {
-      // 主人回话 = 一次真心回应，抵掉半天郁闷
+      // 对方回话 = 一次真心回应，抵掉半天郁闷
       id: 'speech-warm',
       on: 'speech',
       add: 'joy',
       delta: 0.4,
-      reason: '主人说话了',
+      reason: '他说话了',
       clear: ['upset', 'anger'],
     },
     {
@@ -105,7 +107,7 @@ export const DEFAULT_PROFILE = {
       key: 'zone',
     },
     {
-      // 说句话才是真亲近。主人愿意跟你讲话，比摸十下都算数。
+      // 说句话才是真亲近。对方愿意跟你讲话，比摸十下都算数。
       id: 'bond-speech',
       on: 'speech',
       add: 'bond',
@@ -119,11 +121,11 @@ export const DEFAULT_PROFILE = {
       on: 'scene',
       add: 'anger',
       delta: 0.45,
-      reason: '看见主人没干正事',
+      reason: '看见他在玩',
       when: {
         all: [
           { path: 'signal.category', eq: 'leisure' },
-          { path: 'mood.upset', gt: 0.4 },
+          { path: 'mood.upset', gt: 0.3 },
         ],
       },
       cooldown: 60 * 60 * 1000,
@@ -134,7 +136,7 @@ export const DEFAULT_PROFILE = {
       on: 'scene',
       add: 'moved',
       delta: 0.35,
-      reason: '看见主人在忙',
+      reason: '看见他在忙',
       when: { path: 'signal.category', eq: 'work' },
       cooldown: 60 * 60 * 1000,
       key: 'label',
