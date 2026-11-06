@@ -517,7 +517,10 @@ export function apply(ctx, config = {}) {
       // 情绪：只有「哄好」和「喂一笔」两个动作，参数改了要重启，避免线上参数漂移
       if (url.pathname === '/mood') {
         if (!mood) return send(res, 200, { ok: true, enabled: false, note: 'mood 没开，配置里把 mood 设成 true' });
-        if (body.reset) return send(res, 200, { ok: true, ...mood.state(), reset: true, note: '已经哄好了' });
+        if (body.reset) {
+          mood.reset();   // 清账本，不是只读给它看一眼
+          return send(res, 200, { ok: true, ...mood.state(), reset: true, note: '已经哄好了' });
+        }
         if (body.scene) {
           try { mood.scene(body.scene); } catch (e) { return send(res, 500, { ok: false, error: e.message }); }
         }
@@ -550,8 +553,9 @@ export function apply(ctx, config = {}) {
             log(`mood gate: 不理 zone=${body.zone || '-'} tier=${mood.snapshot().tier}`);
             return send(res, 200, { ok: true, skipped: 'mood-silent', why: '她现在不太想理人', zone: body.zone || '' });
           }
-          // 延迟最多 3 秒：再长挂着的 HTTP 请求会被壳子判超时
-          const delay = Math.min(3000, Number(g.extraDelayMs) || 0);
+          // 延迟最多 1.5 秒：这是「犹豫了一下」不是「卡住了」，
+          // 再长壳子那边等得心慌，也会让挂着的 HTTP 请求随时超时。
+          const delay = Math.min(1500, Number(g.extraDelayMs) || 0);
           if (delay > 0) await new Promise((r) => setTimeout(r, delay));
         }
       }
