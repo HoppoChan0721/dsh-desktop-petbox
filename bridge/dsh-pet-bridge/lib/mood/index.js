@@ -8,18 +8,21 @@
 //     .speech(text)      使用者说了句话
 //     .cue()             取情绪卡，平静时返回空串
 //     .gate(name)        问闸门，返回 { respond, intervalFactor, ... }
+//     .urge()            她这会儿自己想不想开口，返回 { speak, window, hint, idleMin }
+//     .markUrge(id)      记一次「真的开口了」，间隔和每日上限靠它算
 //     .state()           给 HTTP / 托盘看的完整快照，含账本
 //     .reset()           一键哄好
 //     .tick()            结算衰减并落盘，定时器或每次读取前调都行
 //
-// 把 engine（纯函数）、store（落盘）、signals（翻译）、cue（渲染）粘起来是这里唯一
-// 的职责。想换掉任何一层，替换这个文件里的 import 就行，外面的一行不用动。
+// 把 engine（纯函数）、store（落盘）、signals（翻译）、cue（渲染）、urge（冲动）
+// 粘起来是这里唯一的职责。想换掉任何一层，替换这个文件里的 import 就行，外面的一行不用动。
 
 import { ingest, resolve, gate as gateOf, tick as tickOf } from './engine.js';
 import { createStore } from './store.js';
 import { DEFAULT_PROFILE, SCHEMA_VERSION, mergeProfile, isValidProfile } from './profile.js';
 import { fromTouch, fromScene, fromSpeech, fromIdle, sceneFromPeek } from './signals.js';
 import { render, summarize } from './cue.js';
+import { decide as decideUrge, mark as markUrgeOf, summarizeUrge } from './urge.js';
 import { readFileSync } from 'node:fs';
 
 const IDLE_MIN_MINUTES = 120;        // 少于两小时不算冷落
@@ -120,6 +123,19 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
       return gateOf(resolve(state, profile, at), profile, name);
     },
 
+    /** 她现在自己想不想开口。只读，不写账本。 */
+    urge(at = now()) {
+      settleIdle(at);
+      return decideUrge(resolve(state, profile, at), state, profile, at);
+    },
+
+    /** 真的开口了才记这一笔。投递失败就别记，下一轮还能重来。 */
+    markUrge(id, at = now()) {
+      state = markUrgeOf(state, id, at);
+      store.save(state);
+      return state;
+    },
+
     /** 给 HTTP / 托盘：快照 + 人话摘要 + 账本 + 最近记录。 */
     state(at = now()) {
       settleIdle(at);
@@ -128,6 +144,7 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
         schemaVersion: SCHEMA_VERSION,
         summary: summarize(snap, profile),
         snapshot: snap,
+        urge: summarizeUrge(state, profile, at),
         log: (state.log || []).slice(-8).reverse(),
       };
     },

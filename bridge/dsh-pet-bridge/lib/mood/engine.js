@@ -17,7 +17,9 @@
 //     tier: 'calm',                       上一次结算出的档位，用来做回差
 //     cooldowns: { 'ruleId:key': at },
 //     log: [ { at, emotion, delta, reason } ],   最近若干条，渲染情绪卡用
-//     lastInteractionAt, lastSignalAt
+//     lastInteractionAt, lastSignalAt,
+//     createdAt,                                  建账本的时间
+//     urges: { [windowId]: [at, ...] }            主动开口过的时刻，给 urge 算间隔和上限
 //   }
 
 import { SCHEMA_VERSION } from './profile.js';
@@ -40,6 +42,11 @@ export function createState(profile, now = Date.now()) {
     log: [],
     lastInteractionAt: 0,
     lastSignalAt: 0,
+    // 什么时候第一次建的。一次都没被碰过的时候，「多久没人理」靠它算，
+    // 不然刚装上就要听她抱怨被冷落。
+    createdAt: now,
+    // 主动开口的记账表：{ [windowId]: [时间戳] }。老状态文件里没有这个键，读的时候兜空。
+    urges: {},
   };
 }
 

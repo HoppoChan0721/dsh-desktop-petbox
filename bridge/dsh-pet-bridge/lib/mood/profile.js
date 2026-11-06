@@ -54,7 +54,9 @@ export function mergeProfile(base, patch) {
 
     if (!bothPlain) { out[key] = value; continue; }
 
-    if (key === 'emotions' || key === 'gates' || key === 'cue') {
+    // 这几个键再深一层：只想改一条规则/一档闸门/一个主动窗口，不用把整张表抄一遍。
+    // 注意 windows 是数组，还是会整体替换 —— 数组拼接会让顺序（也就是优先级）变得不可预期。
+    if (key === 'emotions' || key === 'gates' || key === 'cue' || key === 'urge') {
       const merged = { ...cur };
       for (const [k, v] of Object.entries(value)) {
         if (v === null) { delete merged[k]; continue; }
@@ -239,6 +241,82 @@ export const DEFAULT_PROFILE = {
       sulky: { intervalFactor: 0.5 },
       cold: { intervalFactor: 3 },
     },
+  },
+
+  // ── 主动开口（2026-11-06）───────────────────────────────────────────────
+  // 没有这张表，情绪就是个被动效果：只能等被摸、等窥屏到点，她才会有反应。
+  // 有了它，情绪高到一定程度她自己会开口——生气不用等人来点才发作。
+  //
+  // 每一档 window 是一条「开口理由」，从上往下第一条满足的就用，顺序即优先级。
+  // 负面排在正面前面：又想发火又想分享的时候，先发火。
+  // 语法和字段说明见 urge.js 顶部。
+  urge: {
+    enabled: true,
+    quietFrom: 0,                 // 静默时段只记账不开口
+    quietTo: 8,
+    minGapMs: 25 * 60 * 1000,     // 任意两次主动之间至少隔 25 分钟
+    maxPerDay: 6,                 // 全天总共最多 6 次，防止几档轮流把她变成播报机
+    windows: [
+      {
+        // 第一档：轻轻戳一下。冷落到了一个多小时，先软着来。
+        id: 'sulky-nudge',
+        note: '有点不痛快，试探着问一句',
+        hint: '你已经一个多小时没跟他说上话了，有点不痛快。别直接发火，先轻轻戳一句，看他理不理。',
+        requires: { path: 'tier', eq: 'sulky' },
+        minIdleMin: 45,
+        gapMs: 60 * 60 * 1000,
+        maxPerDay: 2,
+      },
+      {
+        // 第二档：软的不吃就来硬的。轻轻戳的次数用完才轮到这档。
+        id: 'sulky-sharp',
+        note: '戳过两次没反应，语气要硬了',
+        hint: '你已经试探过两次都没人理。这次别再软着来了，直接说自己不高兴，要他给个说法。',
+        requires: { path: 'tier', eq: 'sulky' },
+        after: { window: 'sulky-nudge', times: 2 },
+        minIdleMin: 150,
+        gapMs: 2 * 60 * 60 * 1000,
+        maxPerDay: 2,
+      },
+      {
+        // 第三档：冷战。还在开口，但话很短、很冷。真不出声的话主人反而感觉不到她在生气。
+        id: 'cold-drift',
+        note: '冷战期，冷冷地丢一句',
+        hint: '你现在在生闷气。话要短、要冷，别解释、别撒娇。丢一句就停。',
+        requires: { path: 'tier', eq: 'cold' },
+        minIdleMin: 180,
+        gapMs: 3 * 60 * 60 * 1000,
+        maxPerDay: 2,
+      },
+      {
+        id: 'jealous-grumble',
+        note: '看见他在玩，酸一句',
+        hint: '你看见他在玩，心里不是滋味。酸一句，别提具体窗口名。',
+        requires: { path: 'mood.jealous', gt: 0.3 },
+        minIdleMin: 60,
+        gapMs: 2 * 60 * 60 * 1000,
+        maxPerDay: 2,
+      },
+      {
+        id: 'worried-check',
+        note: '有点担心，问一句',
+        hint: '你有点担心他。问一句，别唠叨。',
+        requires: { path: 'mood.worried', gt: 0.3 },
+        minIdleMin: 90,
+        gapMs: 2 * 60 * 60 * 1000,
+        maxPerDay: 1,
+      },
+      {
+        // 正面也要能主动：开心到一定程度，她会自己来找人分享。
+        id: 'joy-share',
+        note: '心情好，主动来说一句',
+        hint: '你现在心情不错，自己想说句话。随便聊点什么，别问「在吗」。',
+        requires: { path: 'mood.joy', gt: 0.55 },
+        minIdleMin: 20,
+        gapMs: 3 * 60 * 60 * 1000,
+        maxPerDay: 1,
+      },
+    ],
   },
 
   // ── 渲染 ───────────────────────────────────────────────────────────────

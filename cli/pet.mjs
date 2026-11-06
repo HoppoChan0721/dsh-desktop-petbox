@@ -249,11 +249,14 @@ async function main() {
   }
 
   if (cmd === 'mood') {
-    // 情绪：她现在什么心情、因为什么。node pet.mjs mood | reset
+    // 情绪：她现在什么心情、因为什么。node pet.mjs mood | reset | urge
     // reset = 一键哄好，把账本清空。走桥插件（61944），状态活在 DSH 那边。
+    // urge  = 立刻问她一句想不想自己开口（跟定时那条共用同一套判断）
     const BRIDGE = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
     const a = String(F._[0] || '').toLowerCase();
-    const r = a === 'reset' ? await jpost(`${BRIDGE}/mood`, { reset: true }) : await jget(`${BRIDGE}/mood`);
+    const r = a === 'reset' ? await jpost(`${BRIDGE}/mood`, { reset: true })
+      : a === 'urge' ? await jpost(`${BRIDGE}/mood`, { urge: true })
+      : await jget(`${BRIDGE}/mood`);
     if (r.status !== 200) {
       console.log('失败：桥插件没在跑？(' + ((r.data && r.data.error) || r.status) + ')');
       return;
@@ -279,6 +282,18 @@ async function main() {
       }
     }
     if (a === 'reset') console.log('（已经哄好了）');
+    if (a === 'urge') {
+      const u = d.urgeResult || {};
+      console.log(u.spoke ? `她开口了：${u.window}（${u.idleMin} 分钟没人理）` : `没开口：${u.why || '?'}`);
+    }
+    const au = d.urge || {};
+    if (au.enabled) {
+      const win = Object.entries(au.windows || {}).filter(([, v]) => v.today > 0);
+      console.log(`主动开口：今天 ${au.today || 0} 次${au.maxPerDay ? ' / 上限 ' + au.maxPerDay : ''}`
+        + (win.length ? '　' + win.map(([k, v]) => `${k}×${v.today}`).join('　') : ''));
+    } else {
+      console.log('主动开口：没开。配置里加 moodUrge: true。');
+    }
     return;
   }
 
@@ -471,7 +486,7 @@ const USAGE = `
   cursor [on|off]                指针追踪（眼睛+头+身子跟着鼠标；不带参数=读）
   volume [0..1 或 0..100]        语音音量（不带参数=读）
   peek [on|off|now]              窥屏：隔一阵自己瞄屏幕再主动开口（不带参数=读状态）
-  mood [reset]                   她现在什么心情、因为什么（reset=一键哄好）
+  mood [reset|urge]              她现在什么心情、因为什么（reset=哄好，urge=立刻问她想不想开口）
   stop                           停住并回待机
 
   任意动作可追加： --at 秒  --duration 秒  --and look=down --and tilt=right

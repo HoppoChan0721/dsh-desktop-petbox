@@ -74,6 +74,10 @@ export const DEFAULT_SCENE_RULES = {
     /bilibili/i, /哔哩哔哩/i, /youtube/i, /netflix/i, /twitch/i, /抖音|douyin/i,
     /minecraft/i, /\bcs2\b|counter-strike/i, /league of legends|\blol\b/i, /genshin|原神/i,
     /honkai|星穹铁道|崩坏/i, /valorant/i, /dota/i, /apex/i, /pubg/i, /palworld|幻兽帕鲁/i,
+    // 单机 / 老游戏：进程名常常就是缩写，标题是中文译名，两个都认一下
+    /war3|warcraft|魔兽/i, /starcraft|星际/i, /red\s*alert|红色警戒/i,
+    /civilization|文明/i, /skyrim|上古卷轴/i, /elden\s*ring|艾尔登法环/i,
+    /baldur|博德之门/i, /stardew|星露谷/i, /factorio|异星工厂/i,
   ],
   social: [
     /discord/i, /telegram/i, /\bqq\b/i, /wechat|微信/i, /weibo|微博/i, /twitter|\bx\.com/i,

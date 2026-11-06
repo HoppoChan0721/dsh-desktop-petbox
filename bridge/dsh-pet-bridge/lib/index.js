@@ -76,6 +76,12 @@ const DEFAULTS = {
   moodProfile: '',                  // 外置情绪表（JSON），和默认表合并；改参数不用动代码
   moodGates: false,                 // 闸门：冷战期真的按概率不理人。参数调好之前别开
   moodTickMs: 5 * 60 * 1000,        // 多久结算一次衰减（也顺手把状态落盘）
+  // ---- 主动开口（2026-11-06）----
+  // 光有情绪还是被动的：生气要等被摸一下才发作。开了这个，情绪够了她自己会把话送到桌面上。
+  // 默认关，它真的会打断主人正在干的事，要不要开是使用者的决定，不是插件的。
+  moodUrge: false,
+  moodUrgeTickMs: 60 * 1000,        // 多久问一次「她想不想开口」。问一次只是纯计算，很便宜
+  moodUrgeCooldownMs: 10 * 60 * 1000, // 投递失败后先歇一会儿，别每分钟重试
 };
 
 const ZONE_LABEL = {
@@ -461,6 +467,60 @@ export function apply(ctx, config = {}) {
     onStateChange: () => { peekOn = peek.on; persist(); },
   });
 
+  // ---- 主动开口（2026-11-06）----
+  // 情绪够了她自己开口，不等主人来碰。跟窥屏走同一条投递管道（deliver → followup），
+  // 谁也不认识谁：urge 只管「该不该说」，peek 只管「看见什么」，两条都能单独关掉。
+  //
+  // 判断全是纯计算，一分钟问一次也不心疼；真正花钱的是 speak 之后那一轮会话。
+  let urgeTimer = null;
+  let urgeBusy = false;
+  let urgeBackoffUntil = 0;
+  let lastUrgeNote = '';
+
+  function urgePrompt(d) {
+    const mins = Math.max(1, Math.round(d.idleMin));
+    const nth = d.attempt + 1;
+    return '（桌宠｜这次不是主人叫你，是你自己想开口。'
+      + `${d.hint}离上次有人跟你说上话已经 ${mins} 分钟了，这是你自己第 ${nth} 次搭话。`
+      + '说完就等着，别连发。）';
+  }
+
+  async function urgeStep(reason = 'timer') {
+    if (!mood || !cfg.moodUrge) return { ok: false, why: 'off' };
+    if (urgeBusy) return { ok: false, why: 'busy' };
+    if (cfg.quiet) return { ok: false, why: 'quiet' };
+    if (urgeBackoffUntil && Date.now() < urgeBackoffUntil) return { ok: false, why: 'backoff' };
+    // 窥屏刚替她说过话就别再补一句：两条管道汇到同一个气泡，会像复读
+    const lastPeek = Date.parse((peek.state() || {}).lastAt || '') || 0;
+    if (lastPeek && Date.now() - lastPeek < 10 * 60 * 1000) return { ok: false, why: 'just-spoke' };
+
+    let d;
+    try {
+      d = mood.urge();
+    } catch (e) {
+      log('urge decide failed: ' + e.message);
+      return { ok: false, why: 'error' };
+    }
+    if (!d.speak) { lastUrgeNote = '不想开口（' + d.why + '）'; return { ok: true, spoke: false, why: d.why }; }
+
+    urgeBusy = true;
+    try {
+      const r = await deliver(urgePrompt(d));
+      // 投递成功才记账：失败一次还想再试一次，不该直接扣掉她一次机会
+      mood.markUrge(d.window);
+      lastUrgeNote = `开口 ${d.window}（${Math.round(d.idleMin)} 分钟没人理）`;
+      log(`urge spoke window=${d.window} tier=${d.tier} idle=${Math.round(d.idleMin)}min attempt=${d.attempt} via=${reason} target=${r.target}`);
+      return { ok: true, spoke: true, window: d.window, tier: d.tier, idleMin: Math.round(d.idleMin), target: r.target };
+    } catch (e) {
+      urgeBackoffUntil = Date.now() + Math.max(60000, Number(cfg.moodUrgeCooldownMs) || 600000);
+      lastUrgeNote = '开口失败：' + e.message;
+      log('urge deliver failed: ' + e.message);
+      return { ok: false, why: e.message };
+    } finally {
+      urgeBusy = false;
+    }
+  }
+
   const server = createServer((req, res) => {
     const url = new URL('http://x' + (req.url || '/'));
     if (req.method === 'GET' && url.pathname === '/health') {
@@ -473,6 +533,7 @@ export function apply(ctx, config = {}) {
         echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
         peek: peek.state(),
         mood: mood ? mood.state().summary : 'off',
+        urge: { on: !!(mood && cfg.moodUrge), last: lastUrgeNote },
         lastCue,
         recent: recent.slice(-10),
       });
@@ -525,6 +586,12 @@ export function apply(ctx, config = {}) {
         }
         if (body.scene) {
           try { mood.scene(body.scene); } catch (e) { return send(res, 500, { ok: false, error: e.message }); }
+        }
+        // {"urge":true} = 立刻问她一句想不想开口（调试用，不改变任何记账）
+        // 结果放 urgeResult：urge 这个键是状态摘要，别被动作结果顶掉
+        if (body.urge) {
+          const r = await urgeStep('manual').catch((e) => ({ ok: false, error: e.message }));
+          return send(res, 200, { ok: true, urgeResult: r, ...mood.state() });
         }
         return send(res, 200, { ok: true, enabled: true, ...mood.state() });
       }
@@ -595,9 +662,20 @@ export function apply(ctx, config = {}) {
     log('mood enabled: ' + (cfg.moodFile || '$DSH_HOME/pet-mood.json'));
   }
 
+  // 光有情绪还是被动的。开了 moodUrge，她自己会在情绪够的时候开口。
+  // 一分钟问一次是纯计算；真到要说话那一步，一次投递就是一轮极短的会话。
+  if (mood && cfg.moodUrge) {
+    urgeTimer = setInterval(() => {
+      urgeStep('timer').catch((e) => log('urge tick failed: ' + e.message));
+    }, Math.max(30000, Number(cfg.moodUrgeTickMs) || 60000));
+    if (urgeTimer.unref) urgeTimer.unref();
+    log('mood urge enabled (tick=' + (Number(cfg.moodUrgeTickMs) || 60000) + 'ms)');
+  }
+
   ctx.on('dispose', () => {
     try { peek.stop(); } catch {}
     try { if (moodTimer) clearInterval(moodTimer); } catch {}
+    try { if (urgeTimer) clearInterval(urgeTimer); } catch {}
     try { server.close(); } catch {}
   });
 }

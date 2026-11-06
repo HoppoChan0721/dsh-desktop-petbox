@@ -192,4 +192,50 @@ test('main 模式下不往主人的工作会话里塞情绪卡', async () => {
   } finally { ctx.dispose(); }
 });
 
+test('主动开口关着时，没人碰她她一个字都不说', async () => {
+  const file = join(TMP, 'cold-urge-off.json');
+  writeColdState(file);
+  const { ctx, calls } = await boot(62108, { mood: true, moodFile: file, moodUrge: false });
+  try {
+    const r = await post(62108, '/mood', { urge: true });
+    assert.equal(r.json.urgeResult.why, 'off');
+    assert.equal(calls.followup.length, 0, '关着就不该有投递');
+  } finally { ctx.dispose(); }
+});
+
+test('冷战期她自己会开口，不用主人先动手', async () => {
+  const file = join(TMP, 'cold-urge-on.json');
+  writeColdState(file);
+  const { ctx, calls } = await boot(62109, { mood: true, moodFile: file, moodUrge: true });
+  try {
+    const r = await post(62109, '/mood', { urge: true });
+    assert.equal(r.json.urgeResult.spoke, true);
+    assert.equal(r.json.urgeResult.window, 'cold-drift');
+
+    const text = calls.followup.at(-1).text;
+    assert.match(text, /不是主人叫你/, '要告诉她这次是自己想开口');
+    assert.match(text, /生闷气/, '语气要跟着档位走');
+    assert.match(text, /一句/, '原来的行为口径不能丢');
+
+    const after = await get(62109, '/mood');
+    assert.equal(after.json.urge.windows['cold-drift'].total, 1, '说过就要记账');
+    assert.equal(after.json.urge.today, 1);
+
+    // 紧接着再问一次：全局最小间隔会把它挡住，不会连发
+    const again = await post(62109, '/mood', { urge: true });
+    assert.equal(again.json.urgeResult.spoke, false);
+  } finally { ctx.dispose(); }
+});
+
+test('平静的时候就算问她也不开口', async () => {
+  const file = join(TMP, 'calm-urge.json');
+  writeFileSync(file, JSON.stringify({ schemaVersion: SCHEMA_VERSION, emotions: {}, tier: 'calm', cooldowns: {}, log: [], lastInteractionAt: Date.now() - 4 * 3600000 }), 'utf8');
+  const { ctx, calls } = await boot(62110, { mood: true, moodFile: file, moodUrge: true });
+  try {
+    const r = await post(62110, '/mood', { urge: true });
+    assert.equal(r.json.urgeResult.spoke, false);
+    assert.equal(calls.followup.length, 0);
+  } finally { ctx.dispose(); }
+});
+
 test.after(() => { rmSync(TMP, { recursive: true, force: true }); });
