@@ -2100,6 +2100,46 @@ function findDockTarget(title) {
   });
 }
 
+// ---- 部署体检：装错了不报错，只是「一直难受」 ----
+// 2026-11-07：B 站有人私信反馈桌面壳的毛病，本地复现不出来。绝大多数是「AI 帮忙部署」时
+// 漏了一步：鲸语没打补丁（没有舞台模式 / 没有像素穿透 / 指针追不了）、模型目录指错。
+// 这类问题不会抛异常，只会表现成「闪、点不动、口型怪」。所以启动后自己查一次，直接在
+// 气泡里说人话，别让人对着半成品猜。
+function httpGetText(pathname, timeout = 2500) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: PORT, path: pathname, timeout }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return resolve(''); }
+      let out = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { if (out.length < 400000) out += c; });
+      res.on('end', () => resolve(out));
+    });
+    req.on('timeout', () => { req.destroy(); resolve(''); });
+    req.on('error', () => resolve(''));
+  });
+}
+
+let deployChecked = false;
+async function deployCheck() {
+  if (deployChecked) return;
+  deployChecked = true;
+  const [appJs, engineJs] = await Promise.all([httpGetText('/app.mjs'), httpGetText('/engine.mjs')]);
+  if (!appJs) return;   // 舞台没起来是另一类问题，loadStage 那边已经在重试
+  const missing = [];
+  if (!appJs.includes('stageMode')) missing.push('舞台模式');
+  if (!appJs.includes('preserveDrawingBuffer')) missing.push('像素穿透');
+  if (appJs && !appJs.includes('__stageEngine')) missing.push('引擎暴露');
+  if (engineJs && !engineJs.includes('applyPointer')) missing.push('指针追踪');
+  if (missing.length) {
+    const msg = `鲸语那边还没打补丁：${missing.join('、')}会不对。跑一下 npm run patch -- --repo "鲸语目录"`;
+    plog('deploy-check missing ' + missing.join(','));
+    say(msg, false, 9000);
+    try { if (tray) tray.displayBalloon({ title: '桌宠部署检查', content: msg }); } catch {}
+    return;
+  }
+  plog('deploy-check ok');
+}
+
 // 贴着目标窗口外侧放：right = 它的右边，left = 它的左边；垂直居中对齐
 function dockRect(t, mode) {
   const [ww, wh] = win.getSize();
@@ -2194,6 +2234,8 @@ function createWindow() {
   win.on('resized', saveBounds);
   win.on('closed', () => { win = null; });
   ensureServerThenLoad();
+  // 舞台起来之后再体检（补丁是网页文件，得能取到才查得出来）
+  setTimeout(() => { deployCheck().catch(() => {}); }, 6000);
 }
 
 // ---- Alt + 左键拖动：2026-11-07 重写 ----
