@@ -650,7 +650,7 @@ export function apply(ctx, config = {}) {
     urgeBusy = true;
     try {
       // 主动开口自己已经把「此刻」那条事实写进提示词了，情绪卡别再重复一遍。
-      // proactive 让它跟窥屏共用同一份日额度。
+      // proactive 让它吃「主动说话」这根轴的日额度；窥屏走 budget:false，不吃也不记账（2026-11-07 解绑）。
       const r = await deliver(urgePrompt(d), { skipMoment: true, proactive: true });
       // 投递成功才记账：失败一次还想再试一次，不该直接扣掉她一次机会
       mood.markUrge(d);
