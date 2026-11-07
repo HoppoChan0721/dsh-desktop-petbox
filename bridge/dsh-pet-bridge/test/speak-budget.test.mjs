@@ -52,8 +52,8 @@ test('刚刚到线就不许再说，差一句还能说', () => {
   assert.equal(countSpeak(log.slice(0, 2), T0) < cap, true);
 });
 
-test('窥屏和主动开口共用一份计数，不会各算各的', () => {
-  // 模拟：窥屏说了 2 句，主动开口说了 1 句，都在同一个 log 里
+test('同一份计数按 24 小时窗口数，不按自然日', () => {
+  // 三条都在同一个 24 小时窗口里，不管落在哪一天
   const shared = [T0 - hour(5), T0 - hour(4), T0 - hour(1)];
   assert.equal(countSpeak(shared, T0), 3, '三条都在同一个窗口里');
 });

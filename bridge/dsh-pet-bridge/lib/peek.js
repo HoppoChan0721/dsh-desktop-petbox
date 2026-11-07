@@ -227,7 +227,7 @@ export function trackEpisode(ep, sample, now) {
   return minutes >= 5 ? done : null;
 }
 
-export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEnd, onInterest, intervalFactor, canSpeak }) {
+export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEnd, onInterest, intervalFactor }) {
   const dir = cfg.peekTmpDir || join(process.env.DSH_HOME || tmpdir(), 'tmp', 'pet-peek');
   cfg.peekTmpDir = dir;
 
@@ -391,8 +391,6 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       lastTitle: st.lastTitle,
       count: st.count,
       skipped: st.skipped,
-      // 这一轮到点时能不能开口。false 一般是「刚说过，按节奏还要等」。
-      canSpeak: canSpeak ? !!canSpeak() : true,
       quietHours: `${cfg.peekQuietFrom ?? '-'}~${cfg.peekQuietTo ?? '-'}`,
       // 轻探针看到的前台，以及正在进行的全屏 episode。
       // 全屏期间重探针是瞎的，想知道「主人在打游戏」只能看这两个字段。
@@ -425,15 +423,6 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
     if (st.busy) return { ok: false, skipped: 'busy', why: '上一轮还没跑完' };
     if (!st.on) return { ok: false, skipped: 'off', why: '窥屏开关是关着的' };
     if (!manual && inQuietHours(cfg)) { st.lastSkip = '静默时段'; return { ok: false, skipped: 'quiet-hours', why: '静默时段' }; }
-    // 刚主动说过话就先缓缓。窥屏的节奏是「多久看一眼」，不是「多久说一句」——
-    // 不过这道闸的话，5 分钟档下她每 4~6 分钟就能投一条，三个小时把一天的额度烧光，
-    // 之后一整天哑巴。2026-11-07 日志里就是这么回事：14:06 打到 40/40，往后全是「额度用完了」。
-    // 放在探针之前：反正这轮不会开口，没必要再起一次 PowerShell。
-    if (!manual && canSpeak && !canSpeak()) {
-      st.skipped++; st.lastSkip = '刚说过，先缓缓';
-      note('跳过（刚主动说过话，先缓缓）');
-      return { ok: false, skipped: 'gap', why: '刚说过，先缓缓' };
-    }
     st.busy = true;
     st.lastTryAt = Date.now();
     try {
@@ -498,9 +487,9 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       const tail = ` 这是你主动搭话，不是${owner() ? owner() + '叫你' : '有人叫你'}——想接一句就接，不想接就给个表情。）`;
       const text = head + body + tail;
 
-      // 主动投递要先过额度：额度是窥屏档位给的，两条管道共用一份。
-      // 挡住了就当这一轮跳过，别记账也别改 fingerprint，下次还能看到同一屏内容。
-      const sent = await deliver(text, { proactive: true });
+      // 窥屏不吃「主动说话」的日额度（budget: false）：多久说一句由窥屏档位自己管。
+      // 混在一起的话，一天 40 句能被窥屏三个小时烧光，之后整天哑巴——2026-11-07 主人指出来了。
+      const sent = await deliver(text, { proactive: true, budget: false });
       if (sent && sent.skipped === 'budget') {
         st.skipped++; st.lastSkip = '今天的额度用完了';
         note('跳过（今天的主动额度用完了）');
@@ -546,8 +535,8 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       if (!pet) {
         const w = matchInterestHere(r.proc, r.title);
         if (w && !inBoom() && startBoom(w, r.title, now)) {
-          // 开口也要过额度。今天说得够多了，窗就白开，直接关掉省得空转。
-          const sent = await deliver(interestPrompt(w, r.title, owner()), { proactive: true })
+          // 兴趣窗那条也不吃额度，跟普通窥屏一个口径。
+          const sent = await deliver(interestPrompt(w, r.title, owner()), { proactive: true, budget: false })
             .catch((e) => { log('peek: 兴趣投递失败：' + e.message); return null; });
           if (sent && sent.skipped === 'budget') {
             endBoom('今天的额度用完了');
