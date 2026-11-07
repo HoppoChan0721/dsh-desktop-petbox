@@ -472,6 +472,12 @@ export function apply(ctx, config = {}) {
     deliver,
     // 窥屏看到了什么 → 给情绪记一笔。看见了在忙还是摸鱼，是两回事。
     onScene: (p) => { if (mood) { try { mood.peekScene(p); } catch (e) { log('mood scene failed: ' + e.message); } } },
+    // 全屏打完了 → 记一条此刻。全屏期间重探针是瞎的，轻探针是唯一知道那阵多长的。
+    onGameEnd: (g) => {
+      if (!mood) return;
+      try { mood.scene({ category: 'game-over', label: g.title || g.proc || '', minutes: g.minutes }); }
+      catch (e) { log('mood game-end failed: ' + e.message); }
+    },
     // 主动程度跟着情绪走：冷战降频，黏人时加倍。mood 关着就是恒等 1。
     intervalFactor: () => (mood ? (mood.gate('proactive').intervalFactor || 1) : 1),
     onStateChange: (s) => {

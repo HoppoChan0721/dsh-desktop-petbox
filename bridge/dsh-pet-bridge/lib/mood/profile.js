@@ -261,6 +261,24 @@ export const DEFAULT_PROFILE = {
       cooldown: 2 * 60 * 60 * 1000,
       key: 'label',
     },
+    {
+      // 全屏打完了。这条不是「看见你在玩」，是「你消失了一阵又回来了」——
+      // 全屏期间重探针是瞎的，只有轻探针知道那一阵有多长。
+      // 还是只写此刻，不进账本：一把游戏不该改关系。
+      id: 'scene-game-over',
+      on: 'scene',
+      moment: {
+        id: 'game-over',
+        tag: '有点空',
+        ttlMs: 15 * 60 * 1000,
+        why: (sig) => (Number(sig.minutes) >= 30
+          ? `你打了 ${Math.round(Number(sig.minutes) / 10) * 10} 分钟游戏`
+          : '你刚打完一把'),
+      },
+      when: { path: 'signal.category', eq: 'game-over' },
+      cooldown: 10 * 60 * 1000,
+      key: 'label',
+    },
   ],
 
   // ── 档位 ───────────────────────────────────────────────────────────────

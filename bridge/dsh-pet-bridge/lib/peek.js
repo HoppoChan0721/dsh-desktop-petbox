@@ -23,37 +23,29 @@ const clip = (s, n) => {
   return t.length > n ? t.slice(0, n) + '…' : t;
 };
 
-// PowerShell 探针：抓前台窗口 + OCR，结果落 JSON，Node 读文件（避开 PS 5.1 的管道编码坑）
-function probe(cfg, opts = {}) {
+// PowerShell 探针：抓前台窗口 + OCR，结果落 JSON，Node 读文件（避开 PS 5.1 的管道编码坑）。
+// 抽成通用是因为现在有两个用法：重探针（截图认字）和轻探针（只要进程名和全屏状态）。
+function runScript(cfg, extraArgs, timeoutMs, name) {
   return new Promise((resolve) => {
     const dir = cfg.peekTmpDir;
     try { mkdirSync(dir, { recursive: true }); } catch {}
-    const json = join(dir, 'probe.json');
+    const json = join(dir, name);
     try { if (existsSync(json)) rmSync(json); } catch {}
     let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     let child;
     try {
-      const args = [
+      child = spawn('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', SCRIPT, '-JsonOut', json, '-MaxLines', String(cfg.peekMaxLines || 80),
-        '-Scale', String(Number(cfg.peekScale) || 2),   // 放大再认：中文小字 2x 明显比 1x 准
-      ];
-      // 装了 RapidOCR 就交给它（中文准得多），没装 ps1 自己回落系统 OCR
-      if (cfg.peekOcrPython) args.push('-OcrPython', String(cfg.peekOcrPython));
-      if (cfg.peekOcrScript) args.push('-OcrScript', String(cfg.peekOcrScript));
-      // 钉死窗口：给了 target 就只瞄它（进程名或标题片段），找不到再退回常规挑法
-      if (cfg.peekTarget) args.push('-Target', String(cfg.peekTarget));
-      // 手动点的时候前台会被托盘菜单抢成桌宠窗口，让探针沿任务栏顺序重挑一个真实窗口
-      if (opts.pickActive) args.push('-PickActive');
-      child = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
+        '-File', SCRIPT, '-JsonOut', json, ...extraArgs,
+      ], { windowsHide: true, stdio: 'ignore' });
     } catch (e) {
       return finish({ ok: false, error: 'spawn failed: ' + e.message });
     }
     const timer = setTimeout(() => {
       try { child.kill(); } catch {}
       finish({ ok: false, error: 'probe timeout' });
-    }, cfg.peekTimeoutMs || 12000);
+    }, timeoutMs);
     child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, error: 'probe error: ' + e.message }); });
     child.on('exit', () => {
       clearTimeout(timer);
@@ -64,6 +56,29 @@ function probe(cfg, opts = {}) {
       finish(data || { ok: false, error: 'empty probe' });
     });
   });
+}
+
+function probe(cfg, opts = {}) {
+  const args = [
+    '-MaxLines', String(cfg.peekMaxLines || 80),
+    '-Scale', String(Number(cfg.peekScale) || 2),   // 放大再认：中文小字 2x 明显比 1x 准
+  ];
+  // 装了 RapidOCR 就交给它（中文准得多），没装 ps1 自己回落系统 OCR
+  if (cfg.peekOcrPython) args.push('-OcrPython', String(cfg.peekOcrPython));
+  if (cfg.peekOcrScript) args.push('-OcrScript', String(cfg.peekOcrScript));
+  // 钉死窗口：给了 target 就只瞄它（进程名或标题片段），找不到再退回常规挑法
+  if (cfg.peekTarget) args.push('-Target', String(cfg.peekTarget));
+  // 手动点的时候前台会被托盘菜单抢成桌宠窗口，让探针沿任务栏顺序重挑一个真实窗口
+  if (opts.pickActive) args.push('-PickActive');
+  return runScript(cfg, args, cfg.peekTimeoutMs || 12000, 'probe.json');
+}
+
+/**
+ * 轻探针：只问「前台是谁、是不是全屏」，不截图、不认字、不写图片。
+ * 几十毫秒跑完，可以几十秒问一次。它管的是事件，不是内容。
+ */
+function probeLight(cfg) {
+  return runScript(cfg, ['-Light'], 4000, 'probe-light.json');
 }
 
 // 「这窗口我自己」的判定：主人在跟你聊天、或者桌宠窗口在前台时别凑热闹
@@ -98,7 +113,44 @@ const clampInterval = (ms) => {
   return Math.min(MAX_INTERVAL_MS, Math.max(MIN_INTERVAL_MS, Math.round(n)));
 };
 
-export function createPeek({ cfg, log, deliver, onStateChange, onScene, intervalFactor }) {
+/**
+ * 全屏 episode 的一拍。纯函数：吃一次采样，吐「要不要上报打完了一局」。
+ *
+ * 抽出来是因为真探针要起 PowerShell，测不了；这层逻辑反而是最容易写错的
+ * ——切窗口闪一下算不算结束、打两分钟算不算一局，都得有断言钉着。
+ *
+ * @param {object} ep      episode 状态，会被就地改
+ * @param {{fullscreen:boolean, title?:string, proc?:string, pet?:boolean}} sample
+ * @param {number} now
+ * @returns {{minutes:number, title:string, proc:string}|null}
+ */
+export function trackEpisode(ep, sample, now) {
+  if (!sample || sample.pet) return null;
+
+  if (sample.fullscreen) {
+    if (!ep.active) { ep.active = true; ep.since = now; }
+    ep.misses = 0;   // 又满屏了，刚才那一下「不像全屏」作废
+    ep.title = sample.title || '';
+    ep.proc = sample.proc || '';
+    ep.lastSeenAt = now;
+    return null;
+  }
+
+  if (!ep.active) return null;
+  // 连续两次不是全屏才算真出来：切个窗口、弹个框都会闪一下
+  ep.misses += 1;
+  if (ep.misses < 2) return null;
+
+  const minutes = Math.round((ep.lastSeenAt - ep.since) / 60000);
+  const done = { minutes, title: ep.title, proc: ep.proc };
+  ep.active = false;
+  ep.misses = 0;
+  ep.title = '';
+  ep.proc = '';
+  return minutes >= 5 ? done : null;
+}
+
+export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEnd, intervalFactor }) {
   const dir = cfg.peekTmpDir || join(process.env.DSH_HOME || tmpdir(), 'tmp', 'pet-peek');
   cfg.peekTmpDir = dir;
 
@@ -119,6 +171,17 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, interval
   };
 
   const rand = (ms) => Math.round(ms * (0.8 + Math.random() * 0.4));   // ±20% 抖动：别像闹钟一样整点出现
+
+  // ── 全屏 episode（2026-11-07）─────────────────────────────────────────
+  // 全屏的时候重探针是瞎的：截图一片黑，投递也被挡掉。但「主人在打游戏」这个事实
+  // 本身有用——退出那一刻她该有反应。所以另开一条轻探针，只问前台是谁、是不是全屏。
+  //
+  // 判定退出要连续两次不是全屏：切个窗口、弹个框都会闪一下，
+  // 闪一次就宣布「打完了」会误报。
+  const ep = { active: false, since: 0, title: '', proc: '', lastSeenAt: 0, misses: 0 };
+  let lastLight = null;
+  let lightTicker = null;
+  let lightBusy = false;
   // 每次调度都现问一次倍率：情绪不同时她的主动程度不一样（冷战降频，黏人时加倍）。
   // 回调坏了就当 1，别因为情绪模块出问题把窥屏也带崩。
   const factor = () => {
@@ -146,6 +209,12 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, interval
       count: st.count,
       skipped: st.skipped,
       quietHours: `${cfg.peekQuietFrom ?? '-'}~${cfg.peekQuietTo ?? '-'}`,
+      // 轻探针看到的前台，以及正在进行的全屏 episode。
+      // 全屏期间重探针是瞎的，想知道「主人在打游戏」只能看这两个字段。
+      light: lastLight,
+      episode: ep.active
+        ? { since: new Date(ep.since).toISOString(), minutes: Math.round((Date.now() - ep.since) / 60000), proc: ep.proc, title: clip(ep.title, 40) }
+        : null,
       tmpDir: dir,
     };
   }
@@ -242,6 +311,35 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, interval
     }
   }
 
+  /**
+   * 轻探针的一拍。只记事件，不投递、不认字。
+   * 全屏开始就记时间，退出时算出打了多久，够久的才上报。
+   */
+  async function lightTick() {
+    if (!st.on || lightBusy) return;
+    lightBusy = true;
+    try {
+      const r = await probeLight(cfg);
+      if (!r || !r.ok) return;
+      const now = Date.now();
+      lastLight = { at: now, proc: r.proc || '', title: r.title || '', fullscreen: r.fullscreen === true };
+      const done = trackEpisode(ep, {
+        fullscreen: r.fullscreen === true,
+        title: r.title,
+        proc: r.proc,
+        // 桌宠自己在前台不算：点托盘菜单会把焦点抢成她
+        pet: selfKind(r.proc, r.title) === 'pet',
+      }, now);
+      if (!done) return;
+      log(`peek: 全屏结束，${done.minutes} 分钟，${done.proc}｜${clip(done.title, 30)}`);
+      try { onGameEnd && onGameEnd(done); } catch (e) { log('peek: onGameEnd failed: ' + e.message); }
+    } catch (e) {
+      log('peek light failed: ' + e.message);
+    } finally {
+      lightBusy = false;
+    }
+  }
+
   // 定时器用「每 30 秒看一次到点没」而不是一次性 setTimeout：
   // 中途开关、改间隔都不用重建 timer，也不用记一堆句柄。
   let ticker = null;
@@ -256,7 +354,12 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, interval
       }
     }, 30000);
     if (ticker.unref) ticker.unref();
-    log(`peek timer started (interval=${baseInterval()}ms, quiet=${cfg.peekQuietFrom}~${cfg.peekQuietTo}, on=${st.on})`);
+    // 轻探针单开一条快节拍：它便宜，跟重探针那个半小时的节奏没关系。
+    // 关着窥屏就也关着它，一个开关管两条。
+    const lightMs = Math.max(15000, Number(cfg.peekLightMs) || 45000);
+    lightTicker = setInterval(() => { lightTick().catch(() => {}); }, lightMs);
+    if (lightTicker.unref) lightTicker.unref();
+    log(`peek timer started (interval=${baseInterval()}ms, quiet=${cfg.peekQuietFrom}~${cfg.peekQuietTo}, on=${st.on}, light=${lightMs}ms)`);
   }
 
   function setOn(on) {
@@ -267,7 +370,10 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, interval
     return st.on;
   }
 
-  function stop() { if (ticker) { clearInterval(ticker); ticker = null; } }
+  function stop() {
+    if (ticker) { clearInterval(ticker); ticker = null; }
+    if (lightTicker) { clearInterval(lightTicker); lightTicker = null; }
+  }
 
   /** 换基准间隔。立刻重排下一次，不用重启；返回真正生效的值。 */
   function setIntervalMs(ms) {

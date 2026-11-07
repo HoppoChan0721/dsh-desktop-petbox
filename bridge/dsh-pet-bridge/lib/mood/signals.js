@@ -48,7 +48,7 @@ export function fromSpeech(text, now = Date.now()) {
  * 分类由 classifyScene 判定，也可以在配置里覆盖。
  */
 export function fromScene(scene, now = Date.now()) {
-  return {
+  const out = {
     kind: 'scene',
     at: now,
     category: (scene && scene.category) || 'other',
@@ -56,6 +56,11 @@ export function fromScene(scene, now = Date.now()) {
     night: !!(scene && scene.night),
     weight: 1,
   };
+  // 其余字段原样带过去：场景想带时长、进程名之类的，不用改引擎也不用改这里。
+  for (const k of Object.keys(scene || {})) {
+    if (!(k in out)) out[k] = scene[k];
+  }
+  return out;
 }
 
 // ── 场景分类 ─────────────────────────────────────────────────────────────

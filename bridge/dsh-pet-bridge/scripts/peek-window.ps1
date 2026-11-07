@@ -5,7 +5,8 @@
   [string]$OcrPython = '',
   [string]$OcrScript = '',
   [string]$Target = '',
-  [switch]$PickActive
+  [switch]$PickActive,
+  [switch]$Light
 )
 # 窥屏探针：抓前台窗口画面 + 本地 OCR，结果写成一份 JSON 给 Node 读。
 # 设计口径（2026-11-05）：
@@ -172,6 +173,11 @@ public class PeekWin32 {
   if ($mw -le 0 -or $mh -le 0) { $mw = $vw; $mh = $vh }
   $res.monitor = "$mw`x$mh"
   $res.fullscreen = (($winW -ge ($mw - 8)) -and ($winH -ge ($mh - 8)))
+
+  # 轻探针到此为止：只要进程名、标题、是否全屏。不截图、不 OCR、不碰磁盘图片。
+  # 用途是「事件」：全屏游戏什么时候开始、什么时候结束，前台换了没有。
+  # 这套几十毫秒就能跑完，可以几十秒问一次；重探针那套要截图认字，不能勤跑。
+  if ($Light) { $res.ok = $true; Save-Result; exit 0 }
 
   if ([PeekWin32]::IsIconic($h) -or $winW -le 40 -or $winH -le 40) { throw 'window minimized or too small' }
 
