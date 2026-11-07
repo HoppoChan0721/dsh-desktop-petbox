@@ -2359,19 +2359,21 @@ async function peekToggle(on) {
 // ---- 情绪（2026-11-06）----
 // 账本和决策都在桥插件那边，壳子只读一眼：菜单里显示她现在什么心情、因为什么。
 // 不在这里算任何东西，也不拿它去改表情——表情由会话里的 [emotion:...] 决定，两套别打架。
-let moodLive = false, moodSummary = '', moodReason = '', moodUrge = null, moodMoment = '';
+let moodLive = false, moodSummary = '', moodReason = '', moodUrge = null, moodMoment = '', moodBackup = false;
 async function moodSync() {
   try {
     const r = await fetch(`${PEEK_URL}/mood`, { signal: AbortSignal.timeout(1500) });
     if (!r.ok) throw new Error('mood ' + r.status);
     const d = await r.json();
-    if (d.enabled === false) { moodLive = false; moodSummary = '情绪没开'; moodReason = ''; moodUrge = null; moodMoment = ''; return; }
+    if (d.enabled === false) { moodLive = false; moodSummary = '情绪没开'; moodReason = ''; moodUrge = null; moodMoment = ''; moodBackup = false; return; }
     moodLive = true;
     moodSummary = d.summary || '';
     moodUrge = d.urge || null;
     // 「此刻」的余温：窥屏留下的短时状态，跟账本分开显示。
     // 它十分钟就没了，所以得单独挂在标签最前面，不能被摘要挤掉。
     moodMoment = (d.moments && d.moments.top && d.moments.top.tag) || '';
+    // 有备份才显示「恢复上一次账本」——菜单里不留点了没反应的灰项
+    moodBackup = d.backup === true;
     const snap = d.snapshot || {};
     moodReason = (snap.reasons && snap.reasons.length) ? snap.reasons[0] : '';
   } catch {
@@ -2380,6 +2382,7 @@ async function moodSync() {
     moodReason = '';
     moodUrge = null;
     moodMoment = '';
+    moodBackup = false;
   }
 }
 // 立刻问她一句想不想开口。跟定时那条走同一个判断，所以该被间隔挡住的时候照样挡住。
@@ -2414,14 +2417,70 @@ async function moodUrgeNow() {
   }
   moodSync();
 }
-async function moodReset() {
+// 哄好她：只清负面，亲近和好心情留着。跟「彻底重来」是两件事。
+async function moodCalm() {
   try {
     const r = await fetch(`${PEEK_URL}/mood`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ reset: true }), signal: AbortSignal.timeout(4000),
+      body: JSON.stringify({ calm: true }), signal: AbortSignal.timeout(4000),
     });
     if (!r.ok) throw new Error('mood ' + r.status);
-    say('这次就原谅主人了', false, 3600);
+    const d = await r.json().catch(() => ({}));
+    // 老版本桥不认 calm，会一路 fall through 回 200 但什么也没清。核对一句再报成功。
+    if (d.calm !== true) say('桥插件还是旧的，得重启 DSH', false, 3600);
+    else say('这次就原谅主人了', false, 3600);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  moodSync();
+}
+
+// 彻底重来：整本清空，连亲近度一起。点错了捞不回来，所以先问一句。
+async function moodResetAll() {
+  const { dialog } = require('electron');
+  const r = await dialog.showMessageBox({
+    type: 'warning',
+    buttons: ['取消', '清空'],
+    defaultId: 0,
+    cancelId: 0,
+    title: '清空情绪账本',
+    message: '要把她的情绪账本整个清掉吗',
+    detail: '会连亲近度一起归零，等于重新认识。旧账本会自动存一份，清完可以点「恢复上一次账本」捞回来。',
+  });
+  if (r.response !== 1) return;
+  try {
+    const res = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reset: true }), signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) throw new Error('mood ' + res.status);
+    say('账本清空了，旧的在备份里', false, 3600);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  moodSync();
+}
+
+// 从备份恢复上一份账本。
+async function moodRestore() {
+  const { dialog } = require('electron');
+  const r = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['取消', '恢复'],
+    defaultId: 0,
+    cancelId: 0,
+    title: '恢复上一次账本',
+    message: '要恢复清空前的账本吗',
+    detail: '当前的账本会被覆盖。',
+  });
+  if (r.response !== 1) return;
+  try {
+    const res = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ restore: true }), signal: AbortSignal.timeout(6000),
+    });
+    const d = await res.json().catch(() => ({}));
+    say(res.ok ? '恢复好了' : ('没恢复成：' + (d.error || res.status)), false, 3600);
   } catch {
     say('桥插件没在跑', false, 3600);
   }
@@ -2530,7 +2589,12 @@ function buildMenu() {
     // 「情绪」这一组只放能动手的：状态写在组名上，菜单里不留灰行。
     // 原来那八个预设表情触发器撤了——手动逗她那一下没什么用，表情本来就跟着会话走。
     { label: `情绪 · ${moodMenuLabel()}`, submenu: [
-      { label: '哄好她（清空情绪账本）', enabled: moodLive, click: () => moodReset() },
+      // 名字和行为要对上：哄好只清负面。整本清空是另一件事，藏进二级菜单还得过确认。
+      { label: '哄好她（只清不开心的）', enabled: moodLive, click: () => moodCalm() },
+      { label: '账本 ▸', enabled: moodLive, submenu: [
+        { label: '彻底重来（连亲近度一起清，先问你一句）', click: () => moodResetAll() },
+        ...(moodBackup ? [{ label: '恢复上一次账本', click: () => moodRestore() }] : []),
+      ] },
       { type: 'separator' },
       { label: `主动开口 · ${urgeMenuLabel()}`, enabled: moodLive && !!(moodUrge && moodUrge.enabled), submenu: [
         { label: '安静（一天四五句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'quiet', click: () => moodIntensity('quiet') },

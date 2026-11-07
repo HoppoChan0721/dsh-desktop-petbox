@@ -6,7 +6,7 @@
 // 版本迁移：文件里带 schemaVersion。版本不认识时先试迁移函数，迁移失败就重置。
 // 以后改结构，只需要往 MIGRATIONS 里加一条，别去改 load 的流程。
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createState, tick } from './engine.js';
 import { SCHEMA_VERSION } from './profile.js';
@@ -81,11 +81,52 @@ export function createStore({ file, profile, log = () => {} }) {
     }
   }
 
-  /** 清空。给「一键哄好」和调试用。 */
+  /** 清空。给「彻底重来」和调试用。真要清之前先调 backup。 */
   function reset(now = Date.now()) {
     const fresh = blank(now);
     save(fresh);
     return fresh;
+  }
+
+  /**
+   * 把现在的账本另存一份。给「彻底重来」用——点错了还能捞回来。
+   * 只留最近一份，不做历史版本：这不是备份系统，是后悔药。
+   */
+  function backup() {
+    if (!file) return '';
+    const bak = file + '.bak';
+    try {
+      writeFileSync(bak, readFileSync(file, 'utf8'), 'utf8');
+      return bak;
+    } catch (e) {
+      log('mood: backup failed: ' + (e && e.message));
+      return '';
+    }
+  }
+
+  /** 有没有可恢复的备份。 */
+  function hasBackup() {
+    if (!file) return false;
+    try { return existsSync(file + '.bak'); } catch { return false; }
+  }
+
+  /** 从备份恢复。版本不认识就当没有，别把一份坏数据写回去。 */
+  function restore() {
+    if (!file) return { ok: false, error: 'no file' };
+    const bak = file + '.bak';
+    try {
+      const state = migrate(JSON.parse(readFileSync(bak, 'utf8')));
+      if (!state) return { ok: false, error: '备份版本不认识' };
+      for (const name of Object.keys(profile.emotions)) {
+        if (!state.emotions[name]) state.emotions[name] = { value: 0, at: 0 };
+      }
+      if (!Array.isArray(state.moments)) state.moments = [];
+      if (!state.urges || typeof state.urges !== 'object') state.urges = {};
+      save(state);
+      return { ok: true, state };
+    } catch (e) {
+      return { ok: false, error: e.message || '备份读不出来' };
+    }
   }
 
   /**
@@ -98,5 +139,5 @@ export function createStore({ file, profile, log = () => {} }) {
     return state;
   }
 
-  return { load, save, reset, open };
+  return { load, save, reset, open, backup, hasBackup, restore, get file() { return file; } };
 }

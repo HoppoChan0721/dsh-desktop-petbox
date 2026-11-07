@@ -188,13 +188,60 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
         urge: summarizeUrge(state, profile, at),
         // 「此刻」的余温：窥屏留下的短时状态，跟账本分开显示，托盘上分得清
         moments: summarizeMoments(state.moments, at),
+        // 有没有可恢复的备份。托盘靠它决定要不要显示「恢复上一次账本」
+        backup: store.hasBackup(),
         log: (state.log || []).slice(-8).reverse(),
       };
     },
 
-    reset(at = now()) {
+    /**
+     * 哄好她：只清负面，保留亲近和好心情。
+     *
+     * 名字和行为得对上。以前这个方法叫 reset，清的是整本账——连亲近度都归零，
+     * 那是「重新认识」，不是「哄一下」。主人 2026-11-07 指出菜单写着哄好、
+     * 实际在洗号。现在负面的清零，正面和 bond 原样留着。
+     *
+     * 顺手把一阵没说完的话掐掉：哄好了还接着念第三句，那不是人。
+     */
+    calm(at = now()) {
+      state = tickOf(state, profile, at);
+      const kept = {};
+      const cleared = [];
+      for (const [name, entry] of Object.entries(state.emotions || {})) {
+        const def = profile.emotions[name];
+        const negative = def && Number(def.polarity) < 0;
+        if (negative) { kept[name] = { value: 0, at }; cleared.push(name); }
+        else kept[name] = entry;
+      }
+      state = interruptUrge({ ...state, emotions: kept, cooldowns: {} });
+      state = tickOf(state, profile, at);   // 重算档位：从冷战回到平静
+      store.save(state);
+      return { state: resolve(state, profile, at), cleared };
+    },
+
+    /** 彻底重来：整本清空。清之前先存一份备份，点错了能捞回来。 */
+    resetAll(at = now()) {
+      const backup = store.backup();
       state = store.reset(at);
-      return resolve(state, profile, at);
+      return { state: resolve(state, profile, at), backup };
+    },
+
+    /** 从上一份备份恢复。没有备份或者版本不认识就如实失败。 */
+    restoreBackup(at = now()) {
+      const r = store.restore();
+      if (!r.ok) return { ok: false, error: r.error };
+      state = tickOf(r.state, profile, at);
+      store.save(state);
+      return { ok: true, state: resolve(state, profile, at) };
+    },
+
+    hasBackup() {
+      return store.hasBackup();
+    },
+
+    /** 老名字，等价于彻底重来。留着给 CLI 和外部脚本，菜单不再用它。 */
+    reset(at = now()) {
+      return this.resetAll(at).state;
     },
   };
 }

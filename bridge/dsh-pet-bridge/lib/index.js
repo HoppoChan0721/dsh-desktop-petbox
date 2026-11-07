@@ -653,12 +653,24 @@ export function apply(ctx, config = {}) {
         }
         return send(res, 200, { ok: true, ...peek.state() });
       }
-      // 情绪：只有「哄好」和「喂一笔」两个动作，参数改了要重启，避免线上参数漂移
+      // 情绪：三个会改账本的动作，参数改了要重启，避免线上参数漂移
       if (url.pathname === '/mood') {
         if (!mood) return send(res, 200, { ok: true, enabled: false, note: 'mood 没开，配置里把 mood 设成 true' });
+        // {"calm":true} = 哄好她。只清负面，亲近和好心情留着。托盘默认用这个
+        if (body.calm) {
+          const r = mood.calm();
+          return send(res, 200, { ok: true, ...mood.state(), calm: true, cleared: r.cleared, note: '已经哄好了' });
+        }
+        // {"reset":true} = 彻底重来。整本清空，清之前自动存一份备份
         if (body.reset) {
-          mood.reset();   // 清账本，不是只读给它看一眼
-          return send(res, 200, { ok: true, ...mood.state(), reset: true, note: '已经哄好了' });
+          const r = mood.resetAll();
+          return send(res, 200, { ok: true, ...mood.state(), reset: true, backup: r.backup || '', note: '账本清空了，旧的在备份里' });
+        }
+        // {"restore":true} = 从备份恢复
+        if (body.restore) {
+          const r = mood.restoreBackup();
+          if (!r.ok) return send(res, 400, { ok: false, error: r.error, ...mood.state() });
+          return send(res, 200, { ok: true, ...mood.state(), restore: true, note: '恢复了' });
         }
         if (body.scene) {
           try { mood.scene(body.scene); } catch (e) { return send(res, 500, { ok: false, error: e.message }); }

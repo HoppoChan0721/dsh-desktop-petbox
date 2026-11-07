@@ -273,7 +273,9 @@ async function main() {
     const BRIDGE = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
     const a = String(F._[0] || '').toLowerCase();
     const b = String(F._[1] || '').toLowerCase();
-    const r = a === 'reset' ? await jpost(`${BRIDGE}/mood`, { reset: true })
+    const r = a === 'calm' ? await jpost(`${BRIDGE}/mood`, { calm: true })
+      : a === 'reset' ? await jpost(`${BRIDGE}/mood`, { reset: true })
+      : a === 'restore' ? await jpost(`${BRIDGE}/mood`, { restore: true })
       : a === 'urge' ? await jpost(`${BRIDGE}/mood`, { urge: true })
       : a === 'intensity' ? await jpost(`${BRIDGE}/mood`, { intensity: b })
       : await jget(`${BRIDGE}/mood`);
@@ -312,7 +314,9 @@ async function main() {
         console.log(`  ${t}　${e.emotion} ${e.delta > 0 ? '+' : ''}${Number(e.delta).toFixed(2)}　${e.reason || ''}`);
       }
     }
-    if (a === 'reset') console.log('（已经哄好了）');
+    if (a === 'calm') console.log('（哄好了，亲近度留着）');
+    if (a === 'reset') console.log('（账本清空了，旧的在 ' + (d.backup || '备份里') + '）');
+    if (a === 'restore') console.log('（恢复好了）');
     if (a === 'urge') {
       const u = d.urgeResult || {};
       if (u.spoke) {
@@ -528,7 +532,7 @@ const USAGE = `
   cursor [on|off]                指针追踪（眼睛+头+身子跟着鼠标；不带参数=读）
   volume [0..1 或 0..100]        语音音量（不带参数=读）
   peek [on|off|now|persona <档>] 窥屏：隔一阵自己瞄屏幕再搭话；persona 换她盯得多紧（不用重启）
-  mood [reset|urge|intensity <档>]  心情 / 哄好 / 立刻问她想不想开口 / 换主动开口的浓度
+  mood [calm|reset|restore|urge|intensity <档>]  心情 / 哄好（只清不开心）/ 彻底重来 / 从备份恢复 / 立刻问她想不想开口 / 换浓度的档
   stop                           停住并回待机
 
   任意动作可追加： --at 秒  --duration 秒  --and look=down --and tilt=right
