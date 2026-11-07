@@ -69,6 +69,18 @@ function overPet(x, y) {
 }
 
 let lastInteractSent = 0;
+// 像素命中测试要 readPixels，每次都带 GPU 同步；高刷鼠标 400~1000Hz 时一秒能触发上百次，
+// 拖动中尤其明显（画面一顿一顿地闪）。同一帧内不重复读，同一小格 120ms 内直接复用上次结果。
+let lastHit = { x: -9999, y: -9999, at: 0, over: false };
+function overPetCached(x, y) {
+  const now = performance.now();
+  const same = Math.abs(x - lastHit.x) < 3 && Math.abs(y - lastHit.y) < 3;
+  if (same && now - lastHit.at < 120) return lastHit.over;
+  if (now - lastHit.at < 16) return lastHit.over;
+  const over = overPet(x, y);
+  lastHit = { x, y, at: now, over };
+  return over;
+}
 // 页面里带 data-pet-ui 的元素（气泡回复钮、回复输入卡）是整窗唯一的可点 DOM。
 // 它们外面全是穿透区，所以悬停到它们身上时也必须先关掉穿透，否则点不到。
 function uiAt(x, y) {
@@ -78,9 +90,12 @@ function uiAt(x, y) {
   } catch { return false; }
 }
 document.addEventListener('mousemove', (e) => {
+  // 拖动中一律不碰穿透/光标：一直按住 Alt 拖的时候鼠标在窗口里挪来挪去，随手一算就可能判成
+  // 「离开角色」→ 窗口变穿透 → 拖动断掉、窗口在可点/穿透之间来回切、屏幕跟着闪。拖动期间保持原样。
+  if (dragging) return;
   if (!smart) { applyCursor(false); return; }
   const ui = uiLock || uiAt(e.clientX, e.clientY);
-  const over = ui || overPet(e.clientX, e.clientY);
+  const over = ui || overPetCached(e.clientX, e.clientY);
   sendIgnore(!over);
   applyCursor(ui ? false : over);
   const now = Date.now();
@@ -243,6 +258,8 @@ ipcRenderer.on('pet:zones-reset', () => {
 window.addEventListener('mousedown', (e) => {
   if (e.button === 0 && e.altKey) {
     dragging = true;
+    lastHit = { x: -9999, y: -9999, at: 0, over: false };
+    sendIgnore(false);   // 拖动期间窗口必须一直吃鼠标，否则 mouseup 收不到、拖动停不下来
     e.preventDefault();
     ipcRenderer.send('pet:drag-start');
   }

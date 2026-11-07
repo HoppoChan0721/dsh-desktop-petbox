@@ -6,10 +6,21 @@ const { spawn, execFile } = require('node:child_process');
 
 // —— 配置：所有外部依赖（鲸语仓库 / 模型 / Python / 端口 / 可选集成）都在 data/config.json ——
 const CFG = require('./config');
+const { mouthFrames, MOUTH_LEAD } = require('./mouth');
+const { createDragState, dragFrame } = require('./drag');
 const DATA = CFG.DATA_DIR;
 app.setPath('userData', DATA);
 app.setAppUserModelId('com.whale.pet.shell');
 if (!app.requestSingleInstanceLock()) app.quit();
+
+// —— 透明置顶窗口在 Windows 上的两个已知坑（2026-11-07 补，别人的机器上才显形）——
+// 1. Chromium 会算「这个窗口是不是被别人挡住了」，判成挡住就暂停渲染；一拖动这个判断就在
+//    「挡住 / 没挡住」之间来回翻，屏幕上看到的就是模型一闪一闪、偶尔卡住一拍。
+//    置顶桌宠实际上永远不会被真正遮挡，直接把这套遮挡计算关掉。
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// 2. 她会自己开口（保活打招呼、主动说话），那一刻窗口没有用户手势，自动播放策略会把
+//    AudioContext / <audio> 拦成静音。关掉手势门槛，声音才保证出得来。
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 const loadCfg = CFG.load;
 const saveCfg = CFG.save;
@@ -143,12 +154,28 @@ function moodPlan(name, k) {
 function postPlan(plan) {
   return new Promise((resolve) => {
     const body = JSON.stringify({ plan, backend: 'web' });
-    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/api/execute', method: 'POST', timeout: 6000, headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => { res.resume(); try { plog('postPlan status ' + res.statusCode + ' ' + String(plan && plan.title)); } catch {} resolve(res.statusCode === 200 || res.statusCode === 201); });
+    // 400 的时候把舞台给的理由记下来：只写「失败了」等于下次还得重猜一遍
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/api/execute', method: 'POST', timeout: 6000, headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+      let out = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { if (out.length < 400) out += c; });
+      res.on('end', () => {
+        const ok = res.statusCode === 200 || res.statusCode === 201;
+        try { plog('postPlan status ' + res.statusCode + ' ' + String(plan && plan.title) + (ok ? '' : ' :: ' + out.replace(/\s+/g, ' ').slice(0, 240))); } catch {}
+        if (ok) planAppliedAt = Date.now();
+        resolve(ok);
+      });
+    });
     req.on('error', () => resolve(false));
     req.on('timeout', () => { req.destroy(); resolve(false); });
     req.write(body); req.end();
   });
 }
+// 口型计划真正被舞台收下的时刻（= 这条 plan 的 t0）。声音要按这个点排程才对得上口型：
+// 以前是「先把声音放出去，再等 runPlan 排队把口型挂上舞台」，舞台一忙（摇摆每 600ms 抢一次
+// 舞台、联动 watcher 也抢）口型就要等几百毫秒到两秒才动，声音早说话了。这不是本机现象，
+// 机器越慢、舞台越忙差得越多。
+let planAppliedAt = 0;
 
 // ---- 节律摇摆（待机时自动左右轻摆；用户动作来了让路）----
 let planBusyUntil = 0;
@@ -873,14 +900,42 @@ function sayPlan(ms, emotion, env, gesture) {
 function playInPage(audioUrl) {
   try { if (win && !win.isDestroyed()) win.webContents.executeJavaScript('window.__petPlay && window.__petPlay(' + JSON.stringify(audioUrl) + ')').catch(() => {}); } catch {}
 }
+// 页面里跑一段 JS 并等它的返回值（Promise 也被 await）。口型/声音这条链路全靠它。
+function pageCall(expr) {
+  if (!win || win.isDestroyed()) return Promise.resolve(null);
+  return win.webContents.executeJavaScript(expr).catch(() => null);
+}
+// 口型轨迹第一帧的时间（src/mouth.js 里的 MOUTH_LEAD，0.15）。声音要排在这个点上，不是「现在」。
+
+// 声音和口型对齐的唯一入口：
+//   1. 先在页里把 wav 解码成 AudioBuffer（解码慢是慢在启动之前，不影响对齐）；
+//   2. 再把口型计划挂上舞台（runPlan 会抢舞台、重试，可能等几百毫秒到两秒）；
+//   3. 最后按「计划真正被舞台收下的时刻」+ MOUTH_LEAD 排程播放 —— AudioContext 是采样级时钟，
+//      排到哪一秒就从哪一秒开始，跟机器快慢无关。
+// 老实现是「先把 <audio> 放出去，再等 runPlan 排队」，舞台一忙声音就先跑了，听感就是口型追不上声音。
+async function playVoiceAligned(audioUrl, planPromise) {
+  const loaded = await pageCall(`window.__petLoadAudio && window.__petLoadAudio(${JSON.stringify(audioUrl)})`);
+  const ok = await planPromise;
+  const behind = planAppliedAt ? (Date.now() - planAppliedAt) / 1000 : 99;
+  const lead = ok && behind < 0.6 ? Math.max(0, MOUTH_LEAD - behind) : 0;
+  const played = await pageCall(`window.__petPlay && window.__petPlay(${JSON.stringify(audioUrl)}, ${lead.toFixed(3)})`);
+  return { loaded, plan: !!ok, behind: +behind.toFixed(3), lead: +lead.toFixed(3), played };
+}
 // 命中缓存 → 气泡、口型、声音同一帧出来
 function speakCached(text, emotion) {
   const c = loadVCache()[text];
   if (!c || !c.job_id) return false;
-  const ms = Math.round((Number(c.duration) + 0.3) * 1000);
+  const ms = Math.round((Number(c.dur || c.duration) || 2) * 1000);
   say(text, false, ms);
-  playInPage('/audio/' + c.job_id + '.wav');
-  runPlan(sayPlan(ms, emotion, c.env), true).catch(() => {});
+  playVoiceAligned('/audio/' + c.job_id + '.wav', runPlan(sayPlan(ms, emotion, c.env), true))
+    .then((a) => {
+      try {
+        const ld = a && a.loaded && a.loaded.ok ? 'decode-ok' : 'decode-' + ((a && a.loaded && a.loaded.why) || 'missing');
+        const pl = a && a.played ? (a.played.ok ? 'play-ok(' + (a.played.state || a.played.fallback || '?') + ')' : 'play-' + (a.played.why || 'fail')) : 'play-none';
+        fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} cached say dur=${(ms / 1000).toFixed(2)}s mouth=${c.env ? c.env.length : 0} ${ld} ${pl} plan=${a && a.plan ? 'ok' : 'fail'} behind=${a && a.behind}s lead=${a && a.lead}s ${c.job_id}\n`);
+      } catch {}
+    })
+    .catch(() => {});
   return true;
 }
 let warming = null;
@@ -899,12 +954,15 @@ function warmVoices() {
           const info = JSON.parse(fs.readFileSync(path.join(DATA, 'voice-job.json'), 'utf8').replace(/^\uFEFF/, ''));
           if (!info.job_id) continue;
           const wav = path.join(loadCfg().voiceWavDir || '', info.job_id + '.wav');
-          const n = Math.max(4, Math.min(58, Math.round(Number(info.duration) * 8)));
-          const env = wavEnvelope(wav, n);
+          // 时长以 wav 头为准（TTS 自报的可能不准），口型窗口按它算
+          const wi = (() => { try { return wavInfo(wav); } catch { return null; } })();
+          const aud = Math.max(0.4, Math.min(19.5, (wi && wi.duration) || Number(info.duration) || 1));
+          const n = Math.max(4, Math.min(58, Math.round(aud * 8)));
+          const env = wavEnvelope(wav, n, wi);
           const audioDir = path.join(BASE, 'web', 'audio');
           fs.mkdirSync(audioDir, { recursive: true });
           fs.copyFileSync(wav, path.join(audioDir, info.job_id + '.wav'));
-          cache[text] = { job_id: info.job_id, duration: info.duration, env };
+          cache[text] = { job_id: info.job_id, duration: +aud.toFixed(3), dur: +aud.toFixed(3), env };
           saveVCache(cache);
           try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} warm "${text}" ${info.job_id}\n`); } catch {}
         } catch {}
@@ -1235,9 +1293,76 @@ const BUBBLE_JS = `(() => {
     }
     return n > 0;
   };
-  window.__petPlay = (url) => { try { const a = new Audio(url); a.volume = (typeof window.__petVol === 'number' ? window.__petVol : 1); a.play().catch(() => {}); window.__petAudio = a; return true; } catch { return false; } };
+  // ---- 声音：先解码、再按口型计划的起点排程 ----
+  // 老实现 new Audio(url).play()：解码和缓冲都算在启动延迟里，慢机器上开口比口型晚 100~400ms；
+  // 更糟的是主进程先把声音放出去、再等 runPlan 排队把口型挂上舞台，舞台一忙就差出好几拍。
+  // 现在拆三步：__petLoadAudio 预解码 → 主进程把口型计划挂上舞台 → __petPlay(url, lead) 用
+  // AudioContext 的采样级时钟排程 —— 排在哪一秒就从哪一秒响，跟机器快慢无关。
+  let petCtx = null, petVol = 1, petMaster = null;
+  const petBufs = new Map();
+  const petNodes = new Set();
+  const petAudioCtx = () => {
+    if (!petCtx) {
+      const C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return null;
+      try { petCtx = new C({ latencyHint: 'interactive' }); } catch (e) { try { petCtx = new C(); } catch (e2) { return null; } }
+      try { petMaster = petCtx.createGain(); petMaster.gain.value = petVol; petMaster.connect(petCtx.destination); } catch (e) { petMaster = null; }
+    }
+    if (petCtx.state === 'suspended') { try { petCtx.resume().catch(() => {}); } catch (e) {} }
+    return petCtx;
+  };
+  window.__petLoadAudio = async (url) => {
+    const ctx = petAudioCtx();
+    if (!ctx) return { ok: false, why: 'no-webaudio' };
+    // 第一次建 AudioContext 可能是 suspended（自动播放策略）。这里先把它叫醒，
+    // 不然声音「排程成功」却一点动静都没有，报也报不出来。
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
+    if (petBufs.has(url)) return { ok: true, dur: petBufs.get(url).duration, cached: true, state: ctx.state };
+    try {
+      const r = await fetch(url, { cache: 'force-cache' });
+      if (!r.ok) return { ok: false, why: 'http-' + r.status };
+      const ab = await r.arrayBuffer();
+      const buf = await new Promise((res, rej) => {
+        try { const p = ctx.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); } catch (e) { rej(e); }
+      });
+      petBufs.set(url, buf);
+      if (petBufs.size > 24) { const oldest = petBufs.keys().next().value; if (oldest !== url) petBufs.delete(oldest); }
+      return { ok: true, dur: buf.duration, state: ctx.state };
+    } catch (e) { return { ok: false, why: String((e && e.message) || e).slice(0, 80), state: ctx.state }; }
+  };
+  const petStopVoices = () => { for (const n of petNodes) { try { n.stop(); } catch (e) {} } petNodes.clear(); };
+  window.__petPlay = (url, lead) => {
+    const ctx = petAudioCtx();
+    if (!ctx) return { ok: false, why: 'no-webaudio' };
+    petStopVoices();
+    const buf = petBufs.get(url);
+    const sec = Math.max(0, Math.min(1.5, Number(lead) || 0));
+    if (!buf) {
+      // 没预解码（老调用方 / 解码失败）：退回 <audio>，慢一点但不至于没声
+      try {
+        const a = new Audio(url); a.volume = petVol; a.play().catch(() => {}); window.__petAudio = a;
+        return { ok: true, fallback: 'element', lead: 0 };
+      } catch (e) { return { ok: false, why: String((e && e.message) || e) }; }
+    }
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      if (petMaster) src.connect(petMaster); else src.connect(ctx.destination);
+      const startAt = ctx.currentTime + sec;
+      src.start(startAt);
+      petNodes.add(src);
+      src.onended = () => { petNodes.delete(src); };
+      window.__petAudioSrc = src;
+      return { ok: true, lead: sec, dur: buf.duration, at: startAt, state: ctx.state };
+    } catch (e) { return { ok: false, why: String((e && e.message) || e) }; }
+  };
   window.__petVol = 1;
-  window.__petSetVol = (v) => { const n = Math.max(0, Math.min(1, Number(v))); if (Number.isFinite(n)) window.__petVol = n; if (window.__petAudio) { try { window.__petAudio.volume = window.__petVol; } catch {} } return window.__petVol; };
+  window.__petSetVol = (v) => {
+    const n = Math.max(0, Math.min(1, Number(v)));
+    if (Number.isFinite(n)) { petVol = n; window.__petVol = n; if (petMaster) { try { petMaster.gain.value = n; } catch (e) {} } }
+    if (window.__petAudio) { try { window.__petAudio.volume = petVol; } catch (e) {} }
+    return petVol;
+  };
   window.__petPos = (pos) => {
     const p = ['bottom', 'top', 'left', 'right'].includes(pos) ? pos : 'bottom';
     el.className = 'pos-' + p;
@@ -1755,17 +1880,11 @@ function staggerConflicts(actions) {
 }
 
 function sayActions(ms, emotion, env, gesture, moves) {
-  const dur = Math.min(20, Math.max(1, Number(ms) / 1000));
-  const frames = [];
-  if (Array.isArray(env) && env.length >= 2) {
-    const n = Math.min(58, env.length);
-    const span = Math.max(0.24, dur - 0.34);
-    const step = span / (n - 1);
-    for (let i = 0; i < n; i++) frames.push({ time: +(0.15 + i * step).toFixed(2), values: { ParamMouthOpenY: Math.max(0.05, Math.min(1, Number(env[i]) || 0)) } });
-  } else {
-    for (let t = 0.15, k = 0; t <= dur - 0.15 && frames.length < 58; t += 0.12, k++) frames.push({ time: +t.toFixed(2), values: { ParamMouthOpenY: k % 2 === 0 ? 0.95 : 0.1 } });
-  }
-  const actions = [{ kind: 'trajectory', at: 0, duration: dur, frames }];
+  // 帧表和时长由 src/mouth.js 算（那里钉着舞台的两条硬约束：帧落在 0.15..duration-0.15、
+  // duration ≤ 20）。声音在计划的 0.15s 处开始播，帧也从那儿起 —— 见 MOUTH_LEAD。
+  const m = mouthFrames(ms, env);
+  const dur = m.dur;
+  const actions = [{ kind: 'trajectory', at: 0, duration: dur, frames: m.frames }];
   // talk 是纯口型指令，说话时已经有一条口型轨迹了，留着必撞
   const extra = sanitizeMoves(moves).filter((a) => a.kind !== 'talk');
   // 她自己点了表情就别让情绪预设再盖一次，表情是独占层，两个一起下会互相顶
@@ -1788,27 +1907,65 @@ function sayActions(ms, emotion, env, gesture, moves) {
   }
   return staggerConflicts(actions);
 }
-// 从合成出来的 WAV 算音量包络（每窗 RMS → 0.05..0.95），给口型用
-function wavEnvelope(file, n) {
+// 读 WAV 头：时长和格式。口型时长要按**文件实际多长**算，不能信 TTS 自报的 duration：
+// 有的 TTS 报的是预估（带 padding / 按字数估算），和真播出来能差 0.1~0.5s，嘴不是提前闭
+// 就是说完还在动。这里直接数帧：dataSize / blockAlign / sampleRate。
+function wavInfo(file) {
   const buf = fs.readFileSync(file);
-  let pos = 12, bits = 16, dataOff = 0, dataSize = 0;
+  let pos = 12, fmt = null, dataOff = 0, dataSize = 0;
   while (pos + 8 <= buf.length) {
     const id = buf.toString('ascii', pos, pos + 4);
     const size = buf.readUInt32LE(pos + 4);
-    if (id === 'fmt ') bits = buf.readUInt16LE(pos + 22);
-    if (id === 'data') { dataOff = pos + 8; dataSize = size; break; }
-    pos += 8 + size + (size % 2);
+    const body = pos + 8;
+    if (id === 'fmt ' && body + 16 <= buf.length) {
+      let format = buf.readUInt16LE(body);
+      const channels = Math.max(1, buf.readUInt16LE(body + 2));
+      const sampleRate = Math.max(1, buf.readUInt32LE(body + 4));
+      let blockAlign = buf.readUInt16LE(body + 12);
+      let bits = buf.readUInt16LE(body + 14);
+      // WAVE_FORMAT_EXTENSIBLE：真正的格式码和位深在后面那段 GUID 前面
+      if (format === 0xFFFE && body + 26 <= buf.length) {
+        bits = Math.max(bits, buf.readUInt16LE(body + 18));
+        format = buf.readUInt16LE(body + 24);
+      }
+      if (!blockAlign) blockAlign = Math.max(1, Math.round(channels * bits / 8));
+      fmt = { format, channels, sampleRate, blockAlign, bits };
+    }
+    if (id === 'data') { dataOff = body; dataSize = Math.min(size, Math.max(0, buf.length - body)); break; }
+    pos = body + size + (size % 2);
   }
-  const step = bits / 8;
-  const total = Math.floor(dataSize / step);
-  const win = Math.max(1, Math.floor(total / n));
+  if (!fmt) return null;
+  const frames = Math.floor(dataSize / Math.max(1, fmt.blockAlign));
+  return { ...fmt, dataOff, dataSize, frames, duration: frames / fmt.sampleRate };
+}
+
+// 从合成出来的 WAV 算音量包络（每窗 RMS → 0.05..0.95），给口型用
+function wavEnvelope(file, n, info) {
+  const buf = fs.readFileSync(file);
+  const wi = info || wavInfo(file);
+  if (!wi || !wi.frames) return null;
+  const { dataOff, frames, blockAlign, channels, bits, format } = wi;
+  const read = (i) => {
+    // 返回这一帧的振幅（多声道取平均），统一到 -1..1
+    let sum = 0;
+    for (let c = 0; c < channels; c++) {
+      const at = dataOff + i * blockAlign + c * (bits / 8);
+      if (at + bits / 8 > buf.length) break;
+      let v = 0;
+      if (format === 3 && bits === 32) v = buf.readFloatLE(at);
+      else if (bits === 8) v = (buf[at] - 128) / 128;
+      else if (bits === 16) v = buf.readInt16LE(at) / 32768;
+      else if (bits === 24) v = buf.readIntLE(at, 3) / 8388608;
+      else if (bits === 32) v = buf.readInt32LE(at) / 2147483648;
+      sum += Number.isFinite(v) ? v : 0;
+    }
+    return sum / channels;
+  };
+  const win = Math.max(1, Math.floor(frames / n));
   const rms = [];
   for (let i = 0; i < n; i++) {
     let sum = 0, cnt = 0;
-    for (let j = i * win; j < Math.min(total, (i + 1) * win); j++) {
-      const v = bits === 16 ? buf.readInt16LE(dataOff + j * 2) / 32768 : buf[dataOff + j] / 128;
-      sum += v * v; cnt++;
-    }
+    for (let j = i * win; j < Math.min(frames, (i + 1) * win); j++) { const v = read(j); sum += v * v; cnt++; }
     rms.push(Math.sqrt(sum / Math.max(1, cnt)));
   }
   const sm = rms.map((v, i) => (rms[i - 1] ?? v) * 0.25 + v * 0.5 + (rms[i + 1] ?? v) * 0.25);
@@ -1835,11 +1992,13 @@ function prepareAndSay(text, emotion, gesture, moves) {
       const info = JSON.parse(fs.readFileSync(path.join(DATA, 'voice-job.json'), 'utf8').replace(/^\uFEFF/, ''));
       if (!info.job_id) throw new Error(info.error || 'prepare failed');
       const wav = path.join(loadCfg().voiceWavDir || '', info.job_id + '.wav');
-      const dur = Math.min(20, Math.max(1, Number(info.duration) + 0.35));
+      // 时长按 wav 实际长度，不再「TTS 自报 + 0.35」：那个 0.35 会让嘴比声音晚收半拍
+      const wi = (() => { try { return wavInfo(wav); } catch { return null; } })();
+      const dur = Math.max(0.4, Math.min(19.5, (wi && wi.duration) || Number(info.duration) + 0.2 || 1));
       const ms = Math.round(dur * 1000);
       const n = Math.max(4, Math.min(58, Math.round(dur * 8)));
       let env = null;
-      try { env = wavEnvelope(wav, n); } catch {}
+      try { env = wavEnvelope(wav, n, wi); } catch {}
       // 放进页面能取的目录，用 Web Audio 播（延迟 ~80ms，而不是 SoundPlayer 的 1~2s）
       // 注意：BASE 已经是 ...\tools\jingyu，所以这里**不能**再拼 '..'，否则会落到
       //      ...\tools\jingyu-live2d-agent-main\web\audio（页面取不到的错目录）→ 404 静音。
@@ -1854,19 +2013,25 @@ function prepareAndSay(text, emotion, gesture, moves) {
         try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} audio-copy-fail ${audioDir} ${String(e.message).slice(0, 120)}\n`); } catch {}
       }
       say(text, false, ms);
+      const plan = { version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture, moves) };
+      let align = null;
       if (audioReady) {
-        if (win && !win.isDestroyed()) {
-          try { win.webContents.executeJavaScript('window.__petPlay && window.__petPlay(' + JSON.stringify(audioUrl) + ')').catch(() => {}); } catch {}
-        }
+        // 先解码、再把口型挂上舞台、最后按计划起点排声音（三步的顺序不能换）
+        align = await playVoiceAligned(audioUrl, runPlan(plan, true));
       } else {
-        // 兜底：页面取不到文件时用系统播放器，慢一点但保证有声音
+        // 兜底：页面取不到文件时用系统播放器，慢一点但保证有声音（口型会对不齐，只能这样）
         try { spawn('powershell', ['-NoProfile', '-Command', `(New-Object System.Media.SoundPlayer '${wav}').PlaySync()`], { windowsHide: true, stdio: 'ignore' }); } catch {}
+        await runPlan(plan, true);
       }
-      lastSay = { text, jobId: info.job_id, synthMs, dur: +dur.toFixed(2), mouth: env ? env.length : 0, at: Date.now() };
+      lastSay = { text, jobId: info.job_id, synthMs, dur: +dur.toFixed(2), mouth: env ? env.length : 0, at: Date.now(), align: align || null };
       // 保持 voicing 锁定直到音频真正播放完毕（dur * 1000 + 400ms 缓冲）
       setVoicing(true, ms + 400);
-      await runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture, moves) }, true);
-      try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} realtime say synth=${synthMs}ms dur=${dur.toFixed(2)}s mouth=${env ? env.length : 0} ${info.job_id}\n`); } catch {}
+      try {
+        const a = align || {};
+        const ld = a.loaded && a.loaded.ok ? 'decode-ok' : 'decode-' + ((a.loaded && a.loaded.why) || 'missing');
+        const pl = a.played ? (a.played.ok ? 'play-ok(' + (a.played.state || a.played.fallback || '?') + ')' : 'play-' + (a.played.why || 'fail')) : 'play-none';
+        fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} realtime say synth=${synthMs}ms dur=${dur.toFixed(2)}s mouth=${env ? env.length : 0} ${ld} ${pl} plan=${a.plan ? 'ok' : 'fail'} behind=${a.behind}s lead=${a.lead}s ${info.job_id}\n`);
+      } catch {}
     } catch (e) {
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} prep-error ${String(e.message).slice(0, 160)}\n`); } catch {}
       say(text, false, 6000);
@@ -1964,16 +2129,37 @@ async function applyDock(mode, opts = {}) {
   return { ok: true, dock: m, moved: true, x: p.x, y: p.y, target: { x: t.x, y: t.y, w: t.w, h: t.h } };
 }
 
+// 窗口大小收进当前显示器：别人的机器不一定是双 2560×1440 @100%。
+// 1080p 笔记本常见 125% / 150%，默认 531×950（DIP）高度就超过工作区了 —— 窗口一开比屏幕还高，
+// 系统会按新 DPI 重算尺寸，接下来一拖就「变大 + 闪」。所以开窗前先按落脚那块屏的 DIP 工作区夹一遍。
+function fitWindowToDisplay(x, y, w, h) {
+  const pt = { x: Math.round(x + w / 2), y: Math.round(y + h / 2) };
+  const d = screen.getDisplayNearestPoint(pt).workArea;
+  const k = Math.min(1, (d.width * 0.96) / w, (d.height * 0.96) / h);
+  const W = Math.max(240, Math.min(1600, Math.round(w * k)));
+  const H = Math.max(360, Math.min(2000, Math.round(h * k)));
+  // 位置也收回到这块屏里：换了机器/换了显示器，旧坐标可能已经不在任何一块屏上
+  const nx = Math.max(d.x - Math.round(W * 0.3), Math.min(Math.round(x), d.x + d.width - Math.round(W * 0.7)));
+  const ny = Math.max(d.y, Math.min(Math.round(y), d.y + d.height - Math.round(H * 0.9)));
+  return { x: nx, y: ny, width: W, height: H, clamped: W !== w || H !== h };
+}
+
 function createWindow() {
   const cfg = loadCfg();
   const area = screen.getPrimaryDisplay().workArea;
   const width = cfg.width || 380, height = cfg.height || 680;
-  const x = Number.isFinite(cfg.x) ? cfg.x : area.x + area.width - width - 40;
-  const y = Number.isFinite(cfg.y) ? cfg.y : area.y + area.height - height - 40;
+  const rx = Number.isFinite(cfg.x) ? cfg.x : area.x + area.width - width - 40;
+  const ry = Number.isFinite(cfg.y) ? cfg.y : area.y + area.height - height - 40;
+  const fit = fitWindowToDisplay(rx, ry, width, height);
+  const [x, y] = [fit.x, fit.y];
   smart = cfg.smart !== false; alwaysOnTop = cfg.onTop !== false;
+  if (fit.clamped) {
+    plog(`fit-display ${width}x${height} -> ${fit.width}x${fit.height} scale=${screen.getDisplayNearestPoint({ x, y }).scaleFactor}`);
+    saveCfg({ width: fit.width, height: fit.height, x, y });
+  }
 
   win = new BrowserWindow({
-    x, y, width, height, show: false, transparent: true, frame: false, hasShadow: false,
+    x, y, width: fit.width, height: fit.height, show: false, transparent: true, frame: false, hasShadow: false,
     resizable: true, movable: true, minimizable: true, maximizable: false, skipTaskbar: true,
     alwaysOnTop: true, roundedCorners: false, backgroundColor: '#00000000',
     icon: assetPath('icon-256.png'),
@@ -1998,6 +2184,7 @@ function createWindow() {
     clearTimeout(boundsTimer);
     boundsTimer = setTimeout(() => {
       if (!win || win.isDestroyed()) return;
+      if (draggingWindow) return;   // 拖动中系统可能按新 DPI 改过尺寸，别把那个尺寸写进配置变成永久的
       const [x, y] = win.getPosition();
       const [w, h] = win.getSize();
       saveCfg({ x, y, width: w, height: h });
@@ -2009,8 +2196,55 @@ function createWindow() {
   ensureServerThenLoad();
 }
 
-function stopDrag() { if (dragTimer) { clearInterval(dragTimer); dragTimer = null; } }
+// ---- Alt + 左键拖动：2026-11-07 重写 ----
+// 反馈是「按住 Alt 拖，窗口越拖越大，还在闪」。本机双屏同缩放 @100% 复现不出来，原因在旧写法里：
+//   1. 每帧 setPosition 只改位置、不带尺寸。窗口一跨到另一块不同缩放的屏，Windows/Chromium 会按
+//      新 DPI 重算一遍尺寸（DIP 不变 = 物理像素变大），下一帧我们只挪位置不管尺寸，于是尺寸就被
+//      系统那么留着；来回拖就来回变，看着就是「越拖越大」。重排重绘也跟着闪。
+//   2. 位移是「按下时的绝对坐标」回算的，跨屏时 DIP 坐标系换了基准，算出来的位置会跳。
+//   3. resized 事件把系统改过的尺寸写进了 config.json，于是变大的尺寸变成永久的。
+// 现在的做法：冻结的是**物理像素尺寸**，每帧都带上宽高；跨屏按新缩放比换算回 DIP（屏幕上看起来
+// 一样大）；位移用「上一帧 → 这一帧」的增量；同一块屏内不碰尺寸，所以不会每帧重排。
+let draggingWindow = false;
+let dragState = null;
+function stopDrag() {
+  if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+  const st = dragState;
+  dragState = null;
+  draggingWindow = false;
+  if (!st) return;
+  try {
+    if (win && !win.isDestroyed()) {
+      // 先把冻结的尺寸和最后的目标位置落实一遍，再读真实 bounds 存盘：别把系统按 DPI 改过的尺寸写进配置
+      win.setBounds({ x: Math.round(st.vx), y: Math.round(st.vy), width: st.w, height: st.h }, false);
+      const b = win.getBounds();
+      saveCfg({ x: b.x, y: b.y, width: b.width, height: b.height });
+      plog(`drag-end bounds=${b.x},${b.y} ${b.width}x${b.height}`);
+      win.webContents.send('pet:zones-reset');   // 尺寸真变了就重扫剪影，点击分区才不会漂
+    }
+  } catch {}
+}
 
+ipcMain.on('pet:drag-start', () => {
+  if (!win || win.isDestroyed() || dragTimer) return;
+  let b;
+  try { b = win.getBounds(); } catch { return; }
+  const start = screen.getCursorScreenPoint();
+  const s0 = screen.getDisplayNearestPoint(start).scaleFactor || 1;
+  dragState = createDragState(b, start, s0);
+  plog(`drag-start cursor=${start.x},${start.y} bounds=${b.x},${b.y} ${b.width}x${b.height} scale=${s0}`);
+  draggingWindow = true;
+  dragTimer = setInterval(() => {
+    if (!win || win.isDestroyed() || !dragState) { stopDrag(); return; }
+    const st = dragState;
+    const before = st.w + 'x' + st.h;
+    // 一帧的数学全在 src/drag.js（纯函数、有 scripts/test-pet.mjs 钉着），这儿只管把结果交给窗口
+    const box = dragFrame(st, screen.getCursorScreenPoint(), (x, y) => screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) }).scaleFactor || 1);
+    if (!box) return;
+    if (before !== box.width + 'x' + box.height) plog(`drag-dpi scale=${st.scale} size=${box.width}x${box.height}`);
+    win.setBounds(box, false);
+  }, 16);
+});
 ipcMain.on('pet:ignore', (_e, ignore) => { if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!!ignore, { forward: true }); });
 // 回复输入卡：打开时把窗口拉到前台拿焦点（不聚焦就打不了字）；发送走 sendReply
 ipcMain.on('pet:reply-open', () => {
@@ -2019,16 +2253,6 @@ ipcMain.on('pet:reply-open', () => {
   try { win.focus(); } catch {}
 });
 ipcMain.handle('pet:reply-send', (_e, text) => sendReply(text));
-ipcMain.on('pet:drag-start', () => {
-  if (!win || dragTimer) return;
-  const start = screen.getCursorScreenPoint();
-  const [wx, wy] = win.getPosition();
-  dragTimer = setInterval(() => {
-    if (!win || win.isDestroyed()) return stopDrag();
-    const p = screen.getCursorScreenPoint();
-    win.setPosition(wx + p.x - start.x, wy + p.y - start.y);
-  }, 16);
-});
 ipcMain.on('pet:drag-end', stopDrag);
 ipcMain.on('pet:need-smart', (e) => {
   try {
@@ -2254,11 +2478,13 @@ function setAutostart(on) {
 const SIZE_MIN = 420, SIZE_MAX = 1400;
 function applySize(w, h, save) {
   if (!win || win.isDestroyed()) return null;
-  const W = Math.max(240, Math.min(1600, Math.round(Number(w) || 380)));
-  const H = Math.max(360, Math.min(2000, Math.round(Number(h) || 680)));
   const [ox, oy] = win.getPosition();
   const [ow, oh] = win.getSize();
   const d = screen.getDisplayNearestPoint({ x: ox + Math.round(ow / 2), y: oy + Math.round(oh / 2) }).workArea;
+  // 上限跟着这块屏走：150% 缩放的 1080p 上工作区只有 ~680 DIP 高，滑到 1320 就是「比屏幕还大」，
+  // 然后 Windows 会按 DPI 自己改尺寸，拖动就开始闪。这里直接夹住，别让配置里出现撑破屏幕的尺寸。
+  const W = Math.max(240, Math.min(1600, Math.min(Math.round(Number(w) || 380), Math.round(d.width * 0.96))));
+  const H = Math.max(360, Math.min(2000, Math.min(Math.round(Number(h) || 680), Math.round(d.height * 0.96))));
   win.setSize(W, H);
   let nx = Math.round(ox + ow / 2 - W / 2);
   let ny = Math.round(oy + oh - H);

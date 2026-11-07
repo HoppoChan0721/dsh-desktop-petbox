@@ -5,6 +5,8 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
+    "doctor": "electron scripts/doctor.js",
+    "test": "node scripts/test-pet.mjs",
     "patch": "node patch/apply-jingyu.mjs",
     "patch:check": "node patch/apply-jingyu.mjs --check"
   },
@@ -14,6 +16,6 @@
   "private": true,
   "engines": { "node": ">=20" },
   "devDependencies": {
-    "electron": "^45.2.0"
+    "electron": "45.2.1"
   }
 }
