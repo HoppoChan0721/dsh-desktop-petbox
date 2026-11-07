@@ -279,6 +279,21 @@ export const DEFAULT_PROFILE = {
       cooldown: 10 * 60 * 1000,
       key: 'label',
     },
+    {
+      // 看到感兴趣的东西。跟 game-over 不同：这条是「我有点好奇」，
+      // 不是「你离开过」；留二十分钟，正好盖住兴趣窗的时长。
+      id: 'scene-interest',
+      on: 'scene',
+      moment: {
+        id: 'curious',
+        tag: '想看看',
+        ttlMs: 20 * 60 * 1000,
+        why: (sig) => (sig.interestLabel ? `屏幕上有${sig.interestLabel}` : '看到点想看的'),
+      },
+      when: { path: 'signal.category', eq: 'interest' },
+      cooldown: 15 * 60 * 1000,
+      key: 'interest',
+    },
   ],
 
   // ── 档位 ───────────────────────────────────────────────────────────────
@@ -445,6 +460,28 @@ export const DEFAULT_PROFILE = {
           ],
         },
       },
+    ],
+  },
+
+  // ── 兴趣（2026-11-07）──────────────────────────────────────────────────
+  // 看到这些词她会「想看看」，然后短时间盯紧一点，看主人到底点不点开。
+  //
+  // 只匹配进程名和窗口标题，不读页面内容 —— 那一步是隐私线，不迈。
+  // 所以「知道主人在看猫视频」能成立，「知道弹幕说了什么」不成立。
+  //
+  // 三条上限写死是故意的：单次时长、一天次数、最短间隔。
+  // 不然一个兴趣词就能让她整天盯着屏幕，那不叫陪伴。
+  interest: {
+    boomMs: 20 * 60 * 1000,        // 一次盯多久
+    boomIntervalMs: 150 * 1000,    // 盯的时候多久瞄一眼
+    perDay: 3,                     // 一天最多开几次
+    words: [
+      { id: 'cat', label: '小猫', words: ['猫', '喵', 'kitten', 'kitty'] },
+      { id: 'dog', label: '小狗', words: ['狗', '汪', 'puppy'] },
+      { id: 'whale', label: '鲸鱼', words: ['鲸', 'whale'] },
+      { id: 'pet', label: '桌宠', words: ['桌宠', '桌面宠物', 'live2d'] },
+      { id: 'food', label: '做饭', words: ['料理', '做饭', '菜谱', '烘焙'] },
+      { id: 'bili', label: 'B站', words: ['哔哩哔哩', 'bilibili'] },
     ],
   },
 

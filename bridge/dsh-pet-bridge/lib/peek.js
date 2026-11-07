@@ -78,7 +78,8 @@ function probe(cfg, opts = {}) {
  * 几十毫秒跑完，可以几十秒问一次。它管的是事件，不是内容。
  */
 function probeLight(cfg) {
-  return runScript(cfg, ['-Light'], 4000, 'probe-light.json');
+  // 超时给得比重探针宽：一次要起 PowerShell、编译 Add-Type 的 C#，冷启动可能两三秒。
+  return runScript(cfg, ['-Light'], Number(cfg.peekLightTimeoutMs) || 12000, 'probe-light.json');
 }
 
 // 「这窗口我自己」的判定：主人在跟你聊天、或者桌宠窗口在前台时别凑热闹
@@ -92,6 +93,38 @@ function selfKind(proc, title) {
   if (p === 'electron') return 'pet';
   if (/deepseek\s*harness|dsh\b/i.test(t)) return 'dsh';
   return '';
+}
+
+/** 看到感兴趣的东西时递过去的那一条。 */
+function interestPrompt(w, title) {
+  return '（桌宠｜你刚瞄了一眼主人的屏幕，看到和「' + (w.label || w.id) + '」有关的东西'
+    + (title ? '，窗口是「' + clip(title, 30) + '」' : '')
+    + '。你被吸引住了，随口说一句想看看。一句话，短点。'
+    + '说完你会多瞄几眼屏幕，别追问，也别问他要不要打开。）';
+}
+
+/**
+ * 词表命中没有。抽成模块级函数是为了能测：真探针要起 PowerShell。
+ * 用包含匹配而不是正则：配置里写正则等于把 eval 塞进配置文件。
+ */
+export function matchInterest(words, proc, title) {
+  if (!Array.isArray(words)) return null;
+  const hay = `${proc || ''} ${title || ''}`.toLowerCase();
+  if (!hay.trim()) return null;
+  for (const w of words) {
+    if (!w || !w.id || !Array.isArray(w.words)) continue;
+    for (const kw of w.words) {
+      const k = String(kw || '').toLowerCase().trim();
+      if (!k) continue;
+      // 纯英文的词加边界，免得 'cat' 命中 'category'。中文不用，包含就算。
+      if (/^[a-z][a-z ]*$/.test(k)) {
+        if (new RegExp(`(^|[^a-z])${k}([^a-z]|$)`).test(hay)) return w;
+      } else if (hay.includes(k)) {
+        return w;
+      }
+    }
+  }
+  return null;
 }
 
 function inQuietHours(cfg) {
@@ -150,7 +183,7 @@ export function trackEpisode(ep, sample, now) {
   return minutes >= 5 ? done : null;
 }
 
-export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEnd, intervalFactor }) {
+export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEnd, onInterest, intervalFactor }) {
   const dir = cfg.peekTmpDir || join(process.env.DSH_HOME || tmpdir(), 'tmp', 'pet-peek');
   cfg.peekTmpDir = dir;
 
@@ -184,13 +217,53 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
   let lightBusy = false;
   // 每次调度都现问一次倍率：情绪不同时她的主动程度不一样（冷战降频，黏人时加倍）。
   // 回调坏了就当 1，别因为情绪模块出问题把窥屏也带崩。
+  // ── 兴趣窗（2026-11-07）───────────────────────────────────────────────
+  // 看到感兴趣的东西，短时间盯紧一点。这是「好奇」的节奏，不是任务。
+  // 三条硬上限：单次时长、一天次数、最短间隔。不然一个兴趣词就能让她整天
+  // 盯着屏幕，那不叫陪伴。
+  const boomCfg = (cfg.interestWords && typeof cfg.interestWords === 'object') ? cfg.interestWords : null;
+  const boomMs = Math.max(60 * 1000, Number(boomCfg && boomCfg.boomMs) || 20 * 60 * 1000);
+  const boomInterval = Math.max(60 * 1000, Number(boomCfg && boomCfg.boomIntervalMs) || 150 * 1000);
+  const boomPerDay = Math.max(1, Number(boomCfg && boomCfg.perDay) || 3);
+  const boom = { until: 0, key: '', label: '', atTitle: '', day: '', count: 0 };
+
+  /** 词表命中没有。 */
+  function matchInterestHere(proc, title) {
+    return matchInterest(boomCfg && boomCfg.words, proc, title);
+  }
+
+  const inBoom = () => boom.until > Date.now();
+
+  /** 开一段高频。超过每日上限就不开，返回 false。 */
+  function startBoom(w, title, now) {
+    const day = new Date(now).toISOString().slice(0, 10);
+    if (boom.day !== day) { boom.day = day; boom.count = 0; }
+    if (boom.count >= boomPerDay) return false;
+    boom.count += 1;
+    boom.until = now + boomMs;
+    boom.key = String(w.id);
+    boom.label = String(w.label || w.id);
+    boom.atTitle = String(title || '');
+    log(`peek: 兴趣窗打开 ${boom.label}，${Math.round(boomMs / 60000)} 分钟（今天第 ${boom.count} 次）`);
+    return true;
+  }
+
+  function endBoom(why) {
+    if (!boom.until) return;
+    boom.until = 0;
+    boom.atTitle = '';
+    log('peek: 兴趣窗关掉，' + why);
+  }
+
   const factor = () => {
     try {
       const f = Number(intervalFactor && intervalFactor());
       return Number.isFinite(f) && f > 0 ? Math.min(6, Math.max(0.2, f)) : 1;
     } catch { return 1; }
   };
-  const baseInterval = () => st.intervalMs * factor();
+  // 兴趣窗里用绝对间隔，不乘情绪倍率：那一刻是「想看」，不是「黏人」。
+  // 基准间隔也不动，主人设的还是他设的，只是这一段临时变密。
+  const baseInterval = () => (inBoom() ? boomInterval : st.intervalMs * factor());
   const scheduleNext = () => { st.nextAt = Date.now() + rand(baseInterval()); };
 
   function state() {
@@ -214,6 +287,10 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       light: lastLight,
       episode: ep.active
         ? { since: new Date(ep.since).toISOString(), minutes: Math.round((Date.now() - ep.since) / 60000), proc: ep.proc, title: clip(ep.title, 40) }
+        : null,
+      // 兴趣窗：开着的时候她在高频盯着屏幕，看主人到底点不点开
+      boom: boom.until
+        ? { label: boom.label, leftMin: Math.max(0, Math.round((boom.until - Date.now()) / 60000)), today: boom.count, dayCap: boomPerDay }
         : null,
       tmpDir: dir,
     };
@@ -323,12 +400,26 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       if (!r || !r.ok) return;
       const now = Date.now();
       lastLight = { at: now, proc: r.proc || '', title: r.title || '', fullscreen: r.fullscreen === true };
+
+      // 兴趣窗到期，或者标题变了（点开了，或者切去干别的）
+      if (boom.until && now >= boom.until) endBoom('时间到了');
+      if (inBoom() && boom.atTitle && r.title && r.title !== boom.atTitle) endBoom('标题变了');
+
+      const pet = selfKind(r.proc, r.title) === 'pet';
+      if (!pet) {
+        const w = matchInterestHere(r.proc, r.title);
+        if (w && !inBoom() && startBoom(w, r.title, now)) {
+          try { onInterest && onInterest(w, r.title); } catch (e) { log('peek: onInterest failed: ' + e.message); }
+          try { await deliver(interestPrompt(w, r.title)); } catch (e) { log('peek: 兴趣投递失败：' + e.message); }
+        }
+      }
+
       const done = trackEpisode(ep, {
         fullscreen: r.fullscreen === true,
         title: r.title,
         proc: r.proc,
         // 桌宠自己在前台不算：点托盘菜单会把焦点抢成她
-        pet: selfKind(r.proc, r.title) === 'pet',
+        pet,
       }, now);
       if (!done) return;
       log(`peek: 全屏结束，${done.minutes} 分钟，${done.proc}｜${clip(done.title, 30)}`);

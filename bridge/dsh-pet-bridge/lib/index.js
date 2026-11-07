@@ -478,6 +478,15 @@ export function apply(ctx, config = {}) {
       try { mood.scene({ category: 'game-over', label: g.title || g.proc || '', minutes: g.minutes }); }
       catch (e) { log('mood game-end failed: ' + e.message); }
     },
+    // 看到感兴趣的东西 → 记一条「想看看」的此刻。词表在 profile.interest 里，改词不动代码。
+    onInterest: (w, title) => {
+      if (!mood) return;
+      try { mood.scene({ category: 'interest', label: title || '', interest: w.id, interestLabel: w.label || w.id }); }
+      catch (e) { log('mood interest failed: ' + e.message); }
+    },
+    // 兴趣词表跟着 profile 走：加一个词只改 profile，不用碰 peek。
+    // 配置里给了 interestWords 就用配置的，方便单独调这一块。
+    interestWords: cfg.interestWords || (mood && mood.profile && mood.profile.interest) || null,
     // 主动程度跟着情绪走：冷战降频，黏人时加倍。mood 关着就是恒等 1。
     intervalFactor: () => (mood ? (mood.gate('proactive').intervalFactor || 1) : 1),
     onStateChange: (s) => {
