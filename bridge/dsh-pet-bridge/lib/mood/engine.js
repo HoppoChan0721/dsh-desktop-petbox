@@ -20,9 +20,16 @@
 //     lastInteractionAt, lastSignalAt,
 //     createdAt,                                  建账本的时间
 //     urges: { [windowId]: [at, ...] }            主动开口过的时刻，给 urge 算间隔和上限
+//     moments: [ { id, at, ttlMs, tag, why, n } ] 「此刻」的短时余温，见 moment.js
 //   }
+//
+// 注意 moments 跟 emotions 是两套东西，不是同一层的两种写法：
+// emotions 是关系，由主人的行为驱动，会累积会衰减；
+// moments 是观察，由窥屏驱动，带 TTL，到期就没了。
+// 混在一起的话，开着窥屏就等于让「看一眼」变成「攒情绪」。
 
 import { SCHEMA_VERSION } from './profile.js';
+import { pushMoment, pruneMoments } from './moment.js';
 
 const CAP = 1;          // 单种情绪上限
 const FLOOR = 0.001;    // 低于这个数直接归零，免得浮点尾巴永远不消失
@@ -47,6 +54,8 @@ export function createState(profile, now = Date.now()) {
     createdAt: now,
     // 主动开口的记账表：{ [windowId]: [时间戳] }。老状态文件里没有这个键，读的时候兜空。
     urges: {},
+    // 「此刻」的短时余温。跟 emotions 同一份文件但互不影响，见 moment.js 顶部。
+    moments: [],
   };
 }
 
@@ -75,7 +84,8 @@ export function tick(state, profile, now = Date.now()) {
   const view = {};
   for (const [name, entry] of Object.entries(emotions)) view[name] = Number(entry.value) || 0;
   const tier = tierOf(profile, negForTier(profile, view), state.tier);
-  return { ...state, emotions, cooldowns, tier };
+  // 过期的 moment 顺手扔掉。它们不衰减，只有「在」和「不在」两种状态。
+  return { ...state, emotions, cooldowns, tier, moments: pruneMoments(state.moments, now) };
 }
 
 function readMood(state, name) {
@@ -152,11 +162,26 @@ export function ingest(state, signal, profile, now = Date.now()) {
       continue;
     }
 
+    if (rule.when && !evalCond(rule.when, bag, profile)) continue;
+
+    // moment 规则：只写「此刻」，一个字都不进账本。
+    // 窥屏走的是这条 —— 看一眼屏幕该留下余温，不该攒成委屈。
+    // 所以它没有 add / delta，也不参与 requires：那不是情绪，是观察。
+    if (rule.moment) {
+      const spec = typeof rule.moment === 'function' ? rule.moment(sig) : rule.moment;
+      if (spec) {
+        const why = typeof spec.why === 'function' ? spec.why(sig) : spec.why;
+        next.moments = pushMoment(next.moments, { ...spec, why }, now);
+        if (rule.cooldown) next.cooldowns[key] = now;
+        fired.push({ rule: rule.id, moment: String(spec.id || rule.id) });
+      }
+      continue;
+    }
+
     const emotionDef = profile.emotions[rule.add];
     if (!emotionDef) continue;
     // 前提没到就跳过：委屈不够，气就生不起来
     if (emotionDef.requires && !evalCond(emotionDef.requires, bag, profile)) continue;
-    if (rule.when && !evalCond(rule.when, bag, profile)) continue;
 
     const amount = (Number(rule.delta) || 0) * sig.weight;
     if (!amount) continue;
@@ -305,6 +330,8 @@ export function resolve(state, profile, now = Date.now()) {
     },
     values: view,
     reasons,
+    // 「此刻」的余温：只给 cue 和托盘看，不参与任何数值结算。
+    moments: fresh.moments || [],
     idleMinutes: fresh.lastInteractionAt ? Math.floor((now - fresh.lastInteractionAt) / 60000) : null,
   };
 }

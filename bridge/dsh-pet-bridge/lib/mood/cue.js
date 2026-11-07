@@ -8,6 +8,8 @@
 //   2. 平静且没什么事的时候返回空串 —— 没情绪就别占 token。
 //   3. 最多一百来字。这段每轮都跟着消息走，写长了比热记忆还贵。
 
+import { topMoment } from './moment.js';
+
 /** 默认语气模板。可以在 profile.cue.tones 里整段替换。 */
 export const DEFAULT_TONES = {
   sulky: '说话短一点，可以带点刺，但不主动翻旧账',
@@ -71,28 +73,39 @@ export function render(snapshot, profile, opts = {}) {
   const shape = shapesOf(snapshot, profile);
   const form = shape.length ? shape.join('、') + '，' : '';
 
-  // 冷战优先，其次不痛快，其次正面，最后才是担心
+  let body = '';
   if (tier === 'cold') {
-    return wrap(`你现在是真的在生气，${because}。${form}${tones.cold}`, opts);
+    body = `你现在是真的在生气，${because}。${form}${tones.cold}`;
+  } else if (tier === 'sulky') {
+    body = `你现在有点不痛快，${because}。${form}${tones.sulky}`;
+  } else if ((values.worried || 0) > 0.3) {
+    body = `你在担心他，${because}。${form}${tones.worried}`;
+  } else if ((values.jealous || 0) > 0.3) {
+    body = `你有点吃醋，${because}。${form}${tones.jealous}`;
+  } else if ((values.moved || 0) > 0.3 && (values.moved || 0) >= (values.joy || 0)) {
+    // 心疼优先于单纯的高兴：看见对方在忙，该是软下来的那种心情，不是雀跃
+    body = `你有点心疼他，${because}。${form}${tones.warm}`;
+  } else if ((values.joy || 0) > 0.3) {
+    body = `你现在心情不错，${because}。${form}${tones.warm}`;
   }
-  if (tier === 'sulky') {
-    return wrap(`你现在有点不痛快，${because}。${form}${tones.sulky}`, opts);
-  }
-  if ((values.worried || 0) > 0.3) {
-    return wrap(`你在担心他，${because}。${form}${tones.worried}`, opts);
-  }
-  if ((values.jealous || 0) > 0.3) {
-    return wrap(`你有点吃醋，${because}。${form}${tones.jealous}`, opts);
-  }
-  // 心疼优先于单纯的高兴：看见对方在忙，该是软下来的那种心情，不是雀跃
-  if ((values.moved || 0) > 0.3 && (values.moved || 0) >= (values.joy || 0)) {
-    return wrap(`你有点心疼他，${because}。${form}${tones.warm}`, opts);
-  }
-  if ((values.joy || 0) > 0.3) {
-    return wrap(`你现在心情不错，${because}。${form}${tones.warm}`, opts);
-  }
-  // 平静且没事：不占字数
-  return '';
+
+  // 「此刻」那一段。账本平静的时候，它是唯一有内容的东西——
+  // 窥屏看见什么本来就该在这里起作用，而不是偷偷改账本。
+  const mom = momentLine(snapshot);
+  if (!body && !mom) return '';
+  if (!body) return wrap(`${mom}${tones.warm}`, opts);
+  if (mom) return wrap(`${body}${mom}`, opts);
+  return wrap(body, opts);
+}
+
+/** 把最强的那条 moment 说成一句话。没有就返回空串，不占字数。 */
+function momentLine(snapshot) {
+  const now = Number(snapshot && snapshot.at) || Date.now();
+  const top = topMoment(snapshot && snapshot.moments, now);
+  if (!top || !top.tag) return '';
+  const again = (Number(top.n) || 1) > 1 ? '又' : '';
+  const why = top.why ? `${top.why}，` : '';
+  return `刚才${again}瞄到一眼，${why}这会儿${top.tag}。`;
 }
 
 function wrap(body, opts) {
@@ -110,6 +123,8 @@ export function summarize(snapshot, profile) {
   // 形态词也带一个进摘要，托盘上能一眼看出是炸还是蔫
   const shape = shapesOf(snapshot, profile);
   const shapeText = shape.length ? '·' + shape.join('·') : '';
+  // 「此刻」的余温不往这里塞：摘要要短，而余温随时会消失。
+  // /mood 的 moments 字段单独给，谁想显示谁自己拼。
   return `${tierName}·主情绪${dom}·心情${pct >= 0 ? '+' : ''}${pct}${shapeText}`;
 }
 

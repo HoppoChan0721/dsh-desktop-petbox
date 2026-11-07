@@ -294,6 +294,12 @@ async function main() {
     if (axes.arousal != null || axes.dominance != null) {
       console.log(`形态　绷 ${pct(axes.arousal)}　势 ${pct(axes.dominance)}`);
     }
+    // 此刻：窥屏留下的短时余温，不进出上面那本账。没有就不打这行。
+    const mm = (d.moments && d.moments.top) || null;
+    if (mm && mm.tag) {
+      const left = Math.max(0, Math.round((Number(mm.at) + Number(mm.ttlMs) - Date.now()) / 60000));
+      console.log(`此刻　${mm.tag}${mm.why ? `　${mm.why}` : ''}${mm.n > 1 ? `　第${mm.n}回` : ''}　还剩 ${left} 分`);
+    }
     if (snap.idleMinutes != null) console.log(`已经 ${Math.floor(snap.idleMinutes / 60)} 小时 ${snap.idleMinutes % 60} 分钟没人理她`);
     const vals = Object.entries(snap.values || {}).filter(([, v]) => v > 0.01);
     if (vals.length) console.log('账本：' + vals.map(([k, v]) => `${k}=${v.toFixed(2)}`).join('　'));

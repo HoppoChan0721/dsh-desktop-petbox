@@ -23,6 +23,7 @@ import { DEFAULT_PROFILE, SCHEMA_VERSION, mergeProfile, isValidProfile } from '.
 import { fromTouch, fromScene, fromSpeech, fromIdle, sceneFromPeek } from './signals.js';
 import { render, summarize } from './cue.js';
 import { decide as decideUrge, mark as markUrgeOf, interrupt as interruptUrge, summarizeUrge } from './urge.js';
+import { summarizeMoments, clearMoments } from './moment.js';
 import { readFileSync } from 'node:fs';
 
 const IDLE_MIN_MINUTES = 120;        // 少于两小时不算冷落
@@ -91,6 +92,11 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
     // 已经在生气的人被摸一下还没消气，是很正常的事；继续念第三句才是程序。
     if (signal && (signal.kind === 'touch' || signal.kind === 'speech')) {
       state = interruptUrge(state);
+    }
+    // 真的开口说话，比什么都算数：之前「瞄到一眼」留下的余温当场翻篇。
+    // 触摸不算——摸一下不代表他想聊，那点在意留着就留着。
+    if (signal && signal.kind === 'speech') {
+      state = { ...state, moments: clearMoments() };
     }
     store.save(state);
     return state;
@@ -180,6 +186,8 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
         summary: summarize(snap, profile),
         snapshot: snap,
         urge: summarizeUrge(state, profile, at),
+        // 「此刻」的余温：窥屏留下的短时状态，跟账本分开显示，托盘上分得清
+        moments: summarizeMoments(state.moments, at),
         log: (state.log || []).slice(-8).reverse(),
       };
     },

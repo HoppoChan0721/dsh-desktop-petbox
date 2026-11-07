@@ -138,23 +138,19 @@ test('奇怪的 signal 不会把账本弄坏', () => {
 
 test('冷战会自己结束：没人管也会慢慢回到平静', () => {
   let s = createState(DEFAULT_PROFILE, T0);
-  s = ingest(s, fromTouch({ zone: 'head' }), DEFAULT_PROFILE, T0);
-  // 一小时一小时地喂空闲，weight 就是那一小时。连着一天没人理。
-  for (let i = 1; i <= 20; i++) {
+  // 一小时一小时地喂空闲，weight 就是那一小时。连着一天多没人理。
+  // 委屈自己只能到「不痛快」；冷战要靠「一直没人理」慢慢转成气，从第 21 小时才开始。
+  for (let i = 1; i <= 30; i++) {
     const at = T0 + i * hour(1);
     s = ingest(s, fromIdle((at - T0) / 60000, at, 1), DEFAULT_PROFILE, at);
   }
-  const idle = resolve(s, DEFAULT_PROFILE, T0 + hour(20));
-  assert.ok(idle.values.upset > 0.3 && idle.values.upset < 0.6, `一天没人理该稳在中段，实际 ${idle.values.upset}`);
-
-  s = ingest(s, fromScene({ category: 'leisure', label: 'Steam' }), DEFAULT_PROFILE, T0 + hour(21));
-  assert.equal(resolve(s, DEFAULT_PROFILE, T0 + hour(21)).tier, 'cold', '先说清楚现在是冷战');
+  assert.equal(resolve(s, DEFAULT_PROFILE, T0 + hour(30)).tier, 'cold', '快两天没人理，该冷了');
 
   // 之后什么都不发生，只让时间走
-  const after3h = resolve(s, DEFAULT_PROFILE, T0 + hour(24));
-  const after12h = resolve(s, DEFAULT_PROFILE, T0 + hour(33));
-  assert.notEqual(after3h.tier, 'cold', '三小时后该软下来了');
-  assert.equal(after12h.tier, 'calm', '半天之后该好了');
+  const after6h = resolve(s, DEFAULT_PROFILE, T0 + hour(36));
+  const after24h = resolve(s, DEFAULT_PROFILE, T0 + hour(54));
+  assert.notEqual(after6h.tier, 'cold', '六小时后该软下来了');
+  assert.equal(after24h.tier, 'calm', '一天之后该好了');
 });
 
 test('门面在状态文件坏掉时还能起来', () => {

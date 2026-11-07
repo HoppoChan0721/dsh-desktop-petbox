@@ -62,6 +62,9 @@ export function createStore({ file, profile, log = () => {} }) {
     for (const name of Object.keys(profile.emotions)) {
       if (!state.emotions[name]) state.emotions[name] = { value: 0, at: now };
     }
+    // 老状态文件里没有这两样，读的时候补齐，别让升级过的桥去读旧文件就崩
+    if (!Array.isArray(state.moments)) state.moments = [];
+    if (!state.urges || typeof state.urges !== 'object') state.urges = {};
     return state;
   }
 

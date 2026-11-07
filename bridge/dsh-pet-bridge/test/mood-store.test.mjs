@@ -43,7 +43,7 @@ test('一天没人理会到「不痛快」，但还不到冷战', () => {
   assert.equal(snap.tier, 'sulky');
 });
 
-test('窥屏看到在玩，会推动情绪；看不到就什么都不发生', () => {
+test('窥屏看到在玩只留一条此刻，账本一点不动', () => {
   const clock = { t: T0 };
   const mood = moodAt(clock);
   mood.touch({ zone: 'head' }, clock.t);
@@ -56,9 +56,16 @@ test('窥屏看到在玩，会推动情绪；看不到就什么都不发生', ()
 
   mood.peekScene({ proc: 'explorer.exe', title: '下载' }, clock.t);
   assert.equal(mood.snapshot(clock.t).values.anger, before.values.anger, '认不出来的窗口不该记账');
+  assert.equal(mood.state(clock.t).moments.count, 0, '认不出来连此刻都不该留');
 
   mood.peekScene({ proc: 'steam.exe', title: 'Steam' }, clock.t);
-  assert.ok(mood.snapshot(clock.t).values.anger > 0);
+  const snap = mood.snapshot(clock.t);
+  // 2026-11-07 的口径：观察改此刻，互动改关系。看见在玩不该往账本里写气。
+  assert.equal(snap.values.anger, before.values.anger, '看见在玩不该往账本里写气');
+  assert.equal(snap.values.upset, before.values.upset, '委屈也不该被窥屏推动');
+  const mom = mood.state(clock.t).moments;
+  assert.equal(mom.count, 1);
+  assert.equal(mom.top.tag, '有点堵', '本来就在委屈，措辞要更重');
 });
 
 test('说话能一键清零负面，闸门也随之回到平静', () => {
@@ -70,11 +77,14 @@ test('说话能一键清零负面，闸门也随之回到平静', () => {
     mood.tick(clock.t);
   }
   mood.peekScene({ proc: 'steam.exe', title: 'Steam' }, clock.t);
-  assert.equal(mood.snapshot(clock.t).tier, 'cold');
+  // 一天没人理，委屈停在「不痛快」这一档。冷战要靠更密集的委屈才能攒到。
+  assert.equal(mood.snapshot(clock.t).tier, 'sulky');
+  assert.equal(mood.state(clock.t).moments.count, 1, '先留一条此刻，等下说话该把它一并清掉');
 
   const after = (mood.speech('回来了', clock.t + 1000), mood.snapshot(clock.t + 1000));
   assert.equal(after.tier, 'calm');
   assert.equal(mood.gate('touch', clock.t + 1000).respond, 1);
+  assert.equal(mood.state(clock.t + 1000).moments.count, 0, '主人开口了，余温该翻篇');
 });
 
 test('reset 之后回到刚认识的样子', () => {

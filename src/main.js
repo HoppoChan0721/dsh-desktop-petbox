@@ -2353,16 +2353,19 @@ async function peekToggle(on) {
 // ---- 情绪（2026-11-06）----
 // 账本和决策都在桥插件那边，壳子只读一眼：菜单里显示她现在什么心情、因为什么。
 // 不在这里算任何东西，也不拿它去改表情——表情由会话里的 [emotion:...] 决定，两套别打架。
-let moodLive = false, moodSummary = '', moodReason = '', moodUrge = null;
+let moodLive = false, moodSummary = '', moodReason = '', moodUrge = null, moodMoment = '';
 async function moodSync() {
   try {
     const r = await fetch(`${PEEK_URL}/mood`, { signal: AbortSignal.timeout(1500) });
     if (!r.ok) throw new Error('mood ' + r.status);
     const d = await r.json();
-    if (d.enabled === false) { moodLive = false; moodSummary = '情绪没开'; moodReason = ''; moodUrge = null; return; }
+    if (d.enabled === false) { moodLive = false; moodSummary = '情绪没开'; moodReason = ''; moodUrge = null; moodMoment = ''; return; }
     moodLive = true;
     moodSummary = d.summary || '';
     moodUrge = d.urge || null;
+    // 「此刻」的余温：窥屏留下的短时状态，跟账本分开显示。
+    // 它十分钟就没了，所以得单独挂在标签最前面，不能被摘要挤掉。
+    moodMoment = (d.moments && d.moments.top && d.moments.top.tag) || '';
     const snap = d.snapshot || {};
     moodReason = (snap.reasons && snap.reasons.length) ? snap.reasons[0] : '';
   } catch {
@@ -2370,6 +2373,7 @@ async function moodSync() {
     moodSummary = '桥插件没在跑';
     moodReason = '';
     moodUrge = null;
+    moodMoment = '';
   }
 }
 // 立刻问她一句想不想开口。跟定时那条走同一个判断，所以该被间隔挡住的时候照样挡住。
@@ -2443,7 +2447,9 @@ function moodMenuLabel() {
   const base = moodSummary || '平静';
   // 平静的时候没什么可解释的，别把「因为被摸了一下」也挂上去
   const why = (moodReason && !base.startsWith('平静')) ? '·' + moodReason : '';
-  const t = base + why;
+  // 此刻的余温挂最前面：它十分钟就没了，排在尾巴上会被截掉。
+  const mom = moodMoment ? moodMoment + '｜' : '';
+  const t = mom + base + why;
   return t.length > 24 ? t.slice(0, 23) + '…' : t;
 }
 function urgeMenuLabel() {

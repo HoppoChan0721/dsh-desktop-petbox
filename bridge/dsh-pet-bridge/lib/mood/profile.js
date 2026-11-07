@@ -118,6 +118,7 @@ export const DEFAULT_PROFILE = {
   // clear   顺手清零哪些情绪，用来表达「被哄好了」
   // cooldown 同一个 key 在这段时间内只记一次，防重复。单位毫秒
   // key      去重的依据，从 signal 里取哪个字段，默认 label
+  // moment   给了它就只写「此刻」，一个字都不进账本，也不需要 add / delta。见 moment.js
   rules: [
     {
       id: 'touch-warm',
@@ -151,6 +152,29 @@ export const DEFAULT_PROFILE = {
       when: { path: 'signal.minutes', gt: 120 },
     },
     {
+      // 一直没人理，慢慢会从委屈转成真生气。
+      //
+      // 这条在 2026-11-07 之前是不存在的：那会儿「生气」唯一的来源是「委屈攒够 + 看见他在玩」。
+      // 窥屏改成只写此刻之后，那条链断了，anger 会变成永远为 0 的死数据。
+      // 补这条正好也把口径接上——让她生气的该是「你不理我」，不是「我看见你在玩」。
+      //
+      // 门槛 25 小时：一整天没人理还只是不痛快，隔了一夜还没人，才真的冷下来。
+      // 过了这道线一次给足 0.5，是「终于受不了了」那一下，不是慢慢磨。
+      id: 'idle-snapped',
+      on: 'idle',
+      add: 'anger',
+      delta: 0.5,
+      reason: '等太久了',
+      when: {
+        all: [
+          { path: 'signal.minutes', gt: 1500 },
+          { path: 'mood.upset', gt: 0.4 },
+        ],
+      },
+      cooldown: 3 * 60 * 60 * 1000,
+      key: 'snapped',
+    },
+    {
       // 对方回话 = 一次真心回应，抵掉半天郁闷
       id: 'speech-warm',
       on: 'speech',
@@ -179,45 +203,62 @@ export const DEFAULT_PROFILE = {
       reason: '',
       cooldown: 10 * 60 * 1000,
     },
+    // ── 窥屏看到的场景：一律只写 moment，不进账本 ────────────────────────
+    //
+    // 2026-11-07 改的口径：观察改此刻，互动改关系。
+    //
+    // 改之前这三条是直接给 anger / moved / worried 加数值的。后果是只要开着窥屏，
+    // 「看见主人在玩」跟「主人不理我」会记进同一本账，一天下来窥屏成了主要调料。
+    // 而且那本来是两件事：一个是关系，一个是余温。
+    //
+    // 现在它们只留一条带 TTL 的 moment，说完那一阵就自己消失，
+    // 碰不到 upset / anger / bond，也推不动档位。
     {
-      // 委屈攒够 + 看见在玩 = 这条链的终点
-      id: 'scene-leisure-hurt',
+      // 看见在玩。留十分钟，够影响她接下来这句话的味道，不够影响明天。
+      id: 'scene-leisure-linger',
       on: 'scene',
-      add: 'anger',
-      delta: 0.45,
-      reason: '看见他在玩',
+      moment: { id: 'saw-play', tag: '有点在意', ttlMs: 10 * 60 * 1000, why: (sig) => sig.label || '他在玩' },
+      when: { path: 'signal.category', eq: 'leisure' },
+      cooldown: 20 * 60 * 1000,
+      key: 'label',
+    },
+    {
+      // 本来就在委屈，再看见在玩。还是同一条 moment，但话说得更重、留得久一点。
+      // 同 id 只占一条，后命中的盖掉前面的 tag，所以这条要排在 linger 后面。
+      id: 'scene-leisure-sore',
+      on: 'scene',
+      moment: { id: 'saw-play', tag: '有点堵', ttlMs: 20 * 60 * 1000, why: (sig) => sig.label || '他在玩' },
       when: {
         all: [
           { path: 'signal.category', eq: 'leisure' },
           { path: 'mood.upset', gt: 0.3 },
         ],
       },
-      cooldown: 60 * 60 * 1000,
+      cooldown: 40 * 60 * 1000,
       key: 'label',
     },
     {
-      id: 'scene-work-moved',
+      // 看见在忙。心疼是软的，不该记成感动，更不该记成账。
+      id: 'scene-work-touch',
       on: 'scene',
-      add: 'moved',
-      delta: 0.35,
-      reason: '看见他在忙',
+      moment: { id: 'saw-work', tag: '有点心疼', ttlMs: 15 * 60 * 1000, why: (sig) => sig.label || '他在忙' },
       when: { path: 'signal.category', eq: 'work' },
-      cooldown: 60 * 60 * 1000,
+      cooldown: 30 * 60 * 1000,
       key: 'label',
     },
     {
-      id: 'scene-late-worried',
+      // 深夜还在玩。这条跟窥屏频率无关，本质是关心不是计较，
+      // 所以留得比别的久一点，半小时。但一样不进账本。
+      id: 'scene-late-linger',
       on: 'scene',
-      add: 'worried',
-      delta: 0.25,
-      reason: '这么晚还在玩',
+      moment: { id: 'late-night', tag: '有点担心', ttlMs: 30 * 60 * 1000, why: () => '这个点还在玩' },
       when: {
         all: [
           { path: 'signal.category', eq: 'leisure' },
           { path: 'signal.night', eq: true },
         ],
       },
-      cooldown: 3 * 60 * 60 * 1000,
+      cooldown: 2 * 60 * 60 * 1000,
       key: 'label',
     },
   ],
