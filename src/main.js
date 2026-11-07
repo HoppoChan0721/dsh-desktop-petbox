@@ -2297,8 +2297,11 @@ function createPanel() {
 // 读一眼状态、发开关、手动试一次。壳子关了也不影响那边自己判断。
 const PEEK_URL = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
 let peekOn = false, peekLive = false, peekNote = '桥插件没在跑';
-let peekBaseMs = 30 * 60 * 1000;      // 主人拨的基准间隔，不是乘过情绪倍率那个
-let peekFactor = 1;                    // 情绪给它的倍率，只用来在菜单里说明
+// 拨的是「她是什么性子」，不是分钟数。菜单里只显示名字和一句人话。
+let peekPersona = '';
+let peekPersonaLabel = '';
+let peekPersonaNote = '';
+let peekPersonas = [];               // [{ key, label, note }]
 async function peekSync() {
   try {
     const r = await fetch(`${PEEK_URL}/peek`, { signal: AbortSignal.timeout(1500) });
@@ -2306,36 +2309,39 @@ async function peekSync() {
     const d = await r.json();
     peekLive = true;
     peekOn = !!d.on;
-    if (Number(d.baseMs) > 0) peekBaseMs = Number(d.baseMs);
-    peekFactor = Number(d.factor) > 0 ? Number(d.factor) : 1;
+    peekPersona = String(d.persona || '');
+    peekPersonaLabel = String(d.personaLabel || '');
+    peekPersonaNote = String(d.personaNote || '');
+    if (Array.isArray(d.personas)) peekPersonas = d.personas;
     if (d.lastResult) peekNote = d.lastResult;
-    else if (d.on) peekNote = d.nextInSec > 0 ? `下次 ${Math.round(d.nextInSec / 60)} 分钟后` : '等着排期';
+    else if (d.on) peekNote = d.nextInSec > 0 ? '待会儿再看一眼' : '等着排期';
     else peekNote = '已关';
   } catch {
     peekLive = false;
     peekNote = '桥插件没在跑';
   }
 }
-// 换窥屏间隔。跟浓度一样是热改，落 pet-bridge.json，跨重启记得。
-async function peekSetInterval(minutes) {
+// 换窥屏档位。跟浓度一样是热改，落 pet-bridge.json，跨重启记得。
+async function peekSetPersona(key) {
   try {
     const r = await fetch(`${PEEK_URL}/peek`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ minutes }), signal: AbortSignal.timeout(4000),
+      body: JSON.stringify({ persona: key }), signal: AbortSignal.timeout(4000),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.ok === false) throw new Error(d.error || ('peek ' + r.status));
-    // 老版本桥会忽略 minutes 并照样回 200，别拿它的话当成功
-    const got = Number(d.baseMs) || 0;
-    if (!got) { say('桥插件还是旧的，得重启 DSH', false, 3600); peekSync(); return; }
-    peekBaseMs = got;
-    say(`那就每 ${Math.round(peekBaseMs / 60000)} 分钟瞄一次`, false, 2600);
+    // 老版本桥会忽略 persona 并照样回 200，别拿它的话当成功
+    if (!d.persona || d.persona === 'manual') { say('桥插件还是旧的，得重启 DSH', false, 3600); peekSync(); return; }
+    peekPersona = d.persona;
+    peekPersonaLabel = d.label || d.persona;
+    say(`那就${peekPersonaLabel}一点`, false, 2600);
   } catch {
     say('这个没拨过去', false, 2400);
   }
   peekSync();
 }
-const peekMinutes = () => Math.max(1, Math.round(peekBaseMs / 60000));
+// 档位名要有个兜底：老桥不认这个字段，菜单里就显示个中性词
+const peekPersonaName = () => peekPersonaLabel || ({ clingy: '黏人', gentle: '温和', cool: '冷淡', yandere: '病娇', manual: '手动' })[peekPersona] || '没读到';
 async function peekToggle(on) {
   peekOn = on;
   if (tray) { try { tray.setContextMenu(buildMenu()); } catch {} }
@@ -2489,9 +2495,10 @@ function buildMenu() {
       { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
       { type: 'separator' },
       { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (peekLive ? '' : ' · 桥没在跑'), type: 'checkbox', checked: peekOn, click: (item) => peekToggle(item.checked) },
-      { label: `  多久瞄一次 · ${peekMinutes()} 分钟` + (peekFactor !== 1 ? `（情绪缩到 ${Math.max(1, Math.round(peekBaseMs * peekFactor / 60000))} 分）` : ''), enabled: peekLive, submenu: [5, 15, 30, 60, 120].map((m) => ({
-        label: m >= 60 ? `${m / 60} 小时` : `${m} 分钟`, type: 'radio', checked: peekMinutes() === m, click: () => peekSetInterval(m),
-      })) },
+      // 拨的是性子，不是分钟数。名字后面跟一句人话，点之前知道会得到什么。
+      { label: `  她盯得多紧 · ${peekPersonaName()}${peekPersonaNote ? '（' + peekPersonaNote + '）' : ''}`, enabled: peekLive, submenu: peekPersonas.length ? peekPersonas.map((p) => ({
+        label: `${p.label}　${p.note || ''}`.trim(), type: 'radio', checked: peekPersona === p.key, click: () => peekSetPersona(p.key),
+      })) : [{ label: '桥插件还是旧的', enabled: false }] },
       { label: `  现在瞄一眼试试 · ${peekNote}`, enabled: peekLive, click: () => peekNow() },
     ] },
     { label: '外观', submenu: [

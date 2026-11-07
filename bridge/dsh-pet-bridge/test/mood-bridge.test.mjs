@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { apply } from '../lib/index.js';
-import { SCHEMA_VERSION } from '../lib/mood/profile.js';
+import { SCHEMA_VERSION, DEFAULT_PROFILE } from '../lib/mood/profile.js';
 
 const TMP = join(import.meta.dirname, '.tmp-mood');
 mkdirSync(TMP, { recursive: true });
@@ -258,22 +258,39 @@ test('浓度能随手拨，写错了只回 400 不炸', async () => {
   } finally { ctx.dispose(); }
 });
 
-test('窥屏间隔能拨，拨完落盘', async () => {
+test('窥屏档位能拨，拨完落盘', async () => {
   const stateFile = join(TMP, 's-62112.json');
-  const { ctx } = await boot(62112, { peek: false, peekIntervalMs: 1800000, statePath: stateFile });
+  const { ctx } = await boot(62112, {
+    peek: false,
+    statePath: stateFile,
+    peekPersonaTable: DEFAULT_PROFILE.peekPersona,
+  });
   try {
-    assert.equal((await get(62112, '/peek')).json.baseMs, 1800000, '默认半小时');
+    // 默认档：拨的是性子，不是分钟数
+    const a = (await get(62112, '/peek')).json;
+    assert.equal(a.persona, 'gentle', '默认是温和');
+    assert.equal(a.personaLabel, '温和');
+    assert.ok(a.sampleMs >= 600000 && a.sampleMs <= 1800000, '抽样落在温和区间');
 
-    const r = await post(62112, '/peek', { minutes: 15 });
+    // 换档
+    const r = await post(62112, '/peek', { persona: 'cool' });
     assert.equal(r.status, 200);
-    assert.equal(r.json.intervalMs, 900000);
-    assert.equal((await get(62112, '/peek')).json.baseMs, 900000);
+    assert.equal(r.json.persona, 'cool');
+    assert.ok(r.json.sampleMs >= 1800000 && r.json.sampleMs <= 5400000, '冷淡档该落在半小时到一小时半');
 
+    // 写错档位名：不崩，给可选名单
+    const bad = await post(62112, '/peek', { persona: 'nope' });
+    assert.equal(bad.status, 400);
+    assert.ok(Array.isArray(bad.json.options) && bad.json.options.length >= 3);
+
+    // 老接口还在，但会切到手动档
     const ms = await post(62112, '/peek', { intervalMs: 5000 });
-    assert.equal(ms.json.baseMs, 60000, '太短要夹住');
+    assert.equal(ms.json.persona, 'manual');
+    assert.equal(ms.json.sampleMs, 60000, '太短要夹住');
 
     const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
-    assert.equal(saved.peekIntervalMs, 60000, '拨过的档要能跨重启');
+    assert.equal(saved.peekPersona, 'manual', '拨过的档要能跨重启');
+    assert.equal(saved.peekIntervalMs, 60000);
   } finally { ctx.dispose(); }
 });
 

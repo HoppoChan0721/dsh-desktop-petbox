@@ -140,6 +140,35 @@ export function boomIntervalOf(baseMs, factor) {
   return Math.max(60 * 1000, Math.min(base, Math.round(base * f)));
 }
 
+/**
+ * 从档位的区间里抽一个间隔。纯函数，随机源可注入，方便测。
+ * 同一个档位每次抽到的不一样，这是「不像照表打卡」的关键。
+ */
+export function sampleInterval(preset, r = Math.random) {
+  const lo = Math.max(60 * 1000, Number(preset && preset.minMs) || 10 * 60 * 1000);
+  const hi = Math.max(lo, Number(preset && preset.maxMs) || lo);
+  const t = Math.max(0, Math.min(1, Number(r()) || 0));
+  return Math.round(lo + t * (hi - lo));
+}
+
+/**
+ * 老配置里存的是分钟数。按区间中点反推最接近的一档，升级时不用主人重新拨。
+ * 5 分钟落进「黏人」，30 分钟落进「温和」，60 分钟以上落进「冷淡」。
+ */
+export function personaForMs(ms, presets) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  let best = '';
+  let bestD = Infinity;
+  for (const [key, p] of Object.entries(presets || {})) {
+    const lo = Number(p && p.minMs) || 0;
+    const hi = Number(p && p.maxMs) || lo;
+    const d = Math.abs((lo + hi) / 2 - n);
+    if (d < bestD) { bestD = d; best = key; }
+  }
+  return best;
+}
+
 function inQuietHours(cfg) {
   const now = new Date();
   const h = now.getHours();
@@ -200,10 +229,32 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
   const dir = cfg.peekTmpDir || join(process.env.DSH_HOME || tmpdir(), 'tmp', 'pet-peek');
   cfg.peekTmpDir = dir;
 
+  // 窥屏档位表：托盘拨的是「她是什么性子」，不是「几分钟看一眼」。
+  // 表从 profile 传进来，加一档新性子只改 profile。
+  const personaCfg = (cfg.peekPersonaTable && typeof cfg.peekPersonaTable === 'object') ? cfg.peekPersonaTable : null;
+  const personaPresets = (personaCfg && personaCfg.presets) || null;
+  const personaPreset = (name) => {
+    const p = personaPresets && personaPresets[String(name || '')];
+    return p || null;
+  };
+
   const st = {
     on: cfg.peek === true || cfg.peek === 'on',
-    // 基准间隔。可以运行时改（托盘 / CLI / HTTP），不用重启；改完落 pet-bridge.json。
-    intervalMs: clampInterval(cfg.peekIntervalMs),
+    // 档位名。没给就从老的分钟数反推一档，升级不用主人重新拨。
+    persona: (() => {
+      const want = String(cfg.peekPersona || '');
+      if (personaPresets && personaPresets[want]) return want;
+      // 没存档位但有老的分钟数：按值反推最接近的一档，升级无缝
+      const legacy = personaForMs(cfg.peekIntervalMs, personaPresets);
+      if (legacy) return legacy;
+      // 连档位表都没给：退回手动，别装出一个不存在的档位
+      if (!personaPresets) return 'manual';
+      return String((personaCfg && personaCfg.default) || 'gentle');
+    })(),
+    // 老接口（直接砸分钟数）还留着，切到 manual 档就用这个值
+    manualMs: clampInterval(cfg.peekIntervalMs),
+    // 这一拍抽到的间隔。每次排期重抽
+    sampleMs: 0,
     nextAt: 0,
     lastAt: 0,
     lastTryAt: 0,
@@ -215,6 +266,8 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
     busy: false,
     fingerprint: '',
   };
+  // 先抽一拍，state() 和 scheduleNext() 都有东西可用
+  st.sampleMs = personaPreset(st.persona) ? sampleInterval(personaPreset(st.persona)) : st.manualMs;
 
   const rand = (ms) => Math.round(ms * (0.8 + Math.random() * 0.4));   // ±20% 抖动：别像闹钟一样整点出现
 
@@ -243,9 +296,12 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
   const boomPerDay = Math.max(1, Number(boomCfg && boomCfg.perDay) || 3);
   const boom = { until: 0, key: '', label: '', atTitle: '', day: '', count: 0 };
 
-  /** 兴趣窗里的一拍：基准乘倍率，夹在一分钟到基准之间。 */
+  /** 兴趣窗里的一拍：这一拍的基准乘倍率，夹在一分钟到基准之间。
+   *  档位可以自带倍率——「病娇」就是靠这个把 20~90 分钟缩到一两分钟的。 */
   function boomIntervalNow() {
-    return boomIntervalOf(st.intervalMs, boomFactor);
+    const p = personaPreset(st.persona);
+    const f = (p && Number(p.boomFactor)) || boomFactor;
+    return boomIntervalOf(st.sampleMs || st.manualMs, f);
   }
 
   /** 窗长至少能跑三拍，否则开了也白开。上限一小时。 */
@@ -288,16 +344,36 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       return Number.isFinite(f) && f > 0 ? Math.min(6, Math.max(0.2, f)) : 1;
     } catch { return 1; }
   };
+
+  // 每次排期抽一个新值：同样的档位每次都不一样，才不像照表打卡。
+  const nextPersonaMs = () => {
+    const p = personaPreset(st.persona);
+    return p ? sampleInterval(p) : st.manualMs;
+  };
   // 兴趣窗里按基准的倍率算，不乘情绪倍率：那一刻是「想看」，不是「黏人」。
   // 基准本身也不动，主人设的还是他设的，只是这一段临时变密。
-  const baseInterval = () => (inBoom() ? boomIntervalNow() : st.intervalMs * factor());
-  const scheduleNext = () => { st.nextAt = Date.now() + rand(baseInterval()); };
+  const baseInterval = () => (inBoom() ? boomIntervalNow() : st.sampleMs * factor());
+  const scheduleNext = () => {
+    st.sampleMs = nextPersonaMs();
+    st.nextAt = Date.now() + rand(baseInterval());
+  };
 
   function state() {
+    const p = personaPreset(st.persona) || {};
     return {
       on: st.on,
-      intervalMs: baseInterval(),      // 生效值：基准 × 情绪倍率
-      baseMs: st.intervalMs,           // 主人设定的基准，界面上拨的就是它
+      intervalMs: baseInterval(),      // 这一拍的生效值
+      // 档位：界面上拨的是它。名字和一句人话，不露分钟数。
+      persona: st.persona,
+      personaLabel: p.label || st.persona,
+      personaNote: p.note || '',
+      personas: personaPresets
+        ? Object.entries(personaPresets).map(([key, v]) => ({ key, label: v.label || key, note: v.note || '' }))
+        : [],
+      // 机器调试用：这一拍抽到的基准，以及区间本身。界面不显示，接口照给。
+      sampleMs: st.sampleMs,
+      sampleRange: p.minMs ? { minMs: p.minMs, maxMs: p.maxMs } : null,
+      manualMs: st.manualMs,
       factor: factor(),
       nextAt: st.nextAt ? new Date(st.nextAt).toISOString() : '',
       nextInSec: st.nextAt ? Math.max(0, Math.round((st.nextAt - Date.now()) / 1000)) : 0,
@@ -322,7 +398,7 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
           label: boom.label,
           leftMin: Math.max(0, Math.round((boom.until - Date.now()) / 60000)),
           intervalSec: Math.round(boomIntervalNow() / 1000),
-          baseSec: Math.round(st.intervalMs / 1000),
+          baseSec: Math.round((st.sampleMs || st.manualMs) / 1000),
           today: boom.count,
           dayCap: boomPerDay,
         }
@@ -501,14 +577,35 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
     if (lightTicker) { clearInterval(lightTicker); lightTicker = null; }
   }
 
-  /** 换基准间隔。立刻重排下一次，不用重启；返回真正生效的值。 */
-  function setIntervalMs(ms) {
-    st.intervalMs = clampInterval(ms);
+  /**
+   * 换档位。这是托盘上拨的那个东西：拨的是性子，不是分钟数。
+   * 立刻重排下一次，不用重启。名字不认识就原样不动，返回可选名单。
+   */
+  function setPersona(name) {
+    const key = String(name || '');
+    if (!personaPreset(key)) {
+      return { ok: false, error: 'unknown persona', persona: st.persona, options: Object.keys(personaPresets || {}) };
+    }
+    st.persona = key;
+    // 关着的时候也得把这一拍换成新档位的，不然界面上显示的区间对不上
+    st.sampleMs = nextPersonaMs();
     if (st.on) scheduleNext();
-    log('peek interval -> ' + Math.round(st.intervalMs / 60000) + 'min');
+    const p = personaPreset(key) || {};
+    log(`peek persona -> ${key}（${p.label || key}，${Math.round((p.minMs || 0) / 60000)}~${Math.round((p.maxMs || 0) / 60000)} 分钟）`);
     try { onStateChange && onStateChange(state()); } catch {}
-    return st.intervalMs;
+    return { ok: true, persona: key, label: p.label || key };
   }
 
-  return { start, stop, run, state, setOn, setIntervalMs, get on() { return st.on; } };
+  /** 老接口：直接砸分钟数。会切到 manual，档位显示成「手动」。 */
+  function setIntervalMs(ms) {
+    st.manualMs = clampInterval(ms);
+    st.persona = 'manual';
+    st.sampleMs = st.manualMs;
+    if (st.on) scheduleNext();
+    log('peek interval -> ' + Math.round(st.manualMs / 60000) + 'min（切到手动）');
+    try { onStateChange && onStateChange(state()); } catch {}
+    return st.manualMs;
+  }
+
+  return { start, stop, run, state, setOn, setPersona, setIntervalMs, get on() { return st.on; } };
 }

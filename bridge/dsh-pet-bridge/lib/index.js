@@ -58,7 +58,8 @@ const DEFAULTS = {
   // ---- 窥屏（2026-11-05）----
   // 隔一阵自己瞄一眼前台窗口，主动在桌面上说一句。默认关，用 /peek 或托盘菜单开。
   peek: false,
-  peekIntervalMs: 30 * 60 * 1000,   // 基准 30 分钟，实际会 ±20% 抖动
+  peekIntervalMs: 30 * 60 * 1000,   // 老的手动档用；新的是档位（peekPersona）
+  peekPersona: '',                  // 空着就用 profile.peekPersona.default，现在是「温和」
   peekQuietFrom: 1,                 // 静默时段（整点小时）：1 点到
   peekQuietTo: 8,                   // 8 点之间都不打扰
   peekMaxLines: 80,                 // OCR 最多收几行，再多都是废话
@@ -120,8 +121,11 @@ export function apply(ctx, config = {}) {
   let peekOn = cfg.peek === true || cfg.peek === 'on';
   // 主动开口的浓度。配置里给了就用配置的，否则沿用上一次拨到的那档（跨重启记得）
   let urgeIntensity = cfg.moodUrgeIntensity || '';
-  // 窥屏基准间隔。同样可以运行时改，改完落盘
+  // 窥屏基准间隔。同样可以运行时改，改完落盘。
+  // 现在主入口是档位（peekPersona），这个值只在手动档和老配置里用得上。
   let peekIntervalMs = Number(cfg.peekIntervalMs) || 30 * 60 * 1000;
+  // 窥屏档位：拨的是性子，不是分钟数。空着就用 profile 里的默认档
+  let peekPersona = String(cfg.peekPersona || '');
 
   if (statePath) {
     try {
@@ -130,12 +134,13 @@ export function apply(ctx, config = {}) {
       if (!petSid && st.petSessionId) petSid = st.petSessionId;
       if (typeof st.peekOn === 'boolean') peekOn = st.peekOn;   // 开关要跨重启记住
       if (Number(st.peekIntervalMs) > 0) peekIntervalMs = Number(st.peekIntervalMs);
+      if (`${st.peekPersona || ''}`) peekPersona = String(st.peekPersona);
       if (!urgeIntensity && st.urgeIntensity) urgeIntensity = st.urgeIntensity;
     } catch {}
   }
   function persist() {
     if (!statePath) return;
-    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, peekIntervalMs, urgeIntensity, at: new Date().toISOString() }, null, 1)); } catch {}
+    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, peekIntervalMs, peekPersona, urgeIntensity, at: new Date().toISOString() }, null, 1)); } catch {}
   }
 
   // ---- 情绪（2026-11-06）----
@@ -467,7 +472,14 @@ export function apply(ctx, config = {}) {
   // 定时瞄前台窗口 → OCR → 当成一条「事件」投给桌宠会话（跟她主动搭话一个管道）。
   // 开关状态落 pet-bridge.json，重启也记得。
   const peek = createPeek({
-    cfg: { ...cfg, peek: peekOn, peekIntervalMs },
+    cfg: {
+      ...cfg,
+      peek: peekOn,
+      peekIntervalMs,
+      // 档位名和档位表分开传：一个是「现在是什么性子」，一个是「有哪些性子可选」
+      peekPersona,
+      peekPersonaTable: cfg.peekPersonaTable || (mood && mood.profile && mood.profile.peekPersona) || null,
+    },
     log,
     deliver,
     // 窥屏看到了什么 → 给情绪记一笔。看见了在忙还是摸鱼，是两回事。
@@ -491,7 +503,8 @@ export function apply(ctx, config = {}) {
     intervalFactor: () => (mood ? (mood.gate('proactive').intervalFactor || 1) : 1),
     onStateChange: (s) => {
       peekOn = peek.on;
-      if (s && Number(s.baseMs) > 0) peekIntervalMs = Number(s.baseMs);
+      if (s && s.persona) peekPersona = String(s.persona);
+      if (s && Number(s.manualMs) > 0) peekIntervalMs = Number(s.manualMs);
       persist();
     },
   });
@@ -614,16 +627,25 @@ export function apply(ctx, config = {}) {
         petSid = ''; persist();
         return send(res, 200, { ok: true, petSessionId: '', note: 'next touch creates a new pet session' });
       }
-      // 窥屏开关 / 间隔 / 立刻试一次（放在 quiet 之前：静默是点触的事，不该挡住窥屏的控制）
+      // 窥屏开关 / 档位 / 立刻试一次（放在 quiet 之前：静默是点触的事，不该挡住窥屏的控制）
       if (url.pathname === '/peek') {
         if (typeof body.on === 'boolean') peek.setOn(body.on);
-        // {"intervalMs": 900000} 或者 {"minutes": 15} 都收，界面上拨分钟更顺
+        // {"persona":"yandere"} = 换性子。这是主入口，托盘拨的就是它。
+        if (body.persona) {
+          const r = peek.setPersona(body.persona);
+          if (!r.ok) return send(res, 400, { ok: false, ...r });
+          peekPersona = r.persona;
+          persist();
+          return send(res, 200, { ok: true, ...r, ...peek.state() });
+        }
+        // 老接口：直接给分钟数。会切到手动档，档位显示成「手动」。
         if (body.intervalMs != null || body.minutes != null) {
           const ms = body.minutes != null ? Number(body.minutes) * 60000 : Number(body.intervalMs);
           const applied = peek.setIntervalMs(ms);
           peekIntervalMs = applied;
+          peekPersona = 'manual';
           persist();
-          return send(res, 200, { ok: true, intervalMs: applied, ...peek.state() });
+          return send(res, 200, { ok: true, intervalMs: applied, persona: 'manual', ...peek.state() });
         }
         if (body.now) {
           const r = await peek.run('manual').catch((e) => ({ ok: false, error: e.message }));
