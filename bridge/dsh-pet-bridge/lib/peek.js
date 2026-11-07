@@ -154,6 +154,7 @@ export function sampleInterval(preset, r = Math.random) {
 /**
  * 老配置里存的是分钟数。按区间中点反推最接近的一档，升级时不用主人重新拨。
  * 5 分钟落进「黏人」，30 分钟落进「温和」，60 分钟以上落进「冷淡」。
+ * 标了 noMigrate 的档（「不拦着」）不参与：自动迁移不该把人推进极端档。
  */
 export function personaForMs(ms, presets) {
   const n = Number(ms);
@@ -161,6 +162,7 @@ export function personaForMs(ms, presets) {
   let best = '';
   let bestD = Infinity;
   for (const [key, p] of Object.entries(presets || {})) {
+    if (p && p.noMigrate) continue;
     const lo = Number(p && p.minMs) || 0;
     const hi = Number(p && p.maxMs) || lo;
     const d = Math.abs((lo + hi) / 2 - n);
@@ -367,8 +369,10 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       persona: st.persona,
       personaLabel: p.label || st.persona,
       personaNote: p.note || '',
+      // 这一档给多少主动额度。0 = 不限，界面可以据此写「不数句数」
+      personaDayCap: Math.max(0, Number(p.dayCap) || 0),
       personas: personaPresets
-        ? Object.entries(personaPresets).map(([key, v]) => ({ key, label: v.label || key, note: v.note || '' }))
+        ? Object.entries(personaPresets).map(([key, v]) => ({ key, label: v.label || key, note: v.note || '', dayCap: Math.max(0, Number(v.dayCap) || 0) }))
         : [],
       // 机器调试用：这一拍抽到的基准，以及区间本身。界面不显示，接口照给。
       sampleMs: st.sampleMs,

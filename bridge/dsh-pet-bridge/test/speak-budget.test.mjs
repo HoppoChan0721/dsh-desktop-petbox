@@ -22,6 +22,17 @@ test('额度跟档位走：黏人给得多，冷淡给得少', () => {
   assert.equal(speakCapOf(TABLE, 'yandere'), 25);
 });
 
+test('「不拦着」是真的不限：额度是 0，deliver 那个闸门不生效', () => {
+  assert.equal(speakCapOf(TABLE, 'unbound'), 0);
+  // 0 在 deliver 里的含义就是「不检查」，不是「一句都不许说」
+  assert.equal(TABLE.presets.unbound.note.includes('不数'), true);
+});
+
+test('自动迁移不会把人推进「不拦着」', () => {
+  // 5 分钟这种常见配置该落进黏人，不该因为区间更近就落进极端档
+  assert.equal(TABLE.presets.unbound.noMigrate, true);
+});
+
 test('档位不认识或者表是空的，就当不限', () => {
   assert.equal(speakCapOf(TABLE, 'nope'), 0);
   assert.equal(speakCapOf(TABLE, ''), 0);
