@@ -13,24 +13,21 @@ import { DEFAULT_PROFILE } from '../lib/mood/profile.js';
 
 const T0 = 1700000000000;
 const hour = (n) => n * 3600000;
-const TABLE = DEFAULT_PROFILE.peekPersona;
+// 额度挂在「主动说话浓度」上，不挂在窥屏档位上
+const TABLE = DEFAULT_PROFILE.urge.presets;
 
-test('额度跟档位走：黏人给得多，冷淡给得少', () => {
+test('额度跟主动说话的浓度走', () => {
+  assert.equal(speakCapOf(TABLE, 'quiet'), 4);
+  assert.equal(speakCapOf(TABLE, 'normal'), 20);
   assert.equal(speakCapOf(TABLE, 'clingy'), 40);
-  assert.equal(speakCapOf(TABLE, 'gentle'), 20);
-  assert.equal(speakCapOf(TABLE, 'cool'), 8);
-  assert.equal(speakCapOf(TABLE, 'yandere'), 25);
+  assert.equal(speakCapOf(TABLE, 'chatty'), 60);
 });
 
-test('「不拦着」是真的不限：额度是 0，deliver 那个闸门不生效', () => {
+test('「不拦着」是真的不限：额度是 0，那个闸门不生效', () => {
   assert.equal(speakCapOf(TABLE, 'unbound'), 0);
   // 0 在 deliver 里的含义就是「不检查」，不是「一句都不许说」
-  assert.equal(TABLE.presets.unbound.note.includes('不数'), true);
-});
-
-test('自动迁移不会把人推进「不拦着」', () => {
-  // 5 分钟这种常见配置该落进黏人，不该因为区间更近就落进极端档
-  assert.equal(TABLE.presets.unbound.noMigrate, true);
+  assert.equal(TABLE.unbound.dayCap, 0);
+  assert.ok(TABLE.unbound.gapScale < 1, '两阵之间也该比正常更短');
 });
 
 test('档位不认识或者表是空的，就当不限', () => {

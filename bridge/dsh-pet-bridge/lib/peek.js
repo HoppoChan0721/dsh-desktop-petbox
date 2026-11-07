@@ -369,10 +369,8 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       persona: st.persona,
       personaLabel: p.label || st.persona,
       personaNote: p.note || '',
-      // 这一档给多少主动额度。0 = 不限，界面可以据此写「不数句数」
-      personaDayCap: Math.max(0, Number(p.dayCap) || 0),
       personas: personaPresets
-        ? Object.entries(personaPresets).map(([key, v]) => ({ key, label: v.label || key, note: v.note || '', dayCap: Math.max(0, Number(v.dayCap) || 0) }))
+        ? Object.entries(personaPresets).map(([key, v]) => ({ key, label: v.label || key, note: v.note || '' }))
         : [],
       // 机器调试用：这一拍抽到的基准，以及区间本身。界面不显示，接口照给。
       sampleMs: st.sampleMs,

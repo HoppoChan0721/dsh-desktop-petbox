@@ -308,13 +308,16 @@ export function summarizeUrge(state, profile, now = Date.now()) {
     };
   }
   const b = state && state.burst;
+  // dayCap 为 0 表示「不限」，不能写成 `Number(x) || fallback`——那样 0 会被当成没配
+  const cap = (preset.dayCap != null) ? Number(preset.dayCap)
+    : (cfg.maxPerDay != null ? Number(cfg.maxPerDay) : null);
   return {
     enabled: cfg.enabled !== false,
     intensity: cfg.intensity || 'normal',
-    dayCap: Number(preset.dayCap) || Number(cfg.maxPerDay) || null,
+    dayCap: cap,
     quietFrom: cfg.quietFrom ?? null,
     quietTo: cfg.quietTo ?? null,
-    maxPerDay: Number(preset.dayCap) || Number(cfg.maxPerDay) || null,
+    maxPerDay: cap,
     today: countSince(state, now - DAY_MS),
     burst: b && b.window
       ? { window: b.window, step: Number(b.step) || 0, nextInSec: Math.max(0, Math.round((Number(b.nextAt) - now) / 1000)) }

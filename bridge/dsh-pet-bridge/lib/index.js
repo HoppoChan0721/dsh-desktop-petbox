@@ -46,10 +46,11 @@ export function countSpeak(logList, at = Date.now()) {
 
 /**
  * 某一档给多少主动额度。0 表示不限。
- * 额度跟窥屏档位走：拨成「黏人」就多给，拨成「冷淡」就少给。
+ * 额度挂在「主动说话浓度」上，不挂在窥屏档位上——
+ * 说多少句是「说」的属性，多久看一眼是「看」的属性，两件事不该混。
  */
-export function speakCapOf(table, persona) {
-  const p = table && table.presets && table.presets[String(persona || '')];
+export function speakCapOf(presets, name) {
+  const p = presets && presets[String(name || '')];
   return Math.max(0, Number(p && p.dayCap) || 0);
 }
 
@@ -453,9 +454,9 @@ export function apply(ctx, config = {}) {
   /** 现在这一档给多少额度。0 或没配置就是不限。 */
   function speakCap() {
     try {
-      const table = cfg.peekPersonaTable || (mood && mood.profile && mood.profile.peekPersona);
-      const name = peek ? peek.state().persona : '';
-      return speakCapOf(table, name);
+      const u = mood && mood.profile && mood.profile.urge;
+      if (!u) return 0;
+      return speakCapOf(u.presets, u.intensity || 'normal');
     } catch { return 0; }
   }
 

@@ -2519,9 +2519,10 @@ function moodMenuLabel() {
 }
 function urgeMenuLabel() {
   if (!moodUrge || !moodUrge.enabled) return '没开';
-  const name = ({ quiet: '安静', normal: '正常', clingy: '黏人', chatty: '话痨' })[moodUrge.intensity]
+  const name = ({ quiet: '安静', normal: '正常', clingy: '黏人', chatty: '话痨', unbound: '不拦着' })[moodUrge.intensity]
     || moodUrge.intensity || '正常';
-  const cap = moodUrge.dayCap ? `/${moodUrge.dayCap}` : '';
+  // dayCap 为 0 是「不限」，要写出来，不然托盘上看着像没配上限
+  const cap = moodUrge.dayCap === 0 ? '　不限' : (moodUrge.dayCap ? `/${moodUrge.dayCap}` : '');
   const burst = moodUrge.burst ? `　正说第 ${moodUrge.burst.step + 1} 句` : '';
   return `${name}　今天 ${moodUrge.today || 0}${cap} 句${burst}`;
 }
@@ -2598,9 +2599,12 @@ function buildMenu() {
       { type: 'separator' },
       { label: `主动开口 · ${urgeMenuLabel()}`, enabled: moodLive && !!(moodUrge && moodUrge.enabled), submenu: [
         { label: '安静（一天四五句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'quiet', click: () => moodIntensity('quiet') },
-        { label: '正常（默认，八句左右）', type: 'radio', checked: !moodUrge || !moodUrge.intensity || moodUrge.intensity === 'normal', click: () => moodIntensity('normal') },
-        { label: '黏人（十几句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'clingy', click: () => moodIntensity('clingy') },
-        { label: '话痨（二三十句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'chatty', click: () => moodIntensity('chatty') },
+        { label: '正常（默认）', type: 'radio', checked: !moodUrge || !moodUrge.intensity || moodUrge.intensity === 'normal', click: () => moodIntensity('normal') },
+        { label: '黏人', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'clingy', click: () => moodIntensity('clingy') },
+        { label: '话痨', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'chatty', click: () => moodIntensity('chatty') },
+        { type: 'separator' },
+        // 这一档是真不限句数，自己选的自己认：每句都是一轮会话，上下文会越来越长
+        { label: '不拦着（不限句数）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'unbound', click: () => moodIntensity('unbound') },
       ] },
       { label: '现在让她说一句', enabled: moodLive && !!(moodUrge && moodUrge.enabled), click: () => moodUrgeNow() },
     ] },

@@ -63,7 +63,7 @@ test('写错档位名不崩，给可选名单', () => {
   const r = p.setPersona('nope');
   assert.equal(r.ok, false);
   assert.equal(p.state().persona, 'gentle', '写错不该把原来的档位顶掉');
-  assert.deepEqual(r.options.sort(), ['clingy', 'cool', 'gentle', 'unbound', 'yandere']);
+  assert.deepEqual(r.options.sort(), ['clingy', 'cool', 'gentle', 'yandere']);
 });
 
 test('老配置存的是分钟数，反推成最接近的一档', () => {
