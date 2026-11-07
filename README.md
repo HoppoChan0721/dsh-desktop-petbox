@@ -236,7 +236,7 @@ node cli/pet.mjs mood intensity clingy    # 换浓度，立刻生效，跨重启
 
 DSH 这边的接法是 `bridge/dsh-pet-bridge/` 这个插件：收到事件后按 `sessionController.resolveAgent → agent.followup → sessions.flush` 投一条 user 消息，于是「摸头」真的会触发一次模型调用。它带同部位 2.5 秒合并、每分钟 8 条上限，避免连点刷屏。
 
-**默认投专用会话，不碰主会话**（`mode: pet`）：第一次点触时它会 `sessionController.create()` 建一个固定会话（自动改名「桌宠互动」，用 `agentPreset` 指定的预设，默认 `bigfish-pet` —— 只有人设，工具由 `dsh-pet-trim` 收窄，免得桌宠那股劲儿跟你写代码那股劲儿混在一起），之后所有点触都投那儿。这样正在写代码的主会话不会被「主人刚刚碰了你的胸口」插进等候区。会话 id 落在 `$DSH_HOME/pet-bridge.json`，重启沿用；`POST :61944/reset-pet-session` 换一个干净的；把 `mode` 改成 `main` 就退回旧行为（投最近活跃会话）。预设名没在这个进程里注册时，`/health` 的 `petPreset` 会和 `petPresetWanted` 对不上，日志里也会留一行警告。
+**默认投专用会话，不碰主会话**（`mode: pet`）：第一次点触时它会 `sessionController.create()` 建一个固定会话（自动改名「桌宠互动」，用 `agentPreset` 指定的预设 —— **默认留空，不替你挑性格**，用的是进程自己的默认预设；想让桌宠有独立人设就填你自己预设的名字，通常配成只有人设、没有工具的那只，免得桌宠那股劲儿跟你写代码那股劲儿混在一起），之后所有点触都投那儿。这样正在写代码的主会话不会被「刚刚有人碰了你的胸口」插进等候区。会话 id 落在 `$DSH_HOME/pet-bridge.json`，重启沿用；`POST :61944/reset-pet-session` 换一个干净的；把 `mode` 改成 `main` 就退回旧行为（投最近活跃会话）。另一个相关的键是 `address`：她怎么称呼你，留空则注入的提示词里不带任何称谓，填了也只影响那几句前缀，不改任何人设文件。预设名没在这个进程里注册时，`/health` 的 `petPreset` 会和 `petPresetWanted` 对不上，日志里也会留一行警告。
 
 **回复回流成气泡**（`echoToPet`，默认开）：那个会话里我一旦说话，桥就等到这一轮结束，把最后一段文本洗掉 markdown / 贴纸 / 代码块、截到 `echoMaxChars`，再 `POST` 回 `:61943/say`——于是桌面真的会出现气泡 + 口型，而不是只躺在聊天窗口里。一轮多条只出最后一条；被打断的残句不播。
 

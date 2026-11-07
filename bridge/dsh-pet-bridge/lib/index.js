@@ -60,7 +60,13 @@ const DEFAULTS = {
   sessionId: '',               // mode=main 时钉死一个会话；留空就自动跟最近活跃的
   petSessionId: '',            // mode=pet 的固定会话 id；留空自动生成，落盘复用
   petSessionTitle: '桌宠互动',
-  agentPreset: 'bigfish-pet',  // 新建桌宠会话用的预设：主人 2026-11-03 给桌宠单独做的那个（只有人设、没有工具）
+  // 桌面会话用哪个预设。**默认留空 = 用这个进程的默认预设**，插件不替使用者挑性格：
+  // 别人拉下来装的是自己的桌宠，不是作者那只。想让它有独立人设就填自己预设的名字，
+  // 通常配成「只有人设、没有工具」的那只，省得桌宠那股劲儿跟写代码混在一起。
+  agentPreset: '',
+  // 她怎么称呼使用者。留空 = 不称呼，注入的提示词里就不会出现任何称谓。
+  // 这个值只影响提示词里那几句前缀，不改任何人设文件。
+  address: '',
   fallbackToMain: false,       // 桌宠会话建不起来时，要不要退回投主会话
   echoToPet: true,             // 会话里说完的话回送到桌宠气泡（不然只能在聊天窗里干看着）
   petSayUrl: 'http://127.0.0.1:61943/say',
@@ -507,11 +513,19 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /** 使用者怎么称呼自己。空 = 不称呼，别替别人的人设定规矩。 */
+  function address() {
+    return String(cfg.address || '').trim();
+  }
+
   function describe(ev) {
     const label = ZONE_LABEL[ev.zone] || ev.zone || '身子';
     const where = (ev.nx != null && ev.ny != null) ? `（位置 ${ev.nx}, ${ev.ny}）` : '';
     const nth = zoneCount >= 2 ? `，第 ${zoneCount} 下` : '';
-    return `（桌宠｜主人刚刚碰了你的${label}${nth}${where}）`;
+    const who = address();
+    // 没配称呼就写「有人」：句子照样通顺，也不用凭空给使用者安一个身份。
+    const hit = who ? `${who}刚刚碰了你的${label}` : `刚刚有人碰了你的${label}`;
+    return `（桌宠｜${hit}${nth}${where}）`;
   }
 
   function shouldWake(ev) {
@@ -585,7 +599,10 @@ export function apply(ctx, config = {}) {
     const mins = Math.max(1, Math.round(d.idleMin));
     const nth = d.attempt + 1;
     const inBurst = (Number(d.step) || 0) > 0;
-    return '（桌宠｜这次不是主人叫你，是你自己想开口。'
+    const who = address();
+    // 有称呼就用称呼，没有就说「没有人」——两种都不缺主语的别扭感。
+    const opener = who ? `这次不是${who}叫你` : '这次没有人叫你';
+    return `（桌宠｜${opener}，是你自己想开口。`
       + `${d.hint}`
       // 此刻层带来的具体事实：「你打了四十分钟游戏」这种，模型自己猜不出来
       + (d.detail ? `你知道的情况：${d.detail}。` : '')

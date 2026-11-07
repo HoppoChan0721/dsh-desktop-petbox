@@ -47,8 +47,10 @@
 建完在 `dsh-pet-bridge` 的配置里指定它：
 
 ```json
-{ "mode": "pet", "agentPreset": "<name>-pet" }
+{ "mode": "pet", "agentPreset": "<name>-pet", "address": "<她怎么称呼你>" }
 ```
+
+`agentPreset` 留空就用自己的默认预设，插件不替你挑性格。`address` 留空则注入的提示词里不带称谓；填了也只替换那几句前缀里的称呼，不改任何人设文件。
 
 `mode: "pet"` 会固定一条会话反复用；`mode: "main"` 是旧行为，投给当前主会话，不建议。
 

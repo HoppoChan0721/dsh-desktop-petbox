@@ -213,7 +213,7 @@ test('冷战期她自己会开口，不用主人先动手', async () => {
     assert.equal(r.json.urgeResult.window, 'cold-drift');
 
     const text = calls.followup.at(-1).text;
-    assert.match(text, /不是主人叫你/, '要告诉她这次是自己想开口');
+    assert.match(text, /这次没有人叫你/, '要告诉她这次是自己想开口');
     assert.match(text, /生闷气/, '语气要跟着档位走');
     assert.match(text, /一句/, '原来的行为口径不能丢');
 

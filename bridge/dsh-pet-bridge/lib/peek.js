@@ -95,9 +95,9 @@ function selfKind(proc, title) {
   return '';
 }
 
-/** 看到感兴趣的东西时递过去的那一条。 */
-function interestPrompt(w, title) {
-  return '（桌宠｜你刚瞄了一眼主人的屏幕，看到和「' + (w.label || w.id) + '」有关的东西'
+/** 看到感兴趣的东西时递过去的那一条。owner 是使用者称呼，空着就不带称谓。 */
+function interestPrompt(w, title, owner = '') {
+  return '（桌宠｜你刚瞄了一眼' + (owner ? owner + '的' : '') + '屏幕，看到和「' + (w.label || w.id) + '」有关的东西'
     + (title ? '，窗口是「' + clip(title, 30) + '」' : '')
     + '。你被吸引住了，随口说一句想看看。一句话，短点。'
     + '说完你会多瞄几眼屏幕，别追问，也别问他要不要打开。）';
@@ -318,6 +318,11 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
 
   const inBoom = () => boom.until > Date.now();
 
+  /** 使用者称呼：配了就用，空着就不带称谓。别在提示词里替别人的人设定规矩。 */
+  function owner() {
+    return String(cfg.address || '').trim();
+  }
+
   /** 开一段高频。超过每日上限就不开，返回 false。 */
   function startBoom(w, title, now) {
     const day = new Date(now).toISOString().slice(0, 10);
@@ -444,11 +449,11 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
         return { ok: false, skipped: 'self-pet', why: '瞄到我自己了，不算' };
       }
       if (kind === 'dsh' && !manual) {
-        st.skipped++; st.lastSkip = '主人在跟你说话';
-        note('跳过（主人在跟你说话）');
-        return { ok: false, skipped: 'self-dsh', why: '主人正在跟你说话，先不打扰' };
+        st.skipped++; st.lastSkip = '这边正在跟你说话';
+        note('跳过（这边正在跟你说话）');
+        return { ok: false, skipped: 'self-dsh', why: '这边正在跟你说话，先不打扰' };
       }
-      if (kind === 'dsh' && manual) note('手动触发，放行「主人在跟你说话」');
+      if (kind === 'dsh' && manual) note('手动触发，放行「正在跟你说话」');
       // 手动点了就照抓：全屏标签只用来拦定时那一路（全屏独占常抓出一片黑，抓了也白抓）
       if (p.fullscreen && !manual) { st.skipped++; st.lastSkip = '全屏（大概在游戏或看片）'; note('跳过（全屏）'); return { ok: false, skipped: 'fullscreen', why: '全屏着，先不打扰' }; }
       if (p.fullscreen && manual) note('手动触发，全屏也照抓');
@@ -475,11 +480,11 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       }
 
       const ocr = clip(picked.join(' / '), Number(cfg.peekMaxChars) || 300);
-      const head = `（桌宠｜你刚刚自己瞄了眼主人的屏幕：${p.proc || '某个程序'}`
+      const head = `（桌宠｜你刚刚自己瞄了眼${owner() ? owner() + '的' : ''}屏幕：${p.proc || '某个程序'}`
         + (p.title ? `，窗口是「${clip(p.title, 40)}」` : '')
         + '。';
       const body = ocr ? `屏幕上认出来的字，可能有错字：${ocr}。）` : '（看不清上面的字。）';
-      const tail = ' 这是你主动搭话，不是主人叫你——想接一句就接，不想接就给个表情。）';
+      const tail = ` 这是你主动搭话，不是${owner() ? owner() + '叫你' : '有人叫你'}——想接一句就接，不想接就给个表情。）`;
       const text = head + body + tail;
 
       // 主动投递要先过额度：额度是窥屏档位给的，两条管道共用一份。
@@ -531,7 +536,7 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
         const w = matchInterestHere(r.proc, r.title);
         if (w && !inBoom() && startBoom(w, r.title, now)) {
           // 开口也要过额度。今天说得够多了，窗就白开，直接关掉省得空转。
-          const sent = await deliver(interestPrompt(w, r.title), { proactive: true })
+          const sent = await deliver(interestPrompt(w, r.title, owner()), { proactive: true })
             .catch((e) => { log('peek: 兴趣投递失败：' + e.message); return null; });
           if (sent && sent.skipped === 'budget') {
             endBoom('今天的额度用完了');
