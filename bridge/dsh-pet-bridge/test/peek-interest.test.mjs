@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { matchInterest } from '../lib/peek.js';
+import { matchInterest, boomIntervalOf } from '../lib/peek.js';
 import { DEFAULT_PROFILE as P } from '../lib/mood/profile.js';
 import { createMood } from '../lib/mood/index.js';
 
@@ -55,4 +55,26 @@ test('词表里每一条都能用，标签不能是空的', () => {
     assert.ok(w.label, `${w.id} 要有给人看的中文名`);
     assert.ok(Array.isArray(w.words) && w.words.length, `${w.id} 要有词`);
   }
+});
+
+test('高频间隔跟着档位走，不是写死的秒数', () => {
+  const min = 60000;
+  // 主人现在设的是 5 分钟档：缩到 90 秒
+  assert.equal(boomIntervalOf(5 * min, 0.3), 90000);
+  // 换成 30 分钟档，同一套倍率该缩到 9 分钟，而不是还在 90 秒
+  assert.equal(boomIntervalOf(30 * min, 0.3), 9 * min);
+  // 两小时档：36 分钟
+  assert.equal(boomIntervalOf(120 * min, 0.3), 36 * min);
+});
+
+test('倍率再离谱也不会越界', () => {
+  const min = 60000;
+  // 已经是一分钟档了，再乘也是下限，不会变成 18 秒
+  assert.equal(boomIntervalOf(1 * min, 0.3), 1 * min);
+  // 倍率写 5 等于放大，不许：上限就是基准本身
+  assert.equal(boomIntervalOf(10 * min, 5), 10 * min);
+  // 倍率写 0 或负数退回默认
+  assert.equal(boomIntervalOf(10 * min, 0), 3 * min);
+  // 脏数据不炸
+  assert.equal(boomIntervalOf(null, null), 18 * 1000 <= 60000 ? 60000 : 60000);
 });

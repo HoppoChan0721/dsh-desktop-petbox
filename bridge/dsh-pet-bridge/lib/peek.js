@@ -127,6 +127,19 @@ export function matchInterest(words, proc, title) {
   return null;
 }
 
+/**
+ * 兴趣窗里的一拍该是多少。纯函数，方便测。
+ *
+ * 关键：这是**基准的倍率**，不是绝对秒数。主人设 5 分钟档，缩到 90 秒；
+ * 设 30 分钟档，缩到 9 分钟。写死一个数，档位一换就全错。
+ * 下限一分钟，上限是基准本身（不放大）。
+ */
+export function boomIntervalOf(baseMs, factor) {
+  const base = Math.max(60 * 1000, Number(baseMs) || 60000);
+  const f = Math.min(1, Math.max(0.05, Number(factor) || 0.3));
+  return Math.max(60 * 1000, Math.min(base, Math.round(base * f)));
+}
+
 function inQuietHours(cfg) {
   const now = new Date();
   const h = now.getHours();
@@ -221,11 +234,24 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
   // 看到感兴趣的东西，短时间盯紧一点。这是「好奇」的节奏，不是任务。
   // 三条硬上限：单次时长、一天次数、最短间隔。不然一个兴趣词就能让她整天
   // 盯着屏幕，那不叫陪伴。
+  //
+  // 高频间隔是**基准的倍率**，不是绝对秒数。主人设 5 分钟就该缩到 90 秒，
+  // 设 30 分钟就该缩到 9 分钟——写死一个数，档位一换就全错。
   const boomCfg = (cfg.interestWords && typeof cfg.interestWords === 'object') ? cfg.interestWords : null;
+  const boomFactor = Math.min(1, Math.max(0.05, Number(boomCfg && boomCfg.boomFactor) || 0.3));
   const boomMs = Math.max(60 * 1000, Number(boomCfg && boomCfg.boomMs) || 20 * 60 * 1000);
-  const boomInterval = Math.max(60 * 1000, Number(boomCfg && boomCfg.boomIntervalMs) || 150 * 1000);
   const boomPerDay = Math.max(1, Number(boomCfg && boomCfg.perDay) || 3);
   const boom = { until: 0, key: '', label: '', atTitle: '', day: '', count: 0 };
+
+  /** 兴趣窗里的一拍：基准乘倍率，夹在一分钟到基准之间。 */
+  function boomIntervalNow() {
+    return boomIntervalOf(st.intervalMs, boomFactor);
+  }
+
+  /** 窗长至少能跑三拍，否则开了也白开。上限一小时。 */
+  function boomSpanNow() {
+    return Math.min(60 * 60 * 1000, Math.max(boomMs, boomIntervalNow() * 3));
+  }
 
   /** 词表命中没有。 */
   function matchInterestHere(proc, title) {
@@ -240,11 +266,12 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
     if (boom.day !== day) { boom.day = day; boom.count = 0; }
     if (boom.count >= boomPerDay) return false;
     boom.count += 1;
-    boom.until = now + boomMs;
+    const span = boomSpanNow();
+    boom.until = now + span;
     boom.key = String(w.id);
     boom.label = String(w.label || w.id);
     boom.atTitle = String(title || '');
-    log(`peek: 兴趣窗打开 ${boom.label}，${Math.round(boomMs / 60000)} 分钟（今天第 ${boom.count} 次）`);
+    log(`peek: 兴趣窗打开 ${boom.label}，${Math.round(span / 60000)} 分钟，每 ${Math.round(boomIntervalNow() / 1000)} 秒瞄一眼（今天第 ${boom.count} 次）`);
     return true;
   }
 
@@ -261,9 +288,9 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       return Number.isFinite(f) && f > 0 ? Math.min(6, Math.max(0.2, f)) : 1;
     } catch { return 1; }
   };
-  // 兴趣窗里用绝对间隔，不乘情绪倍率：那一刻是「想看」，不是「黏人」。
-  // 基准间隔也不动，主人设的还是他设的，只是这一段临时变密。
-  const baseInterval = () => (inBoom() ? boomInterval : st.intervalMs * factor());
+  // 兴趣窗里按基准的倍率算，不乘情绪倍率：那一刻是「想看」，不是「黏人」。
+  // 基准本身也不动，主人设的还是他设的，只是这一段临时变密。
+  const baseInterval = () => (inBoom() ? boomIntervalNow() : st.intervalMs * factor());
   const scheduleNext = () => { st.nextAt = Date.now() + rand(baseInterval()); };
 
   function state() {
@@ -288,9 +315,17 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       episode: ep.active
         ? { since: new Date(ep.since).toISOString(), minutes: Math.round((Date.now() - ep.since) / 60000), proc: ep.proc, title: clip(ep.title, 40) }
         : null,
-      // 兴趣窗：开着的时候她在高频盯着屏幕，看主人到底点不点开
+      // 兴趣窗：开着的时候她在高频盯着屏幕，看主人到底点不点开。
+      // intervalSec 是算出来的那一拍，跟着主人设的基准走，不是写死的数。
       boom: boom.until
-        ? { label: boom.label, leftMin: Math.max(0, Math.round((boom.until - Date.now()) / 60000)), today: boom.count, dayCap: boomPerDay }
+        ? {
+          label: boom.label,
+          leftMin: Math.max(0, Math.round((boom.until - Date.now()) / 60000)),
+          intervalSec: Math.round(boomIntervalNow() / 1000),
+          baseSec: Math.round(st.intervalMs / 1000),
+          today: boom.count,
+          dayCap: boomPerDay,
+        }
         : null,
       tmpDir: dir,
     };
