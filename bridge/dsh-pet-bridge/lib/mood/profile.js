@@ -339,6 +339,26 @@ export const DEFAULT_PROFILE = {
     minGapMs: 25 * 60 * 1000,     // 两阵之间至少隔这么久（阵里的话不受它限制）
     windows: [
       {
+        // 刚打完一局。这一档是事件驱动，不是情绪驱动：账本可能是空的，
+        // 只有「此刻」那条 game-over 知道刚发生了什么。
+        // 带 gapExempt：全局二十五分钟间隔对它让路，否则排到它时时机已经过了。
+        // 排在最前面，因为这是「刚刚发生」的事，比任何慢性情绪都该先说。
+        id: 'game-over',
+        note: '刚退出全屏，问一句',
+        momentId: 'game-over',
+        requires: { path: 'moment.game-over' },
+        gapExempt: true,
+        gapMs: 20 * 60 * 1000,
+        maxPerDay: 4,
+        burst: {
+          steps: [
+            { hint: '你刚看见他退出一局游戏，也知道打了多久。说一句短的话，像随口一问。别点评技术，别夸也别损。', afterMs: 80 * 1000 },
+            { hint: '他没马上接话。再补一句，有点空落落的，问一句接下来想干嘛。', afterMs: 3 * 60 * 1000 },
+            { hint: '最后一句，很轻。可以说你就待在这儿，别追问，别撒娇。' },
+          ],
+        },
+      },
+      {
         // 第一档：轻轻戳一下，没回音再补一句。不是一句就走。
         id: 'sulky-nudge',
         note: '有点不痛快，试探着问两句',

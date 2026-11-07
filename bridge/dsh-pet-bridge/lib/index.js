@@ -411,14 +411,14 @@ export function apply(ctx, config = {}) {
     return { sessionId: sid, flushed: !!flushed };
   }
 
-  async function deliver(text) {
+  async function deliver(text, opts = {}) {
     if (cfg.mode === 'pet') {
       try {
         const sid = await ensurePetSession();
         // 情绪卡只在桌宠会话里拼。main 模式是把点触投进主人正在写代码的那个会话，
         // 往里塞一句「你现在有点不痛快」既污染上下文，也让她在干活时突然演情绪。
         // 平静时 cue() 返回空串，不占 token。
-        const extra = PET_HINT + (mood ? safeCue() : '') + (await petStateLine().catch(() => ''));
+        const extra = PET_HINT + (mood ? safeCue(opts) : '') + (await petStateLine().catch(() => ''));
         return { ...(await deliverTo(sid, text + extra, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
       } catch (e) {
         petReady = false;   // 下一次点触重新建
@@ -431,9 +431,9 @@ export function apply(ctx, config = {}) {
   }
 
   /** 取情绪卡。任何异常都吞掉：情绪是附加的，不该让投递失败。 */
-  function safeCue() {
+  function safeCue(opts = {}) {
     try {
-      return mood.cue();
+      return mood.cue(Date.now(), opts);
     } catch (e) {
       log('mood cue failed: ' + e.message);
       return '';
@@ -503,6 +503,8 @@ export function apply(ctx, config = {}) {
     const inBurst = (Number(d.step) || 0) > 0;
     return '（桌宠｜这次不是主人叫你，是你自己想开口。'
       + `${d.hint}`
+      // 此刻层带来的具体事实：「你打了四十分钟游戏」这种，模型自己猜不出来
+      + (d.detail ? `你知道的情况：${d.detail}。` : '')
       + (inBurst
         // 一阵里的第二、三句：不提醒的话模型容易一次把想说的全说完，后面就空了
         ? `这是这一阵的第 ${d.step + 1} 句。只说你这一句，别把后面想说的都一次说完。`
@@ -534,7 +536,8 @@ export function apply(ctx, config = {}) {
 
     urgeBusy = true;
     try {
-      const r = await deliver(urgePrompt(d));
+      // 主动开口自己已经把「此刻」那条事实写进提示词了，情绪卡别再重复一遍
+      const r = await deliver(urgePrompt(d), { skipMoment: true });
       // 投递成功才记账：失败一次还想再试一次，不该直接扣掉她一次机会
       mood.markUrge(d);
       const where = d.steps > 1 ? `${d.window} 第${d.step + 1}/${d.steps}句` : d.window;

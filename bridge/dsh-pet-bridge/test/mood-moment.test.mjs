@@ -85,3 +85,13 @@ test('摸一下不清此刻：摸不代表想聊', () => {
   mood.touch({ zone: 'head' }, clock.t + 500);
   assert.equal(mood.state(clock.t + 500).moments.count, 1);
 });
+
+test('主动开口那条路不再重复此刻，同一件事不说两遍', () => {
+  const mood = createMood({ file: '', log: () => {}, now: () => T0 });
+  mood.scene({ category: 'game-over', label: 'Starcraft II', minutes: 40 }, T0);
+
+  // 普通投递（点触、窥屏）：此刻是唯一的信息源，要带上
+  assert.match(mood.cue(T0), /40 分钟/);
+  // 主动开口：它自己的提示词里已经写了这条事实，情绪卡就别再说一遍
+  assert.equal(mood.cue(T0, { skipMoment: true }), '');
+});

@@ -57,6 +57,21 @@ function marksOf(state, id) {
   return Array.isArray(list) ? list.filter((t) => Number.isFinite(Number(t))) : [];
 }
 
+/**
+ * 把「此刻」列表转成能写条件的对象：{ 'game-over': { tag, why, n, at } }。
+ * 条件里写 `{ path: 'moment.game-over' }` 就是「这条余温还在」。
+ *
+ * 为什么不直接把数组塞进条件：数组查起来要写谓词，配置里没法表达。
+ * 转成对象之后，加一档新理由还是只改 profile。
+ */
+export function momentView(list) {
+  const out = {};
+  for (const m of Array.isArray(list) ? list : []) {
+    if (m && m.id) out[m.id] = m;
+  }
+  return out;
+}
+
 /** 所有 window 里最近的一次开口。用来做全局最小间隔。 */
 function lastUrgeAt(state) {
   let last = 0;
@@ -156,6 +171,8 @@ export function decide(snapshot, state, profile, now = Date.now()) {
   const bag = {
     mood: (snapshot && snapshot.values) || {},
     tier,
+    // 「此刻」也进条件：刚打完一局这种，只有 moment 知道，账本是空的
+    moment: momentView(snapshot && snapshot.moments),
     signal: { kind: 'urge', idleMinutes: idleMin, hour, at: now },
   };
   const sc = scalesOf(profile, snapshot, bag);
@@ -189,12 +206,15 @@ export function decide(snapshot, state, profile, now = Date.now()) {
 
   const minGap = Math.max(0, Number(cfg.minGapMs) || 0);
   const last = lastUrgeAt(state);
-  if (last && now - last < minGap) return { ...base, why: 'gap' };
+  // 全局最小间隔不在这里提前 return：带 gapExempt 的窗口要能突破它。
+  // 「刚打完一局」这种是事件驱动的一次性反应，等二十五分钟就错过时机了。
+  const gapOk = !last || now - last >= minGap;
 
   for (const w of windows) {
     if (!w || !w.id) continue;
     const steps = stepsOf(w);
     if (!steps.length) continue;
+    if (!gapOk && !w.gapExempt) continue;
     if (w.requires && !evalCond(w.requires, bag, profile)) continue;
     if (idleMin < (Number(w.minIdleMin) || 0)) continue;
 
@@ -212,19 +232,28 @@ export function decide(snapshot, state, profile, now = Date.now()) {
     return speakPlan({ w, steps, step: 0, sc, snapshot, state, now, idleMin, why: 'speak' });
   }
 
-  return base;
+  return gapOk ? base : { ...base, why: 'gap' };
 }
 
 /** 拼一份「现在说这句」的结果。decide 的两条路都走这里，免得对不上。 */
 function speakPlan({ w, steps, step, sc, snapshot, state, now, idleMin = 0, why }) {
   const cur = steps[step] || steps[0];
   const nextStep = steps[step + 1];
+  // 窗口点名了某条此刻，就把那条的理由带上。她说话时能引用「你打了四十分钟游戏」，
+  // 靠的就是这个 detail，不是让模型自己猜。
+  let detail = '';
+  if (w.momentId) {
+    const list = (snapshot && Array.isArray(snapshot.moments)) ? snapshot.moments : [];
+    const m = list.find((x) => x && x.id === w.momentId);
+    if (m && m.why) detail = m.why;
+  }
   return {
     speak: true,
     why,
     window: w.id,
     note: w.note || w.id,
     hint: cur.hint || w.hint || '',
+    detail,
     tier: (snapshot && snapshot.tier) || 'calm',
     idleMin,
     step,

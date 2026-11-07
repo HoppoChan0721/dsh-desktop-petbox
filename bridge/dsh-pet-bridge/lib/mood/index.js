@@ -137,9 +137,9 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
       return resolve(state, profile, at);
     },
 
-    cue(at = now()) {
+    cue(at = now(), opts = {}) {
       settleIdle(at);
-      return render(resolve(state, profile, at), profile);
+      return render(resolve(state, profile, at), profile, opts);
     },
 
     gate(name, at = now()) {

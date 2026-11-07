@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { createState, ingest, resolve } from '../lib/mood/engine.js';
 import { DEFAULT_PROFILE } from '../lib/mood/profile.js';
 import { fromIdle } from '../lib/mood/signals.js';
-import { decide, mark, interrupt, inQuietHours, summarizeUrge, stepsOf } from '../lib/mood/urge.js';
+import { decide, mark, interrupt, inQuietHours, summarizeUrge, stepsOf, windowOf } from '../lib/mood/urge.js';
 import { createMood } from '../lib/mood/index.js';
 
 const P = DEFAULT_PROFILE;
@@ -77,7 +77,8 @@ test('一阵里的第二句要等够 afterMs，不能连珠炮', () => {
   assert.equal(onTime.speak, true);
   assert.equal(onTime.why, 'burst');
   assert.equal(onTime.step, 1);
-  assert.equal(onTime.hint, P.urge.windows[0].burst.steps[1].hint, '第二句要用第二句的说法');
+  // 按 id 取，不按下标：窗口表是按优先级排的，插一档新理由就会让下标全移位
+  assert.equal(onTime.hint, stepsOf(windowOf(P, 'sulky-nudge'))[1].hint, '第二句要用第二句的说法');
   assert.equal(onTime.nextStepAt, 0, '最后一句后面没有下一句');
 });
 
@@ -117,7 +118,7 @@ test('软的不吃就来硬的，最后一句是哭', () => {
   assert.equal(d.window, 'sulky-sharp', '戳过两句没人理，语气要硬');
   assert.equal(d.steps, 3);
 
-  const steps = stepsOf(P.urge.windows[1]);
+  const steps = stepsOf(windowOf(P, 'sulky-sharp'));
   assert.ok(steps[2].hint.includes('哭'), '最后一句不是继续凶，是委屈');
 });
 
@@ -304,4 +305,31 @@ test('摘要按二十四小时窗口数次数', () => {
   assert.equal(u.windows['cold-drift'].today, 1);
   assert.equal(u.today, 1);
   assert.equal(u.intensity, 'normal');
+});
+
+test('刚打完一局能立刻开口，二十五分钟间隔对它让路', () => {
+  const clock = { t: T0 };
+  const mood = createMood({ file: '', log: () => {}, now: () => clock.t });
+
+  // 先占掉一次开口，制造全局间隔
+  mood.markUrge({ window: 'sulky-nudge', step: 0, nextStepAt: 0 }, clock.t);
+  assert.equal(mood.urge(clock.t + min(1)).speak, false, '间隔里别的窗口进不来');
+
+  clock.t += min(2);
+  mood.scene({ category: 'game-over', label: 'Starcraft II', minutes: 40 }, clock.t);
+  const d = mood.urge(clock.t);
+  assert.equal(d.speak, true, '刚打完一局是事件，不该被间隔挡住');
+  assert.equal(d.window, 'game-over');
+  assert.equal(d.steps, 3, '说的是三句，不是一句');
+  assert.equal(d.detail, '你打了 40 分钟游戏', '要把打了多久带进提示词');
+});
+
+test('此刻过期了就不再提，不翻旧账', () => {
+  const clock = { t: T0 };
+  const mood = createMood({ file: '', log: () => {}, now: () => clock.t });
+  mood.scene({ category: 'game-over', label: 'Starcraft II', minutes: 40 }, clock.t);
+  assert.equal(mood.urge(clock.t).speak, true);
+
+  // game-over 的 TTL 是十五分钟，过了就别再提
+  assert.equal(mood.urge(clock.t + min(16)).speak, false);
 });

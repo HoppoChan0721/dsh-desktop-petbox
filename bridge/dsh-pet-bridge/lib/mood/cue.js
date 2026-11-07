@@ -91,7 +91,9 @@ export function render(snapshot, profile, opts = {}) {
 
   // 「此刻」那一段。账本平静的时候，它是唯一有内容的东西——
   // 窥屏看见什么本来就该在这里起作用，而不是偷偷改账本。
-  const mom = momentLine(snapshot);
+  // 主动开口那条路会传 skipMoment：它自己的提示词里已经带了那条事实，
+  // 同一句话里说两遍既费 token，也容易让模型把同一件事复述给主人。
+  const mom = (opts && opts.skipMoment) ? '' : momentLine(snapshot);
   if (!body && !mom) return '';
   if (!body) return wrap(`${mom}${tones.warm}`, opts);
   if (mom) return wrap(`${body}${mom}`, opts);
