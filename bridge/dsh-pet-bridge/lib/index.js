@@ -54,6 +54,17 @@ export function speakCapOf(presets, name) {
   return Math.max(0, Number(p && p.dayCap) || 0);
 }
 
+/**
+ * 主动开口的节奏闸：距上次主动说过话够不够久。纯函数，方便测。
+ * gap 为 0 或没说过 → 放行。窥屏和主动开口共用同一个「上一次」。
+ */
+export function speakGapOk(lastAt, gapMs, at = Date.now()) {
+  const gap = Math.max(0, Number(gapMs) || 0);
+  if (!gap) return true;
+  if (!lastAt) return true;
+  return at - Number(lastAt) >= gap;
+}
+
 const DEFAULTS = {
   port: 61944,
   mode: 'pet',                 // 'pet' = 专用桌宠会话；'main' = 投主会话（旧行为）
@@ -111,6 +122,9 @@ const DEFAULTS = {
   // 不用逐档改参数。留空 = 用 profile 里写的那档。
   moodUrgeIntensity: '',
   moodUrgeCooldownMs: 10 * 60 * 1000, // 投递失败后先歇一会儿，别每分钟重试
+  // 主动开口最快多久一次（窥屏和主动开口共用）。留空 = 用 profile.urge.minGapMs，现在是 25 分钟；
+  // 0 = 不限。只靠日额度兜底会让 40 句在三个小时里说完，之后一整天哑巴。
+  speakMinGapMs: null,
 };
 
 const ZONE_LABEL = {
@@ -451,10 +465,29 @@ export function apply(ctx, config = {}) {
   // 只记内存，重启清零：这不是计费，是防刷屏，重启几次也不会变成一百句。
   const speakLog = [];
   const SPEAK_KEEP = 200;
+  let lastProactiveAt = 0;   // 上一次主动开口的时刻，两个管道共用
 
   /** 24 小时内主动说过几句。 */
   function speakToday(at = Date.now()) {
     return countSpeak(speakLog, at);
+  }
+
+  /**
+   * 主动开口最快多久一次。默认取 profile 里 urge 的全局最小间隔，
+   * 可用 `speakMinGapMs` 覆盖，0 = 不限。
+   *
+   * 为什么要给窥屏也上这道闸：额度是「一天能和你说几句」的总量，不是节奏。
+   * 只靠额度兜底的话，5 分钟档下她三小时就能把 40 句全说完，剩下 21 小时一句都没有——
+   * 那不是额度不够，是节奏失控。管住间隔，一天 16 小时正好铺满。
+   */
+  function speakGapMs() {
+    if (cfg.speakMinGapMs != null) return Math.max(0, Number(cfg.speakMinGapMs) || 0);
+    try { return Math.max(0, Number(mood.profile.urge.minGapMs) || 0); } catch { return 0; }
+  }
+
+  /** 现在能不能主动开口（只看节奏，额度在 deliver 里另算）。 */
+  function canSpeakNow(at = Date.now()) {
+    return speakGapOk(lastProactiveAt, speakGapMs(), at);
   }
 
   /** 现在这一档给多少额度。0 或没配置就是不限。 */
@@ -477,7 +510,8 @@ export function apply(ctx, config = {}) {
     }
     const markSpoke = () => {
       if (!opts.proactive) return;
-      speakLog.push(Date.now());
+      lastProactiveAt = Date.now();
+      speakLog.push(lastProactiveAt);
       while (speakLog.length > SPEAK_KEEP) speakLog.shift();
     };
 
@@ -577,6 +611,8 @@ export function apply(ctx, config = {}) {
     interestWords: cfg.interestWords || (mood && mood.profile && mood.profile.interest) || null,
     // 主动程度跟着情绪走：冷战降频，黏人时加倍。mood 关着就是恒等 1。
     intervalFactor: () => (mood ? (mood.gate('proactive').intervalFactor || 1) : 1),
+    // 节奏闸：刚主动说过话就别再投。管间隔不管额度，额度在 deliver 里算。
+    canSpeak: canSpeakNow,
     onStateChange: (s) => {
       peekOn = peek.on;
       if (s && s.persona) peekPersona = String(s.persona);
