@@ -35,6 +35,24 @@ log('module imported');
 export const name = 'pet-bridge';
 export const inject = ['sessions', 'sessionController'];
 
+/**
+ * 从时间戳数组里数 24 小时内的条数。纯函数，给测试和调试用。
+ * 额度的口径只有一处，别在别处再写一遍。
+ */
+export function countSpeak(logList, at = Date.now()) {
+  const since = at - 24 * 3600 * 1000;
+  return (Array.isArray(logList) ? logList : []).filter((t) => Number(t) >= since).length;
+}
+
+/**
+ * 某一档给多少主动额度。0 表示不限。
+ * 额度跟窥屏档位走：拨成「黏人」就多给，拨成「冷淡」就少给。
+ */
+export function speakCapOf(table, persona) {
+  const p = table && table.presets && table.presets[String(persona || '')];
+  return Math.max(0, Number(p && p.dayCap) || 0);
+}
+
 const DEFAULTS = {
   port: 61944,
   mode: 'pet',                 // 'pet' = 专用桌宠会话；'main' = 投主会话（旧行为）
@@ -416,7 +434,46 @@ export function apply(ctx, config = {}) {
     return { sessionId: sid, flushed: !!flushed };
   }
 
+  // ── 主动说话的额度（2026-11-07）──────────────────────────────────────
+  // 窥屏和主动开口共用一份，额度由窥屏档位决定。
+  //
+  // 之前两条管道各算各的：窥屏投递不计入 urge 的 today，档位调成「黏人」以后
+  // 几分钟就说一句，十几分钟就把 urge 那 8 句吃光，日上限形同虚设。
+  // 主人 2026-11-07 看出来了。合过来之后「她盯得多紧」这一个档位同时管手感。
+  //
+  // 只记内存，重启清零：这不是计费，是防刷屏，重启几次也不会变成一百句。
+  const speakLog = [];
+  const SPEAK_KEEP = 200;
+
+  /** 24 小时内主动说过几句。 */
+  function speakToday(at = Date.now()) {
+    return countSpeak(speakLog, at);
+  }
+
+  /** 现在这一档给多少额度。0 或没配置就是不限。 */
+  function speakCap() {
+    try {
+      const table = cfg.peekPersonaTable || (mood && mood.profile && mood.profile.peekPersona);
+      const name = peek ? peek.state().persona : '';
+      return speakCapOf(table, name);
+    } catch { return 0; }
+  }
+
   async function deliver(text, opts = {}) {
+    // 主动开口（窥屏、urge）先过额度。点触回复不算：主人摸她，她必须理。
+    if (opts.proactive) {
+      const cap = speakCap();
+      if (cap > 0 && speakToday() >= cap) {
+        log(`speak budget used up (${speakToday()}/${cap})，这次不说了`);
+        return { ok: false, skipped: 'budget', cap, today: speakToday() };
+      }
+    }
+    const markSpoke = () => {
+      if (!opts.proactive) return;
+      speakLog.push(Date.now());
+      while (speakLog.length > SPEAK_KEEP) speakLog.shift();
+    };
+
     if (cfg.mode === 'pet') {
       try {
         const sid = await ensurePetSession();
@@ -424,7 +481,9 @@ export function apply(ctx, config = {}) {
         // 往里塞一句「你现在有点不痛快」既污染上下文，也让她在干活时突然演情绪。
         // 平静时 cue() 返回空串，不占 token。
         const extra = PET_HINT + (mood ? safeCue(opts) : '') + (await petStateLine().catch(() => ''));
-        return { ...(await deliverTo(sid, text + extra, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
+        const r = await deliverTo(sid, text + extra, true);   // 只有投桌宠会话才回气泡
+        markSpoke();
+        return { ...r, target: 'pet' };
       } catch (e) {
         petReady = false;   // 下一次点触重新建
         if (!cfg.fallbackToMain) throw e;
@@ -432,7 +491,9 @@ export function apply(ctx, config = {}) {
       }
     }
     const sid = await currentSession();
-    return { ...(await deliverTo(sid, text)), target: 'main' };
+    const r = await deliverTo(sid, text);
+    markSpoke();
+    return { ...r, target: 'main' };
   }
 
   /** 取情绪卡。任何异常都吞掉：情绪是附加的，不该让投递失败。 */
@@ -558,8 +619,9 @@ export function apply(ctx, config = {}) {
 
     urgeBusy = true;
     try {
-      // 主动开口自己已经把「此刻」那条事实写进提示词了，情绪卡别再重复一遍
-      const r = await deliver(urgePrompt(d), { skipMoment: true });
+      // 主动开口自己已经把「此刻」那条事实写进提示词了，情绪卡别再重复一遍。
+      // proactive 让它跟窥屏共用同一份日额度。
+      const r = await deliver(urgePrompt(d), { skipMoment: true, proactive: true });
       // 投递成功才记账：失败一次还想再试一次，不该直接扣掉她一次机会
       mood.markUrge(d);
       const where = d.steps > 1 ? `${d.window} 第${d.step + 1}/${d.steps}句` : d.window;

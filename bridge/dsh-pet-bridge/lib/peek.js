@@ -480,7 +480,15 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       const tail = ' 这是你主动搭话，不是主人叫你——想接一句就接，不想接就给个表情。）';
       const text = head + body + tail;
 
-      await deliver(text);
+      // 主动投递要先过额度：额度是窥屏档位给的，两条管道共用一份。
+      // 挡住了就当这一轮跳过，别记账也别改 fingerprint，下次还能看到同一屏内容。
+      const sent = await deliver(text, { proactive: true });
+      if (sent && sent.skipped === 'budget') {
+        st.skipped++; st.lastSkip = '今天的额度用完了';
+        note('跳过（今天的主动额度用完了）');
+        return { ok: false, skipped: 'budget', why: '今天说得够多了，先不打扰' };
+      }
+
       st.fingerprint = fp;
       st.lastAt = Date.now();
       st.count++;
@@ -520,8 +528,14 @@ export function createPeek({ cfg, log, deliver, onStateChange, onScene, onGameEn
       if (!pet) {
         const w = matchInterestHere(r.proc, r.title);
         if (w && !inBoom() && startBoom(w, r.title, now)) {
-          try { onInterest && onInterest(w, r.title); } catch (e) { log('peek: onInterest failed: ' + e.message); }
-          try { await deliver(interestPrompt(w, r.title)); } catch (e) { log('peek: 兴趣投递失败：' + e.message); }
+          // 开口也要过额度。今天说得够多了，窗就白开，直接关掉省得空转。
+          const sent = await deliver(interestPrompt(w, r.title), { proactive: true })
+            .catch((e) => { log('peek: 兴趣投递失败：' + e.message); return null; });
+          if (sent && sent.skipped === 'budget') {
+            endBoom('今天的额度用完了');
+          } else {
+            try { onInterest && onInterest(w, r.title); } catch (e) { log('peek: onInterest failed: ' + e.message); }
+          }
         }
       }
 

@@ -336,9 +336,9 @@ export const DEFAULT_PROFILE = {
     intensity: 'normal',
     presets: {
       quiet:  { gapScale: 1.8, stepScale: 1.8, dayCap: 4 },
-      normal: { gapScale: 1, stepScale: 1, dayCap: 8 },
-      clingy: { gapScale: 0.65, stepScale: 0.6, dayCap: 16 },
-      chatty: { gapScale: 0.4, stepScale: 0.35, dayCap: 30 },
+      normal: { gapScale: 1, stepScale: 1, dayCap: 20 },
+      clingy: { gapScale: 0.65, stepScale: 0.6, dayCap: 40 },
+      chatty: { gapScale: 0.4, stepScale: 0.35, dayCap: 60 },
     },
     // 情绪自己再乘一次：越气越密，越开心越急。第一条命中的生效。
     // 这就是「频率集中度由情绪决定」——浓度是基准，情绪在后面加权。
@@ -506,24 +506,28 @@ export const DEFAULT_PROFILE = {
         minMs: 3 * 60 * 1000,
         maxMs: 10 * 60 * 1000,
         note: '一直在旁边晃',
+        dayCap: 40,
       },
       gentle: {
         label: '温和',
         minMs: 10 * 60 * 1000,
         maxMs: 30 * 60 * 1000,
         note: '偶尔过来看一眼',
+        dayCap: 20,
       },
       cool: {
         label: '冷淡',
         minMs: 30 * 60 * 1000,
         maxMs: 90 * 60 * 1000,
         note: '各干各的，不爱打搅',
+        dayCap: 8,
       },
       yandere: {
         label: '病娇',
         minMs: 20 * 60 * 1000,
         maxMs: 90 * 60 * 1000,
         note: '平时不管你，一盯上就不放',
+        dayCap: 25,
         // 看到想看的就缩到十六分之一：20~90 分钟变成 75 秒~5 分半
         boomFactor: 0.06,
       },

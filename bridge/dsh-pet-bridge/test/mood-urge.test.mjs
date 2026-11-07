@@ -144,7 +144,9 @@ test('心情好会连着说两句，不是等定时器蹦一句', () => {
 test('全天句数有上限，几档加起来也不许刷屏', () => {
   const t = T0 + hour(4);
   let s = moodAt('cold', t);
-  for (let i = 0; i < 8; i++) s = mark(s, { window: 'fake-' + i }, t - hour(3) - min(i * 5));
+  // normal 档现在是 20 句（2026-11-07 把额度跟窥屏档位对齐后调高的），
+  // 造满 20 条才该被挡住
+  for (let i = 0; i < 20; i++) s = mark(s, { window: 'fake-' + i }, t - hour(3) - min(i * 5));
   const d = judge(s, t);
   assert.equal(d.speak, false);
   assert.equal(d.why, 'day-cap');
