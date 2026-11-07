@@ -1,10 +1,12 @@
 {
   "name": "whale-pet-shell",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "把鲸语 Live2D 舞台变成桌面透明桌宠的 Electron 外壳：托盘菜单、像素级穿透、尺寸面板、指针追踪、情绪端口",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
+    "doctor": "electron scripts/doctor.js",
+    "test": "node scripts/test-pet.mjs",
     "patch": "node patch/apply-jingyu.mjs",
     "patch:check": "node patch/apply-jingyu.mjs --check"
   },
@@ -14,6 +16,6 @@
   "private": true,
   "engines": { "node": ">=20" },
   "devDependencies": {
-    "electron": "^45.2.0"
+    "electron": "45.2.1"
   }
 }

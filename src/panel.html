@@ -57,8 +57,31 @@
       <button class="x" id="x" title="关闭">×</button>
     </div>
     <div class="body">
+      <div class="hint">这里只放要填值、要读说明才能定的东西。即时开关都在右键菜单「互动」「说话」里。</div>
+
       <div class="row"><span>桌宠尺寸</span><span class="val" id="sizeVal">380 × 680</span></div>
       <input id="r" type="range" min="420" max="1400" step="10" value="680">
+
+      <h3>会话联动</h3>
+      <label class="check"><input id="dshWatch" type="checkbox"> DSH 会话联动（会话状态演成表情 + 阶段气泡）</label>
+      <div class="hint">联动起来时，「在想 / 跑命令 / 看文件」会演成表情；阶段气泡的开关在右键菜单「说话」里。</div>
+      <div class="field">
+        <input id="dshSessionsDir" type="text" placeholder="DSH 会话目录（sessions）">
+        <button data-pick="dshSessionsDir">浏览</button>
+      </div>
+
+      <h3>性能</h3>
+      <div class="row"><span>舞台帧率</span><span class="val" id="fpsVal">60 fps</span></div>
+      <div class="field">
+        <select id="fps">
+          <option value="30">30 帧（最省）</option>
+          <option value="60">60 帧（默认）</option>
+          <option value="90">90 帧（更顺）</option>
+          <option value="custom">自定义…</option>
+        </select>
+        <input id="fpsCustom" type="number" min="0" max="240" step="1" placeholder="0–240，0 = 不限" hidden>
+      </div>
+      <div class="hint">高刷屏（144 / 165Hz）不锁帧会按刷新率满跑，CPU 翻三倍。选自定义可填 0 = 不限。改完会重载一次舞台。</div>
 
       <h3>依赖路径</h3>
       <div class="field">
@@ -76,36 +99,6 @@
       <div class="field">
         <input id="stagePort" type="text" placeholder="鲸语端口 61942">
         <input id="moodPort" type="text" placeholder="控制端口 61943">
-      </div>
-
-      <h3>互动</h3>
-      <label class="check"><input id="interactive" type="checkbox"> 分区互动（点她会按部位反应，悬停时光标变软点）</label>
-      <div class="hint">关掉后点她等于点空气：不说话、不记事、不叫醒会话，Alt+拖拽和穿透照旧。</div>
-      <label class="check"><input id="bridge" type="checkbox"> 模型桥接（点她会叫醒 DSH 会话）</label>
-      <div class="hint">关掉只断这一条线：表情和台词照做、点触照记，只是不叫醒会话、不回话。</div>
-      <label class="check"><input id="tickBubble" type="checkbox"> 阶段气泡（会话进度做成上浮小气泡）</label>
-      <div class="hint">联动上来时，「在想 / 跑命令 / 看文件」会从她肩边冒出小气泡往上飘，单颗 2~4 秒，最多同时 5 颗。关掉就只剩表情。</div>
-      <label class="check"><input id="replyBtn" type="checkbox"> 气泡回复钮（点它在桌宠里直接回一句话）</label>
-      <div class="hint">她说完话，气泡角上挂一个小蓝钮；点开在桌宠窗口里打字，回车就投给桌宠专用会话。需要先填了模型桥接地址。</div>
-
-      <h3>性能</h3>
-      <div class="row"><span>舞台帧率</span><span class="val" id="fpsVal">60 fps</span></div>
-      <div class="field">
-        <select id="fps">
-          <option value="30">30 帧（最省）</option>
-          <option value="60">60 帧（默认）</option>
-          <option value="90">90 帧（更顺）</option>
-          <option value="custom">自定义…</option>
-        </select>
-        <input id="fpsCustom" type="number" min="0" max="240" step="1" placeholder="0–240，0 = 不限" hidden>
-      </div>
-      <div class="hint">高刷屏（144 / 165Hz）不锁帧会按刷新率满跑，CPU 翻三倍。选自定义可填 0 = 不限。改完会重载一次舞台。</div>
-
-      <h3>可选集成</h3>
-      <label class="check"><input id="dshWatch" type="checkbox"> DSH 会话联动（会话状态演成表情 + 阶段气泡）</label>
-      <div class="field">
-        <input id="dshSessionsDir" type="text" placeholder="DSH 会话目录（sessions）">
-        <button data-pick="dshSessionsDir">浏览</button>
       </div>
 
       <div class="hint" id="status"></div>

@@ -231,6 +231,118 @@ async function main() {
     return;
   }
 
+  if (cmd === 'peek') {
+    // 窥屏：她自己隔一阵瞄一眼屏幕再主动开口。node pet.mjs peek on|off|now|（空=读状态）
+    // 走桥插件（61944），不是桌宠壳——定时器活在 DSH 那边，壳子关了也不影响判断。
+    // peek persona <档> 换她盯得多紧：拨的是性子，不是分钟数。热改，不用重启。
+    const BRIDGE = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
+    const a = String(F._[0] || '').toLowerCase();
+    let r;
+    if (a === 'on' || a === 'off') r = await jpost(`${BRIDGE}/peek`, { on: a === 'on' });
+    else if (a === 'now') r = await jpost(`${BRIDGE}/peek`, { now: true });
+    else if (a === 'persona') {
+      const name = String(F._[1] || '').toLowerCase();
+      if (!name) {
+        const cur = await jget(`${BRIDGE}/peek`);
+        const d = cur.data || {};
+        const list = (d.personas || []).map((p) => `${p.key}=${p.label}`).join('　');
+        console.log(`现在是「${d.personaLabel || d.persona || '读不到'}」${d.personaNote ? '，' + d.personaNote : ''}`);
+        if (list) console.log('可选：' + list);
+        return;
+      }
+      r = await jpost(`${BRIDGE}/peek`, { persona: name });
+    } else r = await jget(`${BRIDGE}/peek`);
+    if (r.status !== 200) {
+      console.log('失败：' + ((r.data && r.data.error) || r.status));
+      if (r.data && r.data.options) console.log('可选：' + r.data.options.join('　'));
+      return;
+    }
+    if (a === 'persona' && r.data && r.data.persona && r.data.persona !== 'manual') {
+      console.log(`好了，现在偏「${r.data.label || r.data.persona}」`);
+      return;
+    }
+    console.log(JSON.stringify(r.data, null, 2));
+    return;
+  }
+
+  if (cmd === 'mood') {
+    // 情绪：她现在什么心情、因为什么。node pet.mjs mood | reset | urge
+    // reset = 一键哄好，把账本清空。走桥插件（61944），状态活在 DSH 那边。
+    // urge  = 立刻问她一句想不想自己开口（跟定时那条共用同一套判断）
+    // intensity <quiet|normal|clingy|chatty> = 换浓度，随手拨，不用重启
+    const BRIDGE = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
+    const a = String(F._[0] || '').toLowerCase();
+    const b = String(F._[1] || '').toLowerCase();
+    const r = a === 'calm' ? await jpost(`${BRIDGE}/mood`, { calm: true })
+      : a === 'reset' ? await jpost(`${BRIDGE}/mood`, { reset: true })
+      : a === 'restore' ? await jpost(`${BRIDGE}/mood`, { restore: true })
+      : a === 'urge' ? await jpost(`${BRIDGE}/mood`, { urge: true })
+      : a === 'intensity' ? await jpost(`${BRIDGE}/mood`, { intensity: b })
+      : await jget(`${BRIDGE}/mood`);
+    if (r.status !== 200) {
+      const opts = (r.data && r.data.options) || [];
+      console.log('失败：' + ((r.data && r.data.error) || '桥插件没在跑？' + r.status)
+        + (opts.length ? '　可选：' + opts.join(' / ') : ''));
+      return;
+    }
+    const d = r.data || {};
+    if (d.enabled === false) {
+      console.log('情绪没开。配置里给 pet-bridge 加 mood: true，然后重启 DSH。');
+      return;
+    }
+    const snap = d.snapshot || {};
+    const axes = snap.axes || {};
+    const pct = (n) => (n >= 0 ? '+' : '') + Math.round((Number(n) || 0) * 100);
+    console.log(`${d.summary || ''}`);
+    console.log(`档位 ${snap.tier || '-'}　亲近 ${pct(axes.closeness)}　心情 ${pct(axes.valence)}　想说话 ${pct(axes.expression)}`);
+    if (axes.arousal != null || axes.dominance != null) {
+      console.log(`形态　绷 ${pct(axes.arousal)}　势 ${pct(axes.dominance)}`);
+    }
+    // 此刻：窥屏留下的短时余温，不进出上面那本账。没有就不打这行。
+    const mm = (d.moments && d.moments.top) || null;
+    if (mm && mm.tag) {
+      const left = Math.max(0, Math.round((Number(mm.at) + Number(mm.ttlMs) - Date.now()) / 60000));
+      console.log(`此刻　${mm.tag}${mm.why ? `　${mm.why}` : ''}${mm.n > 1 ? `　第${mm.n}回` : ''}　还剩 ${left} 分`);
+    }
+    if (snap.idleMinutes != null) console.log(`已经 ${Math.floor(snap.idleMinutes / 60)} 小时 ${snap.idleMinutes % 60} 分钟没人理她`);
+    const vals = Object.entries(snap.values || {}).filter(([, v]) => v > 0.01);
+    if (vals.length) console.log('账本：' + vals.map(([k, v]) => `${k}=${v.toFixed(2)}`).join('　'));
+    if (d.log && d.log.length) {
+      console.log('最近：');
+      for (const e of d.log.slice(0, 5)) {
+        const t = new Date(e.at).toLocaleTimeString('zh-CN');
+        console.log(`  ${t}　${e.emotion} ${e.delta > 0 ? '+' : ''}${Number(e.delta).toFixed(2)}　${e.reason || ''}`);
+      }
+    }
+    if (a === 'calm') console.log('（哄好了，亲近度留着）');
+    if (a === 'reset') console.log('（账本清空了，旧的在 ' + (d.backup || '备份里') + '）');
+    if (a === 'restore') console.log('（恢复好了）');
+    if (a === 'urge') {
+      const u = d.urgeResult || {};
+      if (u.spoke) {
+        const where = u.steps > 1 ? `${u.window} 第${u.step + 1}/${u.steps}句` : u.window;
+        console.log(`她开口了：${where}`);
+      } else {
+        console.log(`没开口：${u.why || '?'}`);
+      }
+    }
+    if (a === 'intensity') console.log(`浓度拨到 ${d.intensity}`);
+    const au = d.urge || {};
+    if (au.enabled) {
+      const win = Object.entries(au.windows || {}).filter(([, v]) => v.today > 0);
+      console.log(`主动开口：浓度 ${au.intensity || '-'}　今天 ${au.today || 0} 句`
+        + (au.dayCap ? ' / 上限 ' + au.dayCap : '')
+        + (win.length ? '　' + win.map(([k, v]) => `${k}×${v.today}`).join('　') : ''));
+      if (au.burst) {
+        const b = au.burst;
+        console.log(`正说到 ${b.window} 第 ${b.step + 1} 句，下一句还有 ${b.nextInSec} 秒`);
+      }
+    } else {
+      console.log('主动开口：没开。配置里加 moodUrge: true。');
+    }
+    return;
+  }
+
   if (cmd === 'fps') {
     // 舞台帧率上限：不设就是跟着显示器刷新率跑（144/165Hz 会白烧 CPU）
     const a = String(F._[0] || '').toLowerCase();
@@ -419,6 +531,8 @@ const USAGE = `
   fit <full|portrait>            全身 / 近景
   cursor [on|off]                指针追踪（眼睛+头+身子跟着鼠标；不带参数=读）
   volume [0..1 或 0..100]        语音音量（不带参数=读）
+  peek [on|off|now|persona <档>] 窥屏：隔一阵自己瞄屏幕再搭话；persona 换她盯得多紧（不用重启）
+  mood [calm|reset|restore|urge|intensity <档>]  心情 / 哄好（只清不开心）/ 彻底重来 / 从备份恢复 / 立刻问她想不想开口 / 换浓度的档
   stop                           停住并回待机
 
   任意动作可追加： --at 秒  --duration 秒  --and look=down --and tilt=right

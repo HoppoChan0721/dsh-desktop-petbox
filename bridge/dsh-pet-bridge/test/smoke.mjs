@@ -83,15 +83,15 @@ rmSync(TMP, { recursive: true, force: true });
 
 // ── 场景 1：默认 pet 模式 ──────────────────────────────
 {
-  const { ctx, calls, statePath } = await boot({ port: 62001, mode: 'pet', agentPreset: 'bigfish', minIntervalMs: 0 });
+  const { ctx, calls, statePath } = await boot({ port: 62001, mode: 'pet', agentPreset: 'pet-persona', minIntervalMs: 0 });
   ok('第 1 次点触前：create 没被调用', calls.create.length, 0);
   const r1 = await post(62001, '/event', { zone: 'chest', nx: 0.5, ny: 0.26 });
   ok('第 1 次点触：target=pet', r1.json.target, 'pet');
   ok('第 1 次点触：只建了 1 个会话', calls.create.length, 1);
-  ok('第 1 次点触：建会话带 bigfish 预设', calls.create[0].agentPreset, 'bigfish');
+  ok('第 1 次点触：建会话带指定预设', calls.create[0].agentPreset, 'pet-persona');
   ok('第 1 次点触：会话改名「桌宠互动」', calls.rename[0].title, '桌宠互动');
   ok('第 1 次点触：消息落在新建的会话里', calls.followup[0].sid === calls.create[0].sessionId, true);
-  ok('第 1 次点触：消息正文是分区描述', /桌宠｜主人刚刚碰了你的胸口/.test(calls.followup[0].text), true);
+  ok('第 1 次点触：消息正文是分区描述', /桌宠｜刚刚有人碰了你的胸口/.test(calls.followup[0].text), true);
   ok('第 1 次点触：附带「一句、5~20 字」的口径', /5～20 字/.test(calls.followup[0].text), true);
   ok('第 1 次点触：告诉她可以用方括号控身体', /方括号指令/.test(calls.followup[0].text), true);
 
@@ -193,17 +193,25 @@ rmSync(TMP, { recursive: true, force: true });
   const h = await (await fetch('http://127.0.0.1:62009/health')).json();
   ok('health 带 mode', h.mode, 'pet');
   ok('health 带 petSessionId 字段', 'petSessionId' in h, true);
-  ok('health 带桌面预设名', h.petPresetWanted, 'bigfish-pet');
+  ok('health 带桌面预设名', h.petPresetWanted, '');
   ctx.dispose();
 }
 
-// ── 场景 7b：没配 agentPreset 时默认用桌宠专用预设 bigfish-pet ──
+// ── 场景 7b：没配 agentPreset 时不指定预设，交给进程自己的默认值 ──
 {
   const { ctx, calls } = await boot({ port: 62017, mode: 'pet', minIntervalMs: 0 });
   await post(62017, '/event', { zone: 'head' });
-  ok('默认预设：create 带 bigfish-pet', calls.create[0].agentPreset, 'bigfish-pet');
+  ok('默认预设：create 不带 agentPreset', calls.create[0].agentPreset, undefined);
   const h = await (await fetch('http://127.0.0.1:62017/health')).json();
-  ok('默认预设：health 回显实际预设', h.petPreset, 'bigfish-pet');
+  ok('默认预设：health 回显空串', h.petPresetWanted, '');
+  ctx.dispose();
+}
+
+// ── 场景 7c：配了 address 就照配置称呼，没配就不带称谓 ──
+{
+  const { ctx, calls } = await boot({ port: 62018, mode: 'pet', address: '老板', minIntervalMs: 0 });
+  await post(62018, '/event', { zone: 'head' });
+  ok('address：点触前缀用配置的称呼', /桌宠｜老板刚刚碰了你的脑袋/.test(calls.followup[0].text), true);
   ctx.dispose();
 }
 

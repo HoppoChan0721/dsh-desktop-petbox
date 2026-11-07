@@ -16,6 +16,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCues } from './cues.js';
+import { createPeek } from './peek.js';
+import { createMood } from './mood/index.js';
 
 // 自带一件式日志：宿主那边的 console 很少能看到，出问题得能自己留痕
 // 默认写 $DSH_HOME/logs/pet-bridge.log；也可以给 WHALE_PET_BRIDGE_LOG 一个绝对路径，留空则不写
@@ -33,13 +35,46 @@ log('module imported');
 export const name = 'pet-bridge';
 export const inject = ['sessions', 'sessionController'];
 
+/**
+ * 从时间戳数组里数 24 小时内的条数。纯函数，给测试和调试用。
+ * 额度的口径只有一处，别在别处再写一遍。
+ */
+export function countSpeak(logList, at = Date.now()) {
+  const since = at - 24 * 3600 * 1000;
+  return (Array.isArray(logList) ? logList : []).filter((t) => Number(t) >= since).length;
+}
+
+/**
+ * 某一档给多少主动额度。0 表示不限。
+ * 额度挂在「主动说话浓度」上，不挂在窥屏档位上——
+ * 说多少句是「说」的属性，多久看一眼是「看」的属性，两件事不该混。
+ */
+export function speakCapOf(presets, name) {
+  const p = presets && presets[String(name || '')];
+  return Math.max(0, Number(p && p.dayCap) || 0);
+}
+
+/**
+ * 某条主动投递要不要记进额度。纯函数，方便测。
+ * 窥屏传 `budget: false` —— 它多久说一句由窥屏档位管，不吃「主动说话」这根轴的额度。
+ */
+export function billsBudget(opts = {}) {
+  return !!(opts && opts.proactive) && opts.budget !== false;
+}
+
 const DEFAULTS = {
   port: 61944,
   mode: 'pet',                 // 'pet' = 专用桌宠会话；'main' = 投主会话（旧行为）
   sessionId: '',               // mode=main 时钉死一个会话；留空就自动跟最近活跃的
   petSessionId: '',            // mode=pet 的固定会话 id；留空自动生成，落盘复用
   petSessionTitle: '桌宠互动',
-  agentPreset: 'bigfish-pet',  // 新建桌宠会话用的预设：主人 2026-11-03 给桌宠单独做的那个（只有人设、没有工具）
+  // 桌面会话用哪个预设。**默认留空 = 用这个进程的默认预设**，插件不替使用者挑性格：
+  // 别人拉下来装的是自己的桌宠，不是作者那只。想让它有独立人设就填自己预设的名字，
+  // 通常配成「只有人设、没有工具」的那只，省得桌宠那股劲儿跟写代码混在一起。
+  agentPreset: '',
+  // 她怎么称呼使用者。留空 = 不称呼，注入的提示词里就不会出现任何称谓。
+  // 这个值只影响提示词里那几句前缀，不改任何人设文件。
+  address: '',
   fallbackToMain: false,       // 桌宠会话建不起来时，要不要退回投主会话
   echoToPet: true,             // 会话里说完的话回送到桌宠气泡（不然只能在聊天窗里干看着）
   petSayUrl: 'http://127.0.0.1:61943/say',
@@ -53,6 +88,37 @@ const DEFAULTS = {
   minIntervalMs: 1200,         // 同一部位在这个间隔内只投一次
   maxPerMinute: 24,            // 每分钟最多投递几条，防止连点刷屏
   quiet: false,
+  // ---- 窥屏（2026-11-05）----
+  // 隔一阵自己瞄一眼前台窗口，主动在桌面上说一句。默认关，用 /peek 或托盘菜单开。
+  peek: false,
+  peekIntervalMs: 30 * 60 * 1000,   // 老的手动档用；新的是档位（peekPersona）
+  peekPersona: '',                  // 空着就用 profile.peekPersona.default，现在是「温和」
+  peekQuietFrom: 1,                 // 静默时段（整点小时）：1 点到
+  peekQuietTo: 8,                   // 8 点之间都不打扰
+  peekMaxLines: 80,                 // OCR 最多收几行，再多都是废话
+  peekMaxChars: 300,                // 塞进消息的屏幕文字上限
+  peekScale: 2,                     // 截图放大倍数后再 OCR（中文小字 2x 明显更准）
+  peekOcrPython: '',                // RapidOCR 的 Python 解释器（venv 里的 python.exe），留空只用系统 OCR
+  peekOcrScript: '',                // RapidOCR 的入口脚本 ocr.py，留空同上
+  peekTarget: '',                   // 钉死要瞄的窗口（进程名或标题片段），留空就跟任务栏顺序走
+  peekTimeoutMs: 20000,             // 探针整轮超时（RapidOCR 冷启动要 5 秒量级），超了就 kill 当这轮跳过
+  peekTmpDir: '',                   // 截图 + JSON 的落点，默认 $DSH_HOME/tmp/pet-peek
+  // ---- 情绪（2026-11-06）----
+  // 是不是会因为你冷落她而真的不高兴。默认关：老用户拉下来行为一个字不变。
+  mood: false,
+  moodFile: '',                     // 状态文件，默认 $DSH_HOME/pet-mood.json
+  moodProfile: '',                  // 外置情绪表（JSON），和默认表合并；改参数不用动代码
+  moodGates: false,                 // 闸门：冷战期真的按概率不理人。参数调好之前别开
+  moodTickMs: 5 * 60 * 1000,        // 多久结算一次衰减（也顺手把状态落盘）
+  // ---- 主动开口（2026-11-06）----
+  // 光有情绪还是被动的：生气要等被摸一下才发作。开了这个，情绪够了她自己会把话送到桌面上。
+  // 默认关，它真的会打断主人正在干的事，要不要开是使用者的决定，不是插件的。
+  moodUrge: false,
+  moodUrgeTickMs: 20 * 1000,        // 多久问一次「她想不想开口」。纯计算，20 秒一次也不心疼
+  // 整体浓度：quiet / normal / clingy / chatty。主打陪伴的人设成 clingy 就够了，
+  // 不用逐档改参数。留空 = 用 profile 里写的那档。
+  moodUrgeIntensity: '',
+  moodUrgeCooldownMs: 10 * 60 * 1000, // 投递失败后先歇一会儿，别每分钟重试
 };
 
 const ZONE_LABEL = {
@@ -85,18 +151,43 @@ export function apply(ctx, config = {}) {
   let windowStart = Date.now();
   let windowCount = 0;
   const recent = [];
+  let peekOn = cfg.peek === true || cfg.peek === 'on';
+  // 主动开口的浓度。配置里给了就用配置的，否则沿用上一次拨到的那档（跨重启记得）
+  let urgeIntensity = cfg.moodUrgeIntensity || '';
+  // 窥屏基准间隔。同样可以运行时改，改完落盘。
+  // 现在主入口是档位（peekPersona），这个值只在手动档和老配置里用得上。
+  let peekIntervalMs = Number(cfg.peekIntervalMs) || 30 * 60 * 1000;
+  // 窥屏档位：拨的是性子，不是分钟数。空着就用 profile 里的默认档
+  let peekPersona = String(cfg.peekPersona || '');
 
   if (statePath) {
     try {
       const st = JSON.parse(readFileSync(statePath, 'utf8'));
       if (!bound && st.sessionId) bound = st.sessionId;
       if (!petSid && st.petSessionId) petSid = st.petSessionId;
+      if (typeof st.peekOn === 'boolean') peekOn = st.peekOn;   // 开关要跨重启记住
+      if (Number(st.peekIntervalMs) > 0) peekIntervalMs = Number(st.peekIntervalMs);
+      if (`${st.peekPersona || ''}`) peekPersona = String(st.peekPersona);
+      if (!urgeIntensity && st.urgeIntensity) urgeIntensity = st.urgeIntensity;
     } catch {}
   }
   function persist() {
     if (!statePath) return;
-    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, at: new Date().toISOString() }, null, 1)); } catch {}
+    try { writeFileSync(statePath, JSON.stringify({ sessionId: bound, petSessionId: petSid, peekOn, peekIntervalMs, peekPersona, urgeIntensity, at: new Date().toISOString() }, null, 1)); } catch {}
   }
+
+  // ---- 情绪（2026-11-06）----
+  // 只在这里建一次。默认关着，关着的时候 mood 是 null，下面每处都靠这个判断短路，
+  // 老用户拉下来行为和以前完全一样。
+  const mood = cfg.mood === true || cfg.mood === 'on'
+    ? createMood({
+        file: cfg.moodFile || (process.env.DSH_HOME ? join(process.env.DSH_HOME, 'pet-mood.json') : ''),
+        profileFile: cfg.moodProfile || '',
+        urgeIntensity,
+        log,
+      })
+    : null;
+  let moodTimer = null;
 
   // ---- 主会话（mode=main 才用）----
   async function currentSession() {
@@ -358,12 +449,60 @@ export function apply(ctx, config = {}) {
     return { sessionId: sid, flushed: !!flushed };
   }
 
-  async function deliver(text) {
+  // ── 主动说话的额度（2026-11-07）──────────────────────────────────────
+  // 窥屏和主动开口共用一份，额度由窥屏档位决定。
+  //
+  // 之前两条管道各算各的：窥屏投递不计入 urge 的 today，档位调成「黏人」以后
+  // 几分钟就说一句，十几分钟就把 urge 那 8 句吃光，日上限形同虚设。
+  // 主人 2026-11-07 看出来了。合过来之后「她盯得多紧」这一个档位同时管手感。
+  //
+  // 只记内存，重启清零：这不是计费，是防刷屏，重启几次也不会变成一百句。
+  const speakLog = [];
+  const SPEAK_KEEP = 200;
+
+  /** 24 小时内主动说过几句。 */
+  function speakToday(at = Date.now()) {
+    return countSpeak(speakLog, at);
+  }
+
+  /** 现在这一档给多少额度。0 或没配置就是不限。 */
+  function speakCap() {
+    try {
+      const u = mood && mood.profile && mood.profile.urge;
+      if (!u) return 0;
+      return speakCapOf(u.presets, u.intensity || 'normal');
+    } catch { return 0; }
+  }
+
+  async function deliver(text, opts = {}) {
+    // 主动开口先过额度。点触回复不算：主人摸她，她必须理。
+    //
+    // 窥屏**不吃这份额度**（`budget: false`）：额度是「主动说话」那根轴上配的，
+    // 窥屏多久说一句由窥屏档位自己管。两件事混在一起，拨窥屏档位就会顺手改说话多少，
+    // 反过来一天 40 句也能被窥屏在三个小时里烧光，之后整天哑巴。2026-11-07 主人指出来了。
+    if (opts.proactive && opts.budget !== false) {
+      const cap = speakCap();
+      if (cap > 0 && speakToday() >= cap) {
+        log(`speak budget used up (${speakToday()}/${cap})，这次不说了`);
+        return { ok: false, skipped: 'budget', cap, today: speakToday() };
+      }
+    }
+    const markSpoke = () => {
+      if (!opts.proactive || opts.budget === false) return;
+      speakLog.push(Date.now());
+      while (speakLog.length > SPEAK_KEEP) speakLog.shift();
+    };
+
     if (cfg.mode === 'pet') {
       try {
         const sid = await ensurePetSession();
-        const extra = PET_HINT + (await petStateLine().catch(() => ''));
-        return { ...(await deliverTo(sid, text + extra, true)), target: 'pet' };   // 只有投桌宠会话才回气泡
+        // 情绪卡只在桌宠会话里拼。main 模式是把点触投进主人正在写代码的那个会话，
+        // 往里塞一句「你现在有点不痛快」既污染上下文，也让她在干活时突然演情绪。
+        // 平静时 cue() 返回空串，不占 token。
+        const extra = PET_HINT + (mood ? safeCue(opts) : '') + (await petStateLine().catch(() => ''));
+        const r = await deliverTo(sid, text + extra, true);   // 只有投桌宠会话才回气泡
+        markSpoke();
+        return { ...r, target: 'pet' };
       } catch (e) {
         petReady = false;   // 下一次点触重新建
         if (!cfg.fallbackToMain) throw e;
@@ -371,14 +510,34 @@ export function apply(ctx, config = {}) {
       }
     }
     const sid = await currentSession();
-    return { ...(await deliverTo(sid, text)), target: 'main' };
+    const r = await deliverTo(sid, text);
+    markSpoke();
+    return { ...r, target: 'main' };
+  }
+
+  /** 取情绪卡。任何异常都吞掉：情绪是附加的，不该让投递失败。 */
+  function safeCue(opts = {}) {
+    try {
+      return mood.cue(Date.now(), opts);
+    } catch (e) {
+      log('mood cue failed: ' + e.message);
+      return '';
+    }
+  }
+
+  /** 使用者怎么称呼自己。空 = 不称呼，别替别人的人设定规矩。 */
+  function address() {
+    return String(cfg.address || '').trim();
   }
 
   function describe(ev) {
     const label = ZONE_LABEL[ev.zone] || ev.zone || '身子';
     const where = (ev.nx != null && ev.ny != null) ? `（位置 ${ev.nx}, ${ev.ny}）` : '';
     const nth = zoneCount >= 2 ? `，第 ${zoneCount} 下` : '';
-    return `（桌宠｜主人刚刚碰了你的${label}${nth}${where}）`;
+    const who = address();
+    // 没配称呼就写「有人」：句子照样通顺，也不用凭空给使用者安一个身份。
+    const hit = who ? `${who}刚刚碰了你的${label}` : `刚刚有人碰了你的${label}`;
+    return `（桌宠｜${hit}${nth}${where}）`;
   }
 
   function shouldWake(ev) {
@@ -397,6 +556,122 @@ export function apply(ctx, config = {}) {
     } catch {}
   }
 
+  // ---- 窥屏（2026-11-05）----
+  // 定时瞄前台窗口 → OCR → 当成一条「事件」投给桌宠会话（跟她主动搭话一个管道）。
+  // 开关状态落 pet-bridge.json，重启也记得。
+  const peek = createPeek({
+    cfg: {
+      ...cfg,
+      peek: peekOn,
+      peekIntervalMs,
+      // 档位名和档位表分开传：一个是「现在是什么性子」，一个是「有哪些性子可选」
+      peekPersona,
+      peekPersonaTable: cfg.peekPersonaTable || (mood && mood.profile && mood.profile.peekPersona) || null,
+    },
+    log,
+    deliver,
+    // 窥屏看到了什么 → 给情绪记一笔。看见了在忙还是摸鱼，是两回事。
+    onScene: (p) => { if (mood) { try { mood.peekScene(p); } catch (e) { log('mood scene failed: ' + e.message); } } },
+    // 全屏打完了 → 记一条此刻。全屏期间重探针是瞎的，轻探针是唯一知道那阵多长的。
+    onGameEnd: (g) => {
+      if (!mood) return;
+      try { mood.scene({ category: 'game-over', label: g.title || g.proc || '', minutes: g.minutes }); }
+      catch (e) { log('mood game-end failed: ' + e.message); }
+    },
+    // 看到感兴趣的东西 → 记一条「想看看」的此刻。词表在 profile.interest 里，改词不动代码。
+    onInterest: (w, title) => {
+      if (!mood) return;
+      try { mood.scene({ category: 'interest', label: title || '', interest: w.id, interestLabel: w.label || w.id }); }
+      catch (e) { log('mood interest failed: ' + e.message); }
+    },
+    // 兴趣词表跟着 profile 走：加一个词只改 profile，不用碰 peek。
+    // 配置里给了 interestWords 就用配置的，方便单独调这一块。
+    interestWords: cfg.interestWords || (mood && mood.profile && mood.profile.interest) || null,
+    // 主动程度跟着情绪走：冷战降频，黏人时加倍。mood 关着就是恒等 1。
+    intervalFactor: () => (mood ? (mood.gate('proactive').intervalFactor || 1) : 1),
+    onStateChange: (s) => {
+      peekOn = peek.on;
+      if (s && s.persona) peekPersona = String(s.persona);
+      if (s && Number(s.manualMs) > 0) peekIntervalMs = Number(s.manualMs);
+      persist();
+    },
+  });
+
+  // ---- 主动开口（2026-11-06）----
+  // 情绪够了她自己开口，不等主人来碰。跟窥屏走同一条投递管道（deliver → followup），
+  // 谁也不认识谁：urge 只管「该不该说」，peek 只管「看见什么」，两条都能单独关掉。
+  //
+  // 判断全是纯计算，一分钟问一次也不心疼；真正花钱的是 speak 之后那一轮会话。
+  let urgeTimer = null;
+  let urgeBusy = false;
+  let urgeBackoffUntil = 0;
+  let lastUrgeNote = '';
+
+  function urgePrompt(d) {
+    const mins = Math.max(1, Math.round(d.idleMin));
+    const nth = d.attempt + 1;
+    const inBurst = (Number(d.step) || 0) > 0;
+    const who = address();
+    // 有称呼就用称呼，没有就说「没有人」——两种都不缺主语的别扭感。
+    const opener = who ? `这次不是${who}叫你` : '这次没有人叫你';
+    return `（桌宠｜${opener}，是你自己想开口。`
+      + `${d.hint}`
+      // 此刻层带来的具体事实：「你打了四十分钟游戏」这种，模型自己猜不出来
+      + (d.detail ? `你知道的情况：${d.detail}。` : '')
+      + (inBurst
+        // 一阵里的第二、三句：不提醒的话模型容易一次把想说的全说完，后面就空了
+        ? `这是这一阵的第 ${d.step + 1} 句。只说你这一句，别把后面想说的都一次说完。`
+        : `离上次有人跟你说上话已经 ${mins} 分钟了，这是你今天第 ${nth} 次自己搭话。`)
+      + '说完就等着，别连发。）';
+  }
+
+  async function urgeStep(reason = 'timer') {
+    if (!mood || !cfg.moodUrge) return { ok: false, why: 'off' };
+    if (urgeBusy) return { ok: false, why: 'busy' };
+    if (cfg.quiet) return { ok: false, why: 'quiet' };
+    if (urgeBackoffUntil && Date.now() < urgeBackoffUntil) return { ok: false, why: 'backoff' };
+    // 窥屏刚替她说过话就别再补一句：两条管道汇到同一个气泡，会像复读。
+    // 只挡「新开一阵」，一阵里接着说的那几句要放行，不然连怼就断了。
+    const lastPeek = Date.parse((peek.state() || {}).lastAt || '') || 0;
+    const inBurst = !!(mood.state().urge || {}).burst;
+
+    let d;
+    try {
+      d = mood.urge();
+    } catch (e) {
+      log('urge decide failed: ' + e.message);
+      return { ok: false, why: 'error' };
+    }
+    if (!d.speak) { lastUrgeNote = '不想开口（' + d.why + '）'; return { ok: true, spoke: false, why: d.why }; }
+    if (!inBurst && lastPeek && Date.now() - lastPeek < 10 * 60 * 1000) {
+      return { ok: false, why: 'just-spoke' };
+    }
+
+    urgeBusy = true;
+    try {
+      // 主动开口自己已经把「此刻」那条事实写进提示词了，情绪卡别再重复一遍。
+      // proactive 让它吃「主动说话」这根轴的日额度；窥屏走 budget:false，不吃也不记账（2026-11-07 解绑）。
+      const r = await deliver(urgePrompt(d), { skipMoment: true, proactive: true });
+      // 投递成功才记账：失败一次还想再试一次，不该直接扣掉她一次机会
+      mood.markUrge(d);
+      const where = d.steps > 1 ? `${d.window} 第${d.step + 1}/${d.steps}句` : d.window;
+      lastUrgeNote = `开口 ${where}`;
+      log(`urge spoke window=${d.window} step=${d.step + 1}/${d.steps} tier=${d.tier} `
+        + `idle=${Math.round(d.idleMin)}min preset=${d.preset} heat=${d.heat} via=${reason} target=${r.target}`);
+      return {
+        ok: true, spoke: true, window: d.window, step: d.step, steps: d.steps,
+        tier: d.tier, idleMin: Math.round(d.idleMin), target: r.target,
+      };
+    } catch (e) {
+      urgeBackoffUntil = Date.now() + Math.max(60000, Number(cfg.moodUrgeCooldownMs) || 600000);
+      lastUrgeNote = '开口失败：' + e.message;
+      log('urge deliver failed: ' + e.message);
+      return { ok: false, why: e.message };
+    } finally {
+      urgeBusy = false;
+    }
+  }
+
   const server = createServer((req, res) => {
     const url = new URL('http://x' + (req.url || '/'));
     if (req.method === 'GET' && url.pathname === '/health') {
@@ -407,12 +682,22 @@ export function apply(ctx, config = {}) {
         petPresetWanted: cfg.agentPreset || '',
         petArchived: isArchived(petSid),
         echo: { on: !!cfg.echoToPet, url: cfg.petSayUrl, voice: !!cfg.echoVoice, maxChars: cfg.echoMaxChars },
+        peek: peek.state(),
+        mood: mood ? mood.state().summary : 'off',
+        urge: { on: !!(mood && cfg.moodUrge), last: lastUrgeNote },
         lastCue,
         recent: recent.slice(-10),
       });
     }
+    if (req.method === 'GET' && url.pathname === '/peek') {
+      return send(res, 200, { ok: true, ...peek.state() });
+    }
     if (req.method === 'GET' && url.pathname === '/recent') {
       return send(res, 200, { ok: true, items: recent.slice(-30) });
+    }
+    // 她现在什么心情。默认关着的时候返回 enabled:false，不是 404 —— 前端不用分两种错误处理。
+    if (req.method === 'GET' && url.pathname === '/mood') {
+      return send(res, 200, { ok: true, enabled: !!mood, ...(mood ? mood.state() : {}) });
     }
     if (req.method !== 'POST') return send(res, 404, { ok: false, error: 'not found' });
 
@@ -434,6 +719,71 @@ export function apply(ctx, config = {}) {
         petSid = ''; persist();
         return send(res, 200, { ok: true, petSessionId: '', note: 'next touch creates a new pet session' });
       }
+      // 窥屏开关 / 档位 / 立刻试一次（放在 quiet 之前：静默是点触的事，不该挡住窥屏的控制）
+      if (url.pathname === '/peek') {
+        if (typeof body.on === 'boolean') peek.setOn(body.on);
+        // {"persona":"yandere"} = 换性子。这是主入口，托盘拨的就是它。
+        if (body.persona) {
+          const r = peek.setPersona(body.persona);
+          if (!r.ok) return send(res, 400, { ok: false, ...r });
+          peekPersona = r.persona;
+          persist();
+          return send(res, 200, { ok: true, ...r, ...peek.state() });
+        }
+        // 老接口：直接给分钟数。会切到手动档，档位显示成「手动」。
+        if (body.intervalMs != null || body.minutes != null) {
+          const ms = body.minutes != null ? Number(body.minutes) * 60000 : Number(body.intervalMs);
+          const applied = peek.setIntervalMs(ms);
+          peekIntervalMs = applied;
+          peekPersona = 'manual';
+          persist();
+          return send(res, 200, { ok: true, intervalMs: applied, persona: 'manual', ...peek.state() });
+        }
+        if (body.now) {
+          const r = await peek.run('manual').catch((e) => ({ ok: false, error: e.message }));
+          return send(res, 200, { ok: true, result: r, state: peek.state() });
+        }
+        return send(res, 200, { ok: true, ...peek.state() });
+      }
+      // 情绪：三个会改账本的动作，参数改了要重启，避免线上参数漂移
+      if (url.pathname === '/mood') {
+        if (!mood) return send(res, 200, { ok: true, enabled: false, note: 'mood 没开，配置里把 mood 设成 true' });
+        // {"calm":true} = 哄好她。只清负面，亲近和好心情留着。托盘默认用这个
+        if (body.calm) {
+          const r = mood.calm();
+          return send(res, 200, { ok: true, ...mood.state(), calm: true, cleared: r.cleared, note: '已经哄好了' });
+        }
+        // {"reset":true} = 彻底重来。整本清空，清之前自动存一份备份
+        if (body.reset) {
+          const r = mood.resetAll();
+          return send(res, 200, { ok: true, ...mood.state(), reset: true, backup: r.backup || '', note: '账本清空了，旧的在备份里' });
+        }
+        // {"restore":true} = 从备份恢复
+        if (body.restore) {
+          const r = mood.restoreBackup();
+          if (!r.ok) return send(res, 400, { ok: false, error: r.error, ...mood.state() });
+          return send(res, 200, { ok: true, ...mood.state(), restore: true, note: '恢复了' });
+        }
+        if (body.scene) {
+          try { mood.scene(body.scene); } catch (e) { return send(res, 500, { ok: false, error: e.message }); }
+        }
+        // {"urge":true} = 立刻问她一句想不想开口（调试用，不改变任何记账）
+        // 结果放 urgeResult：urge 这个键是状态摘要，别被动作结果顶掉
+        if (body.urge) {
+          const r = await urgeStep('manual').catch((e) => ({ ok: false, error: e.message }));
+          return send(res, 200, { ok: true, urgeResult: r, ...mood.state() });
+        }
+        // {"intensity":"clingy"} = 换主动开口的浓度。随手拨，不用重启
+        if (body.intensity) {
+          const r = mood.setIntensity(body.intensity);
+          if (!r.ok) return send(res, 400, { ok: false, ...r });
+          urgeIntensity = r.intensity;
+          persist();
+          log('mood urge intensity -> ' + r.intensity);
+          return send(res, 200, { ok: true, ...r, ...mood.state() });
+        }
+        return send(res, 200, { ok: true, enabled: true, ...mood.state() });
+      }
       if (cfg.quiet) return send(res, 200, { ok: true, skipped: 'quiet' });
 
       const isEvent = url.pathname === '/event';
@@ -441,12 +791,37 @@ export function apply(ctx, config = {}) {
       if (!text) return send(res, 400, { ok: false, error: 'empty' });
 
       if (isEvent) {
+        // 被摸了这个事实先记下来，哪怕下面因为限流不投递 —— 她该记得有人来找过她。
+        // 同一部位两分钟内只记一次，防止连点把情绪点爆。
+        if (mood) {
+          try { mood.touch(body); } catch (e) { log('mood touch failed: ' + e.message); }
+        }
         const verdict = shouldWake(body);
         recent.push({ at: new Date().toISOString(), zone: body.zone || '', verdict });
         if (recent.length > 60) recent.shift();
         if (verdict !== 'ok') return send(res, 200, { ok: true, skipped: verdict, zone: body.zone || '' });
+
+        // 情绪闸门：她可能真的不理人。概率和延迟都从 profile 的 gates.touch 里读，
+        // 这里只负责照做，不自己发明规则。默认关着，等参数调顺了再打开。
+        if (mood && cfg.moodGates) {
+          const g = mood.gate('touch');
+          const respond = typeof g.respond === 'number' ? g.respond : 1;
+          if (respond < 1 && Math.random() > respond) {
+            recent.push({ at: new Date().toISOString(), zone: body.zone || '', verdict: 'mood-silent' });
+            log(`mood gate: 不理 zone=${body.zone || '-'} tier=${mood.snapshot().tier}`);
+            return send(res, 200, { ok: true, skipped: 'mood-silent', why: '她现在不太想理人', zone: body.zone || '' });
+          }
+          // 延迟最多 1.5 秒：这是「犹豫了一下」不是「卡住了」，
+          // 再长壳子那边等得心慌，也会让挂着的 HTTP 请求随时超时。
+          const delay = Math.min(1500, Number(g.extraDelayMs) || 0);
+          if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        }
       }
       const now = Date.now();
+      // 主人在气泡里回她一句 = 一次真心互动，够把委屈清零
+      if (!isEvent && mood) {
+        try { mood.speech(text, now); } catch (e) { log('mood speech failed: ' + e.message); }
+      }
       try {
         const r = await deliver(text);
         lastAt = now; lastZone = isEvent ? (body.zone || '') : lastZone;
@@ -464,5 +839,33 @@ export function apply(ctx, config = {}) {
   server.on('error', (e) => { log('server error: ' + e.message); ctx.logger?.warn?.('pet-bridge: server error: ' + e.message); });
   server.listen(cfg.port, '127.0.0.1', () => log(`listening on 127.0.0.1:${cfg.port} (mode=${cfg.mode})`));
   ctx.logger?.info?.(`pet-bridge listening on 127.0.0.1:${cfg.port} (mode=${cfg.mode})`);
-  ctx.on('dispose', () => { try { server.close(); } catch {} });
+  peek.start();
+
+  // 情绪需要一个「即使没人点也会自己走」的时钟：衰减、攒委屈、落盘。
+  // 读的时候也会顺手结算一次，所以这个定时器挂了也不会让情绪停在原地，只是落盘晚一点。
+  if (mood) {
+    moodTimer = setInterval(() => {
+      try { mood.tick(); } catch (e) { log('mood tick failed: ' + e.message); }
+    }, Math.max(60000, Number(cfg.moodTickMs) || 300000));
+    if (moodTimer.unref) moodTimer.unref();
+    log('mood enabled: ' + (cfg.moodFile || '$DSH_HOME/pet-mood.json'));
+  }
+
+  // 光有情绪还是被动的。开了 moodUrge，她自己会在情绪够的时候开口。
+  // 一分钟问一次是纯计算；真到要说话那一步，一次投递就是一轮极短的会话。
+  if (mood && cfg.moodUrge) {
+    urgeTimer = setInterval(() => {
+      urgeStep('timer').catch((e) => log('urge tick failed: ' + e.message));
+    }, Math.max(5000, Number(cfg.moodUrgeTickMs) || 20000));
+    if (urgeTimer.unref) urgeTimer.unref();
+    const inten = (mood.state().urge || {}).intensity || 'normal';
+    log(`mood urge enabled (tick=${Number(cfg.moodUrgeTickMs) || 20000}ms intensity=${inten})`);
+  }
+
+  ctx.on('dispose', () => {
+    try { peek.stop(); } catch {}
+    try { if (moodTimer) clearInterval(moodTimer); } catch {}
+    try { if (urgeTimer) clearInterval(urgeTimer); } catch {}
+    try { server.close(); } catch {}
+  });
 }

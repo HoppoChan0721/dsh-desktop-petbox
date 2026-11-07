@@ -6,10 +6,21 @@ const { spawn, execFile } = require('node:child_process');
 
 // —— 配置：所有外部依赖（鲸语仓库 / 模型 / Python / 端口 / 可选集成）都在 data/config.json ——
 const CFG = require('./config');
+const { mouthFrames, MOUTH_LEAD } = require('./mouth');
+const { createDragState, dragFrame } = require('./drag');
 const DATA = CFG.DATA_DIR;
 app.setPath('userData', DATA);
 app.setAppUserModelId('com.whale.pet.shell');
 if (!app.requestSingleInstanceLock()) app.quit();
+
+// —— 透明置顶窗口在 Windows 上的两个已知坑（2026-11-07 补，别人的机器上才显形）——
+// 1. Chromium 会算「这个窗口是不是被别人挡住了」，判成挡住就暂停渲染；一拖动这个判断就在
+//    「挡住 / 没挡住」之间来回翻，屏幕上看到的就是模型一闪一闪、偶尔卡住一拍。
+//    置顶桌宠实际上永远不会被真正遮挡，直接把这套遮挡计算关掉。
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// 2. 她会自己开口（保活打招呼、主动说话），那一刻窗口没有用户手势，自动播放策略会把
+//    AudioContext / <audio> 拦成静音。关掉手势门槛，声音才保证出得来。
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 const loadCfg = CFG.load;
 const saveCfg = CFG.save;
@@ -143,12 +154,28 @@ function moodPlan(name, k) {
 function postPlan(plan) {
   return new Promise((resolve) => {
     const body = JSON.stringify({ plan, backend: 'web' });
-    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/api/execute', method: 'POST', timeout: 6000, headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => { res.resume(); try { plog('postPlan status ' + res.statusCode + ' ' + String(plan && plan.title)); } catch {} resolve(res.statusCode === 200 || res.statusCode === 201); });
+    // 400 的时候把舞台给的理由记下来：只写「失败了」等于下次还得重猜一遍
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/api/execute', method: 'POST', timeout: 6000, headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+      let out = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { if (out.length < 400) out += c; });
+      res.on('end', () => {
+        const ok = res.statusCode === 200 || res.statusCode === 201;
+        try { plog('postPlan status ' + res.statusCode + ' ' + String(plan && plan.title) + (ok ? '' : ' :: ' + out.replace(/\s+/g, ' ').slice(0, 240))); } catch {}
+        if (ok) planAppliedAt = Date.now();
+        resolve(ok);
+      });
+    });
     req.on('error', () => resolve(false));
     req.on('timeout', () => { req.destroy(); resolve(false); });
     req.write(body); req.end();
   });
 }
+// 口型计划真正被舞台收下的时刻（= 这条 plan 的 t0）。声音要按这个点排程才对得上口型：
+// 以前是「先把声音放出去，再等 runPlan 排队把口型挂上舞台」，舞台一忙（摇摆每 600ms 抢一次
+// 舞台、联动 watcher 也抢）口型就要等几百毫秒到两秒才动，声音早说话了。这不是本机现象，
+// 机器越慢、舞台越忙差得越多。
+let planAppliedAt = 0;
 
 // ---- 节律摇摆（待机时自动左右轻摆；用户动作来了让路）----
 let planBusyUntil = 0;
@@ -262,7 +289,11 @@ async function sendMood(name, intensity = 0.6) {
 function startMoodServer() {
   const srv = http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), replyAlways: replyAlwaysOn === true, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    if (req.method === 'GET' && req.url === '/status') return send(200, { ok: true, moods: Object.keys(MOODS), port: MOOD_PORT, voicing, lastSay, volume: voiceVolume, interactive, bridge: bridgeOn, reply: replyBtnWanted(), replyAlways: replyAlwaysOn === true, fps: stageFpsOf(), dock: loadCfg().dock || 'none', dockTitle: loadCfg().dockTitle || '', affinity: affinityInfo(), lastTouch: touchRing.length ? touchRing[touchRing.length - 1] : null });
+    // 亲密度统计：GET /affinity（摸了多少下、今天几下、最常摸哪、连着几天）
+    if (req.method === 'GET' && req.url === '/affinity') {
+      return send(200, { ok: true, ...affinityInfo() });
+    }
     // 气泡量测：头顶 y / 气泡实际位置与高度（排查「气泡压模型」用）
     if (req.method === 'GET' && req.url === '/bubble') {
       if (!win || win.isDestroyed()) return send(200, { ok: false, error: 'no window' });
@@ -414,6 +445,7 @@ function startMoodServer() {
       return;
     }
     // 分区点击：外部（CLI / 调试 / 测试）也能触发一次「主人点了这里」
+    // {"reset":true} 顺手把亲密度统计清零（改阈值、复测反应时用）
     if (req.method === 'POST' && req.url === '/touch') {
       let raw = '';
       req.on('data', (c) => { raw += c; if (raw.length > 2048) req.destroy(); });
@@ -421,8 +453,9 @@ function startMoodServer() {
         try {
           const j = JSON.parse(raw || '{}');
           lastTap = 0;   // 调试入口不去抖
+          if (j.reset) { touchStats = { total: 0, zoneTotal: {}, days: {}, lastTouchAt: 0, firstAt: 0 }; saveStats(); }
           const ev = handleTouch(j);
-          send(200, { ok: !!ev, event: ev || null });
+          send(200, { ok: !!ev, event: ev || null, affinity: affinityInfo() });
         } catch (e) { send(400, { ok: false, error: e.message }); }
       });
       return;
@@ -645,11 +678,81 @@ const TOUCH_MANY = {
   leg:   ['哼…', '唔…'],
   default: ['呃…', '哼…'],
 };
+// 久没被摸 / 今天被摸太多，本地语气跟着变，别每次都是同一个「唔…」
+const TOUCH_MISS = ['呀…', '诶…', '唔…'];
+const TOUCH_CLINGY = ['嘿嘿…', '嗯…', '唔…'];
 let touchSeq = 0;
 const touchRing = [];
 const touchFile = () => path.join(DATA, 'touch.jsonl');
 const touchState = { zone: '', count: 0, at: 0 };
 let bridgeWarned = false;
+
+// ---- 点触记忆 / 亲密度（2026-11-05）----
+// touch.jsonl 是原始流水，只落不聚合，所以以前每次摸反应都一模一样。
+// 这里维护一份小统计：累计摸过多少下、今天多少下、最常摸哪、隔了多久、连着几天。
+// 用途只有三个，都落在本地反应上，不联网、不依赖 TTS：
+//   1. 亲密度涨了更耐摸（同部位连击阈值从 3 下抬到 4~5 下才腻）
+//   2. 隔很久没摸，第一下会一惊一乍
+//   3. 今天已经被摸很多下，第一下就黏人
+const statsFile = () => path.join(DATA, 'touch-stats.json');
+const AFFINITY_TIERS = [1, 40, 150, 450, 1200, 3000];   // 累计到第几下升到 Lv.1..Lv.6
+const dayKey = (d) => {
+  const t = d || new Date();
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+};
+function loadStats() {
+  try {
+    const j = JSON.parse(fs.readFileSync(statsFile(), 'utf8').replace(/^\uFEFF/, '')) || {};
+    return { total: 0, zoneTotal: {}, days: {}, lastTouchAt: 0, firstAt: 0, ...j };
+  } catch { return { total: 0, zoneTotal: {}, days: {}, lastTouchAt: 0, firstAt: 0 }; }
+}
+let touchStats = loadStats();
+function saveStats() {
+  try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(statsFile(), JSON.stringify(touchStats)); } catch {}
+}
+function affinityLevel(total) { let lv = 0; for (const t of AFFINITY_TIERS) if (total >= t) lv++; return lv; }
+
+// 记一笔，返回这次反应要用到的几个数
+// 注意：gap 必须取「摸之前」的那一份——先更新 lastTouchAt 再算，间隔永远是 0
+function recordTouch(ev, now) {
+  const before = affinityInfo();
+  const k = dayKey();
+  const d = touchStats.days[k] || (touchStats.days[k] = { n: 0, zones: {} });
+  d.n++;
+  d.zones[ev.zone] = (d.zones[ev.zone] || 0) + 1;
+  touchStats.total++;
+  touchStats.zoneTotal[ev.zone] = (touchStats.zoneTotal[ev.zone] || 0) + 1;
+  touchStats.lastTouchAt = now;
+  if (!touchStats.firstAt) touchStats.firstAt = now;
+  const keys = Object.keys(touchStats.days).sort();      // 只留最近 60 天，别让文件长胖
+  while (keys.length > 60) delete touchStats.days[keys.shift()];
+  saveStats();
+  return { ...affinityInfo(), gapHours: before.gapHours };
+}
+
+function affinityInfo() {
+  const now = Date.now();
+  const today = (touchStats.days[dayKey()] || { n: 0 }).n;
+  const fav = Object.entries(touchStats.zoneTotal).sort((a, b) => b[1] - a[1])[0];
+  let streak = 0;
+  for (let i = 0; i < 400; i++) {
+    const k = dayKey(new Date(now - i * 86400000));
+    if (touchStats.days[k] && touchStats.days[k].n > 0) streak++;
+    else if (i > 0) break;                                // 今天还没摸不算断，隔天没摸才是断
+  }
+  const gapH = touchStats.lastTouchAt ? (now - touchStats.lastTouchAt) / 3600000 : null;
+  return {
+    level: affinityLevel(touchStats.total),
+    total: touchStats.total,
+    today,
+    streak,
+    favorite: fav ? fav[0] : '',
+    favoriteN: fav ? fav[1] : 0,
+    gapHours: gapH === null ? null : Math.round(gapH * 10) / 10,
+    lastTouchAt: touchStats.lastTouchAt || null,
+    firstTouchAt: touchStats.firstAt || null,
+  };
+}
 
 // ---- 分区标定：让 preload 扫一遍画布 alpha，量出模型自己的剪影 ----
 // 分区必须相对模型算，不能相对窗口：窗口拉伸、缩放、换 fit、换装都会让写死的窗口比例漂。
@@ -709,25 +812,38 @@ function forwardTouch(ev) {
   } catch {}
 }
 
-function touchReaction(ev, now) {
+function touchReaction(ev, now, aff) {
   if (ev.zone === 'body') return;   // 兜底区交给 pet:tap 的旧台词池
   const z = TOUCH_ZONES[ev.zone] || TOUCH_ZONES.body;
+  const a = aff || affinityInfo();
   if (touchState.zone === ev.zone && now - touchState.at < 1600) touchState.count++;
   else { touchState.zone = ev.zone; touchState.count = 1; }
   touchState.at = now;
-  const many = touchState.count >= 3;
+  // 亲密度越高越耐摸：Lv.4 起要连 4 下、Lv.6 起要连 5 下才翻脸
+  const manyAt = a.level >= 6 ? 5 : a.level >= 4 ? 4 : 3;
+  const many = touchState.count >= manyAt;
   // 第二下只换表情不出声，第三下才发火：避免连点把气泡刷屏
   if (touchState.count === 2 && !many) {
     sendMood(z.e, 0.55).catch(() => {});
     return;
   }
-  const pool = many ? (TOUCH_MANY[ev.zone] || TOUCH_MANY.default) : z.t;
+  // 语境语气：隔久没摸会一惊一乍，今天已经被摸很多下会黏人；两个都只作用于第一下
+  let tone = null;
+  if (touchState.count === 1) {
+    if (a.gapHours !== null && a.gapHours >= 6) tone = 'miss';
+    else if (a.today >= 15) tone = 'clingy';
+  }
+  const pool = many ? (TOUCH_MANY[ev.zone] || TOUCH_MANY.default)
+    : tone === 'miss' ? TOUCH_MISS
+      : tone === 'clingy' ? TOUCH_CLINGY
+        : z.t;
   const line = pool[Math.floor(Math.random() * pool.length)];
-  const mood = many ? 'annoyed' : z.e;
+  const mood = many ? 'annoyed' : tone === 'miss' ? 'surprised' : tone === 'clingy' ? 'shy' : z.e;
+  if (tone) plog(`touch ${ev.zone} tone=${tone} lv=${a.level} today=${a.today} gap=${a.gapHours}h`);
   if (voicing) { say(line, false, 4200); return; }
   if (!many && speakCached(line, mood)) return;   // 命中预合成：气泡/口型/声音同帧
   say(line, false, 4200);
-  sendMood(mood, many ? 0.9 : 0.65).catch(() => {});
+  sendMood(mood, many ? 0.9 : tone ? 0.75 : 0.65).catch(() => {});
 }
 
 // 分区互动总开关：关掉后点她等于点空气（不写日志、不通桥、不说话），光标回系统默认。
@@ -767,7 +883,8 @@ function handleTouch(p) {
   };
   appendTouch(ev);
   forwardTouch(ev);
-  touchReaction(ev, now);
+  const aff = recordTouch(ev, now);
+  touchReaction(ev, now, aff);
   return ev;
 }
 
@@ -783,14 +900,42 @@ function sayPlan(ms, emotion, env, gesture) {
 function playInPage(audioUrl) {
   try { if (win && !win.isDestroyed()) win.webContents.executeJavaScript('window.__petPlay && window.__petPlay(' + JSON.stringify(audioUrl) + ')').catch(() => {}); } catch {}
 }
+// 页面里跑一段 JS 并等它的返回值（Promise 也被 await）。口型/声音这条链路全靠它。
+function pageCall(expr) {
+  if (!win || win.isDestroyed()) return Promise.resolve(null);
+  return win.webContents.executeJavaScript(expr).catch(() => null);
+}
+// 口型轨迹第一帧的时间（src/mouth.js 里的 MOUTH_LEAD，0.15）。声音要排在这个点上，不是「现在」。
+
+// 声音和口型对齐的唯一入口：
+//   1. 先在页里把 wav 解码成 AudioBuffer（解码慢是慢在启动之前，不影响对齐）；
+//   2. 再把口型计划挂上舞台（runPlan 会抢舞台、重试，可能等几百毫秒到两秒）；
+//   3. 最后按「计划真正被舞台收下的时刻」+ MOUTH_LEAD 排程播放 —— AudioContext 是采样级时钟，
+//      排到哪一秒就从哪一秒开始，跟机器快慢无关。
+// 老实现是「先把 <audio> 放出去，再等 runPlan 排队」，舞台一忙声音就先跑了，听感就是口型追不上声音。
+async function playVoiceAligned(audioUrl, planPromise) {
+  const loaded = await pageCall(`window.__petLoadAudio && window.__petLoadAudio(${JSON.stringify(audioUrl)})`);
+  const ok = await planPromise;
+  const behind = planAppliedAt ? (Date.now() - planAppliedAt) / 1000 : 99;
+  const lead = ok && behind < 0.6 ? Math.max(0, MOUTH_LEAD - behind) : 0;
+  const played = await pageCall(`window.__petPlay && window.__petPlay(${JSON.stringify(audioUrl)}, ${lead.toFixed(3)})`);
+  return { loaded, plan: !!ok, behind: +behind.toFixed(3), lead: +lead.toFixed(3), played };
+}
 // 命中缓存 → 气泡、口型、声音同一帧出来
 function speakCached(text, emotion) {
   const c = loadVCache()[text];
   if (!c || !c.job_id) return false;
-  const ms = Math.round((Number(c.duration) + 0.3) * 1000);
+  const ms = Math.round((Number(c.dur || c.duration) || 2) * 1000);
   say(text, false, ms);
-  playInPage('/audio/' + c.job_id + '.wav');
-  runPlan(sayPlan(ms, emotion, c.env), true).catch(() => {});
+  playVoiceAligned('/audio/' + c.job_id + '.wav', runPlan(sayPlan(ms, emotion, c.env), true))
+    .then((a) => {
+      try {
+        const ld = a && a.loaded && a.loaded.ok ? 'decode-ok' : 'decode-' + ((a && a.loaded && a.loaded.why) || 'missing');
+        const pl = a && a.played ? (a.played.ok ? 'play-ok(' + (a.played.state || a.played.fallback || '?') + ')' : 'play-' + (a.played.why || 'fail')) : 'play-none';
+        fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} cached say dur=${(ms / 1000).toFixed(2)}s mouth=${c.env ? c.env.length : 0} ${ld} ${pl} plan=${a && a.plan ? 'ok' : 'fail'} behind=${a && a.behind}s lead=${a && a.lead}s ${c.job_id}\n`);
+      } catch {}
+    })
+    .catch(() => {});
   return true;
 }
 let warming = null;
@@ -798,7 +943,7 @@ function warmVoices() {
   if (warming) return warming;
   warming = (async () => {
     const cache = loadVCache();
-    for (const pool of [...TAP_LINES, ...Object.values(TOUCH_ZONES)]) {
+    for (const pool of [...TAP_LINES, ...Object.values(TOUCH_ZONES), { t: TOUCH_MISS }, { t: TOUCH_CLINGY }]) {
       for (const text of pool.t) {
         if (cache[text]) continue;
         try {
@@ -809,12 +954,15 @@ function warmVoices() {
           const info = JSON.parse(fs.readFileSync(path.join(DATA, 'voice-job.json'), 'utf8').replace(/^\uFEFF/, ''));
           if (!info.job_id) continue;
           const wav = path.join(loadCfg().voiceWavDir || '', info.job_id + '.wav');
-          const n = Math.max(4, Math.min(58, Math.round(Number(info.duration) * 8)));
-          const env = wavEnvelope(wav, n);
+          // 时长以 wav 头为准（TTS 自报的可能不准），口型窗口按它算
+          const wi = (() => { try { return wavInfo(wav); } catch { return null; } })();
+          const aud = Math.max(0.4, Math.min(19.5, (wi && wi.duration) || Number(info.duration) || 1));
+          const n = Math.max(4, Math.min(58, Math.round(aud * 8)));
+          const env = wavEnvelope(wav, n, wi);
           const audioDir = path.join(BASE, 'web', 'audio');
           fs.mkdirSync(audioDir, { recursive: true });
           fs.copyFileSync(wav, path.join(audioDir, info.job_id + '.wav'));
-          cache[text] = { job_id: info.job_id, duration: info.duration, env };
+          cache[text] = { job_id: info.job_id, duration: +aud.toFixed(3), dur: +aud.toFixed(3), env };
           saveVCache(cache);
           try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} warm "${text}" ${info.job_id}\n`); } catch {}
         } catch {}
@@ -912,13 +1060,14 @@ const BUBBLE_JS = `(() => {
     '#pet-bubble .dot{display:inline-block;width:5px;height:5px;margin:0 2px;border-radius:50%;background:#2b3d3a;opacity:.3;animation:petDot 1.1s infinite}' +
     '#pet-bubble .dot:nth-child(2){animation-delay:.15s}#pet-bubble .dot:nth-child(3){animation-delay:.3s}@keyframes petDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}';
   // 阶段气泡：圆滚滚的泡，从上半身任意位置冒出来，边往上飘边左右晃。几颗一起，各自 2~4 秒飘完消失。
-  // 外框 .pet-puff 只做位移（左右摆 + 上浮），.pet-tick 是那颗泡本体（圆/椭圆 + 高光）。
+  // 外框 .pet-puff 只做位移（左右摆 + 上浮），.pet-tick 是那颗泡本体（圆/椭圆）。
+  // 2026-11-05 去掉了左上角那个白色高光点（.pet-tick::after）和背景里的中心亮斑：
+  // 泡小字多时高光正好压在顶部那行字上，看着像字被糊掉一块；改成整体渐变后字清楚多了。
   style.textContent += '.pet-puff{position:fixed;left:0;top:0;pointer-events:none;z-index:99998;will-change:transform,opacity}' +
     '.pet-tick{position:relative;display:flex;align-items:center;justify-content:center;border-radius:50%;overflow:hidden;box-sizing:border-box;' +
-    'background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.94),rgba(230,245,255,.82) 44%,rgba(172,212,242,.68) 100%);' +
+    'background:linear-gradient(158deg,rgba(246,252,255,.9),rgba(228,244,255,.84) 48%,rgba(172,212,242,.72) 100%);' +
     'color:#1c3550;font:13px/1.22 system-ui,"Microsoft YaHei";pointer-events:none;' +
     'box-shadow:0 5px 14px rgba(26,74,128,.16),inset 0 0 0 1.5px rgba(255,255,255,.7),inset 0 -9px 16px rgba(140,190,235,.22)}' +
-    '.pet-tick::after{content:"";position:absolute;left:21%;top:12%;width:25%;height:15%;border-radius:50%;background:rgba(255,255,255,.92);filter:blur(1.2px);transform:rotate(-22deg)}' +
     '.pet-tick-txt{display:flex;align-items:center;justify-content:center;text-align:center;overflow:hidden;word-break:break-word;overflow-wrap:anywhere;white-space:pre-line}';
   // 回复她：气泡角上的小蓝钮 + 窗口内直接打字的输入卡。
   // 这两个是整窗唯一允许吃鼠标的 DOM（pointer-events:auto + data-pet-ui），
@@ -1144,9 +1293,76 @@ const BUBBLE_JS = `(() => {
     }
     return n > 0;
   };
-  window.__petPlay = (url) => { try { const a = new Audio(url); a.volume = (typeof window.__petVol === 'number' ? window.__petVol : 1); a.play().catch(() => {}); window.__petAudio = a; return true; } catch { return false; } };
+  // ---- 声音：先解码、再按口型计划的起点排程 ----
+  // 老实现 new Audio(url).play()：解码和缓冲都算在启动延迟里，慢机器上开口比口型晚 100~400ms；
+  // 更糟的是主进程先把声音放出去、再等 runPlan 排队把口型挂上舞台，舞台一忙就差出好几拍。
+  // 现在拆三步：__petLoadAudio 预解码 → 主进程把口型计划挂上舞台 → __petPlay(url, lead) 用
+  // AudioContext 的采样级时钟排程 —— 排在哪一秒就从哪一秒响，跟机器快慢无关。
+  let petCtx = null, petVol = 1, petMaster = null;
+  const petBufs = new Map();
+  const petNodes = new Set();
+  const petAudioCtx = () => {
+    if (!petCtx) {
+      const C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return null;
+      try { petCtx = new C({ latencyHint: 'interactive' }); } catch (e) { try { petCtx = new C(); } catch (e2) { return null; } }
+      try { petMaster = petCtx.createGain(); petMaster.gain.value = petVol; petMaster.connect(petCtx.destination); } catch (e) { petMaster = null; }
+    }
+    if (petCtx.state === 'suspended') { try { petCtx.resume().catch(() => {}); } catch (e) {} }
+    return petCtx;
+  };
+  window.__petLoadAudio = async (url) => {
+    const ctx = petAudioCtx();
+    if (!ctx) return { ok: false, why: 'no-webaudio' };
+    // 第一次建 AudioContext 可能是 suspended（自动播放策略）。这里先把它叫醒，
+    // 不然声音「排程成功」却一点动静都没有，报也报不出来。
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
+    if (petBufs.has(url)) return { ok: true, dur: petBufs.get(url).duration, cached: true, state: ctx.state };
+    try {
+      const r = await fetch(url, { cache: 'force-cache' });
+      if (!r.ok) return { ok: false, why: 'http-' + r.status };
+      const ab = await r.arrayBuffer();
+      const buf = await new Promise((res, rej) => {
+        try { const p = ctx.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); } catch (e) { rej(e); }
+      });
+      petBufs.set(url, buf);
+      if (petBufs.size > 24) { const oldest = petBufs.keys().next().value; if (oldest !== url) petBufs.delete(oldest); }
+      return { ok: true, dur: buf.duration, state: ctx.state };
+    } catch (e) { return { ok: false, why: String((e && e.message) || e).slice(0, 80), state: ctx.state }; }
+  };
+  const petStopVoices = () => { for (const n of petNodes) { try { n.stop(); } catch (e) {} } petNodes.clear(); };
+  window.__petPlay = (url, lead) => {
+    const ctx = petAudioCtx();
+    if (!ctx) return { ok: false, why: 'no-webaudio' };
+    petStopVoices();
+    const buf = petBufs.get(url);
+    const sec = Math.max(0, Math.min(1.5, Number(lead) || 0));
+    if (!buf) {
+      // 没预解码（老调用方 / 解码失败）：退回 <audio>，慢一点但不至于没声
+      try {
+        const a = new Audio(url); a.volume = petVol; a.play().catch(() => {}); window.__petAudio = a;
+        return { ok: true, fallback: 'element', lead: 0 };
+      } catch (e) { return { ok: false, why: String((e && e.message) || e) }; }
+    }
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      if (petMaster) src.connect(petMaster); else src.connect(ctx.destination);
+      const startAt = ctx.currentTime + sec;
+      src.start(startAt);
+      petNodes.add(src);
+      src.onended = () => { petNodes.delete(src); };
+      window.__petAudioSrc = src;
+      return { ok: true, lead: sec, dur: buf.duration, at: startAt, state: ctx.state };
+    } catch (e) { return { ok: false, why: String((e && e.message) || e) }; }
+  };
   window.__petVol = 1;
-  window.__petSetVol = (v) => { const n = Math.max(0, Math.min(1, Number(v))); if (Number.isFinite(n)) window.__petVol = n; if (window.__petAudio) { try { window.__petAudio.volume = window.__petVol; } catch {} } return window.__petVol; };
+  window.__petSetVol = (v) => {
+    const n = Math.max(0, Math.min(1, Number(v)));
+    if (Number.isFinite(n)) { petVol = n; window.__petVol = n; if (petMaster) { try { petMaster.gain.value = n; } catch (e) {} } }
+    if (window.__petAudio) { try { window.__petAudio.volume = petVol; } catch (e) {} }
+    return petVol;
+  };
   window.__petPos = (pos) => {
     const p = ['bottom', 'top', 'left', 'right'].includes(pos) ? pos : 'bottom';
     el.className = 'pos-' + p;
@@ -1337,7 +1553,7 @@ const BUBBLE_JS = `(() => {
     if (!tickOn) for (const el of tickPool.splice(0)) el.remove();
     return tickOn;
   };
-  // 一颗泡 = 外框 .pet-puff（只负责飘：上浮 + 左右摆 + 微转）+ 泡本体 .pet-tick（圆/椭圆 + 高光）
+  // 一颗泡 = 外框 .pet-puff（只负责飘：上浮 + 左右摆 + 微转）+ 泡本体 .pet-tick（圆/椭圆）
   window.__petTick = (text, ms) => {
     if (!tickOn) return null;
     const full = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim().slice(0, 40);
@@ -1664,17 +1880,11 @@ function staggerConflicts(actions) {
 }
 
 function sayActions(ms, emotion, env, gesture, moves) {
-  const dur = Math.min(20, Math.max(1, Number(ms) / 1000));
-  const frames = [];
-  if (Array.isArray(env) && env.length >= 2) {
-    const n = Math.min(58, env.length);
-    const span = Math.max(0.24, dur - 0.34);
-    const step = span / (n - 1);
-    for (let i = 0; i < n; i++) frames.push({ time: +(0.15 + i * step).toFixed(2), values: { ParamMouthOpenY: Math.max(0.05, Math.min(1, Number(env[i]) || 0)) } });
-  } else {
-    for (let t = 0.15, k = 0; t <= dur - 0.15 && frames.length < 58; t += 0.12, k++) frames.push({ time: +t.toFixed(2), values: { ParamMouthOpenY: k % 2 === 0 ? 0.95 : 0.1 } });
-  }
-  const actions = [{ kind: 'trajectory', at: 0, duration: dur, frames }];
+  // 帧表和时长由 src/mouth.js 算（那里钉着舞台的两条硬约束：帧落在 0.15..duration-0.15、
+  // duration ≤ 20）。声音在计划的 0.15s 处开始播，帧也从那儿起 —— 见 MOUTH_LEAD。
+  const m = mouthFrames(ms, env);
+  const dur = m.dur;
+  const actions = [{ kind: 'trajectory', at: 0, duration: dur, frames: m.frames }];
   // talk 是纯口型指令，说话时已经有一条口型轨迹了，留着必撞
   const extra = sanitizeMoves(moves).filter((a) => a.kind !== 'talk');
   // 她自己点了表情就别让情绪预设再盖一次，表情是独占层，两个一起下会互相顶
@@ -1697,27 +1907,65 @@ function sayActions(ms, emotion, env, gesture, moves) {
   }
   return staggerConflicts(actions);
 }
-// 从合成出来的 WAV 算音量包络（每窗 RMS → 0.05..0.95），给口型用
-function wavEnvelope(file, n) {
+// 读 WAV 头：时长和格式。口型时长要按**文件实际多长**算，不能信 TTS 自报的 duration：
+// 有的 TTS 报的是预估（带 padding / 按字数估算），和真播出来能差 0.1~0.5s，嘴不是提前闭
+// 就是说完还在动。这里直接数帧：dataSize / blockAlign / sampleRate。
+function wavInfo(file) {
   const buf = fs.readFileSync(file);
-  let pos = 12, bits = 16, dataOff = 0, dataSize = 0;
+  let pos = 12, fmt = null, dataOff = 0, dataSize = 0;
   while (pos + 8 <= buf.length) {
     const id = buf.toString('ascii', pos, pos + 4);
     const size = buf.readUInt32LE(pos + 4);
-    if (id === 'fmt ') bits = buf.readUInt16LE(pos + 22);
-    if (id === 'data') { dataOff = pos + 8; dataSize = size; break; }
-    pos += 8 + size + (size % 2);
+    const body = pos + 8;
+    if (id === 'fmt ' && body + 16 <= buf.length) {
+      let format = buf.readUInt16LE(body);
+      const channels = Math.max(1, buf.readUInt16LE(body + 2));
+      const sampleRate = Math.max(1, buf.readUInt32LE(body + 4));
+      let blockAlign = buf.readUInt16LE(body + 12);
+      let bits = buf.readUInt16LE(body + 14);
+      // WAVE_FORMAT_EXTENSIBLE：真正的格式码和位深在后面那段 GUID 前面
+      if (format === 0xFFFE && body + 26 <= buf.length) {
+        bits = Math.max(bits, buf.readUInt16LE(body + 18));
+        format = buf.readUInt16LE(body + 24);
+      }
+      if (!blockAlign) blockAlign = Math.max(1, Math.round(channels * bits / 8));
+      fmt = { format, channels, sampleRate, blockAlign, bits };
+    }
+    if (id === 'data') { dataOff = body; dataSize = Math.min(size, Math.max(0, buf.length - body)); break; }
+    pos = body + size + (size % 2);
   }
-  const step = bits / 8;
-  const total = Math.floor(dataSize / step);
-  const win = Math.max(1, Math.floor(total / n));
+  if (!fmt) return null;
+  const frames = Math.floor(dataSize / Math.max(1, fmt.blockAlign));
+  return { ...fmt, dataOff, dataSize, frames, duration: frames / fmt.sampleRate };
+}
+
+// 从合成出来的 WAV 算音量包络（每窗 RMS → 0.05..0.95），给口型用
+function wavEnvelope(file, n, info) {
+  const buf = fs.readFileSync(file);
+  const wi = info || wavInfo(file);
+  if (!wi || !wi.frames) return null;
+  const { dataOff, frames, blockAlign, channels, bits, format } = wi;
+  const read = (i) => {
+    // 返回这一帧的振幅（多声道取平均），统一到 -1..1
+    let sum = 0;
+    for (let c = 0; c < channels; c++) {
+      const at = dataOff + i * blockAlign + c * (bits / 8);
+      if (at + bits / 8 > buf.length) break;
+      let v = 0;
+      if (format === 3 && bits === 32) v = buf.readFloatLE(at);
+      else if (bits === 8) v = (buf[at] - 128) / 128;
+      else if (bits === 16) v = buf.readInt16LE(at) / 32768;
+      else if (bits === 24) v = buf.readIntLE(at, 3) / 8388608;
+      else if (bits === 32) v = buf.readInt32LE(at) / 2147483648;
+      sum += Number.isFinite(v) ? v : 0;
+    }
+    return sum / channels;
+  };
+  const win = Math.max(1, Math.floor(frames / n));
   const rms = [];
   for (let i = 0; i < n; i++) {
     let sum = 0, cnt = 0;
-    for (let j = i * win; j < Math.min(total, (i + 1) * win); j++) {
-      const v = bits === 16 ? buf.readInt16LE(dataOff + j * 2) / 32768 : buf[dataOff + j] / 128;
-      sum += v * v; cnt++;
-    }
+    for (let j = i * win; j < Math.min(frames, (i + 1) * win); j++) { const v = read(j); sum += v * v; cnt++; }
     rms.push(Math.sqrt(sum / Math.max(1, cnt)));
   }
   const sm = rms.map((v, i) => (rms[i - 1] ?? v) * 0.25 + v * 0.5 + (rms[i + 1] ?? v) * 0.25);
@@ -1744,11 +1992,13 @@ function prepareAndSay(text, emotion, gesture, moves) {
       const info = JSON.parse(fs.readFileSync(path.join(DATA, 'voice-job.json'), 'utf8').replace(/^\uFEFF/, ''));
       if (!info.job_id) throw new Error(info.error || 'prepare failed');
       const wav = path.join(loadCfg().voiceWavDir || '', info.job_id + '.wav');
-      const dur = Math.min(20, Math.max(1, Number(info.duration) + 0.35));
+      // 时长按 wav 实际长度，不再「TTS 自报 + 0.35」：那个 0.35 会让嘴比声音晚收半拍
+      const wi = (() => { try { return wavInfo(wav); } catch { return null; } })();
+      const dur = Math.max(0.4, Math.min(19.5, (wi && wi.duration) || Number(info.duration) + 0.2 || 1));
       const ms = Math.round(dur * 1000);
       const n = Math.max(4, Math.min(58, Math.round(dur * 8)));
       let env = null;
-      try { env = wavEnvelope(wav, n); } catch {}
+      try { env = wavEnvelope(wav, n, wi); } catch {}
       // 放进页面能取的目录，用 Web Audio 播（延迟 ~80ms，而不是 SoundPlayer 的 1~2s）
       // 注意：BASE 已经是 ...\tools\jingyu，所以这里**不能**再拼 '..'，否则会落到
       //      ...\tools\jingyu-live2d-agent-main\web\audio（页面取不到的错目录）→ 404 静音。
@@ -1763,19 +2013,25 @@ function prepareAndSay(text, emotion, gesture, moves) {
         try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} audio-copy-fail ${audioDir} ${String(e.message).slice(0, 120)}\n`); } catch {}
       }
       say(text, false, ms);
+      const plan = { version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture, moves) };
+      let align = null;
       if (audioReady) {
-        if (win && !win.isDestroyed()) {
-          try { win.webContents.executeJavaScript('window.__petPlay && window.__petPlay(' + JSON.stringify(audioUrl) + ')').catch(() => {}); } catch {}
-        }
+        // 先解码、再把口型挂上舞台、最后按计划起点排声音（三步的顺序不能换）
+        align = await playVoiceAligned(audioUrl, runPlan(plan, true));
       } else {
-        // 兜底：页面取不到文件时用系统播放器，慢一点但保证有声音
+        // 兜底：页面取不到文件时用系统播放器，慢一点但保证有声音（口型会对不齐，只能这样）
         try { spawn('powershell', ['-NoProfile', '-Command', `(New-Object System.Media.SoundPlayer '${wav}').PlaySync()`], { windowsHide: true, stdio: 'ignore' }); } catch {}
+        await runPlan(plan, true);
       }
-      lastSay = { text, jobId: info.job_id, synthMs, dur: +dur.toFixed(2), mouth: env ? env.length : 0, at: Date.now() };
+      lastSay = { text, jobId: info.job_id, synthMs, dur: +dur.toFixed(2), mouth: env ? env.length : 0, at: Date.now(), align: align || null };
       // 保持 voicing 锁定直到音频真正播放完毕（dur * 1000 + 400ms 缓冲）
       setVoicing(true, ms + 400);
-      await runPlan({ version: 1, title: '说话', intent: '说话', summary: '说话', actions: sayActions(ms, emotion, env, gesture, moves) }, true);
-      try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} realtime say synth=${synthMs}ms dur=${dur.toFixed(2)}s mouth=${env ? env.length : 0} ${info.job_id}\n`); } catch {}
+      try {
+        const a = align || {};
+        const ld = a.loaded && a.loaded.ok ? 'decode-ok' : 'decode-' + ((a.loaded && a.loaded.why) || 'missing');
+        const pl = a.played ? (a.played.ok ? 'play-ok(' + (a.played.state || a.played.fallback || '?') + ')' : 'play-' + (a.played.why || 'fail')) : 'play-none';
+        fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} realtime say synth=${synthMs}ms dur=${dur.toFixed(2)}s mouth=${env ? env.length : 0} ${ld} ${pl} plan=${a.plan ? 'ok' : 'fail'} behind=${a.behind}s lead=${a.lead}s ${info.job_id}\n`);
+      } catch {}
     } catch (e) {
       try { fs.appendFileSync(path.join(DATA, 'pet.log'), `${new Date().toISOString()} prep-error ${String(e.message).slice(0, 160)}\n`); } catch {}
       say(text, false, 6000);
@@ -1844,6 +2100,46 @@ function findDockTarget(title) {
   });
 }
 
+// ---- 部署体检：装错了不报错，只是「一直难受」 ----
+// 2026-11-07：B 站有人私信反馈桌面壳的毛病，本地复现不出来。绝大多数是「AI 帮忙部署」时
+// 漏了一步：鲸语没打补丁（没有舞台模式 / 没有像素穿透 / 指针追不了）、模型目录指错。
+// 这类问题不会抛异常，只会表现成「闪、点不动、口型怪」。所以启动后自己查一次，直接在
+// 气泡里说人话，别让人对着半成品猜。
+function httpGetText(pathname, timeout = 2500) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: PORT, path: pathname, timeout }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return resolve(''); }
+      let out = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { if (out.length < 400000) out += c; });
+      res.on('end', () => resolve(out));
+    });
+    req.on('timeout', () => { req.destroy(); resolve(''); });
+    req.on('error', () => resolve(''));
+  });
+}
+
+let deployChecked = false;
+async function deployCheck() {
+  if (deployChecked) return;
+  deployChecked = true;
+  const [appJs, engineJs] = await Promise.all([httpGetText('/app.mjs'), httpGetText('/engine.mjs')]);
+  if (!appJs) return;   // 舞台没起来是另一类问题，loadStage 那边已经在重试
+  const missing = [];
+  if (!appJs.includes('stageMode')) missing.push('舞台模式');
+  if (!appJs.includes('preserveDrawingBuffer')) missing.push('像素穿透');
+  if (appJs && !appJs.includes('__stageEngine')) missing.push('引擎暴露');
+  if (engineJs && !engineJs.includes('applyPointer')) missing.push('指针追踪');
+  if (missing.length) {
+    const msg = `鲸语那边还没打补丁：${missing.join('、')}会不对。跑一下 npm run patch -- --repo "鲸语目录"`;
+    plog('deploy-check missing ' + missing.join(','));
+    say(msg, false, 9000);
+    try { if (tray) tray.displayBalloon({ title: '桌宠部署检查', content: msg }); } catch {}
+    return;
+  }
+  plog('deploy-check ok');
+}
+
 // 贴着目标窗口外侧放：right = 它的右边，left = 它的左边；垂直居中对齐
 function dockRect(t, mode) {
   const [ww, wh] = win.getSize();
@@ -1873,16 +2169,37 @@ async function applyDock(mode, opts = {}) {
   return { ok: true, dock: m, moved: true, x: p.x, y: p.y, target: { x: t.x, y: t.y, w: t.w, h: t.h } };
 }
 
+// 窗口大小收进当前显示器：别人的机器不一定是双 2560×1440 @100%。
+// 1080p 笔记本常见 125% / 150%，默认 531×950（DIP）高度就超过工作区了 —— 窗口一开比屏幕还高，
+// 系统会按新 DPI 重算尺寸，接下来一拖就「变大 + 闪」。所以开窗前先按落脚那块屏的 DIP 工作区夹一遍。
+function fitWindowToDisplay(x, y, w, h) {
+  const pt = { x: Math.round(x + w / 2), y: Math.round(y + h / 2) };
+  const d = screen.getDisplayNearestPoint(pt).workArea;
+  const k = Math.min(1, (d.width * 0.96) / w, (d.height * 0.96) / h);
+  const W = Math.max(240, Math.min(1600, Math.round(w * k)));
+  const H = Math.max(360, Math.min(2000, Math.round(h * k)));
+  // 位置也收回到这块屏里：换了机器/换了显示器，旧坐标可能已经不在任何一块屏上
+  const nx = Math.max(d.x - Math.round(W * 0.3), Math.min(Math.round(x), d.x + d.width - Math.round(W * 0.7)));
+  const ny = Math.max(d.y, Math.min(Math.round(y), d.y + d.height - Math.round(H * 0.9)));
+  return { x: nx, y: ny, width: W, height: H, clamped: W !== w || H !== h };
+}
+
 function createWindow() {
   const cfg = loadCfg();
   const area = screen.getPrimaryDisplay().workArea;
   const width = cfg.width || 380, height = cfg.height || 680;
-  const x = Number.isFinite(cfg.x) ? cfg.x : area.x + area.width - width - 40;
-  const y = Number.isFinite(cfg.y) ? cfg.y : area.y + area.height - height - 40;
+  const rx = Number.isFinite(cfg.x) ? cfg.x : area.x + area.width - width - 40;
+  const ry = Number.isFinite(cfg.y) ? cfg.y : area.y + area.height - height - 40;
+  const fit = fitWindowToDisplay(rx, ry, width, height);
+  const [x, y] = [fit.x, fit.y];
   smart = cfg.smart !== false; alwaysOnTop = cfg.onTop !== false;
+  if (fit.clamped) {
+    plog(`fit-display ${width}x${height} -> ${fit.width}x${fit.height} scale=${screen.getDisplayNearestPoint({ x, y }).scaleFactor}`);
+    saveCfg({ width: fit.width, height: fit.height, x, y });
+  }
 
   win = new BrowserWindow({
-    x, y, width, height, show: false, transparent: true, frame: false, hasShadow: false,
+    x, y, width: fit.width, height: fit.height, show: false, transparent: true, frame: false, hasShadow: false,
     resizable: true, movable: true, minimizable: true, maximizable: false, skipTaskbar: true,
     alwaysOnTop: true, roundedCorners: false, backgroundColor: '#00000000',
     icon: assetPath('icon-256.png'),
@@ -1907,6 +2224,7 @@ function createWindow() {
     clearTimeout(boundsTimer);
     boundsTimer = setTimeout(() => {
       if (!win || win.isDestroyed()) return;
+      if (draggingWindow) return;   // 拖动中系统可能按新 DPI 改过尺寸，别把那个尺寸写进配置变成永久的
       const [x, y] = win.getPosition();
       const [w, h] = win.getSize();
       saveCfg({ x, y, width: w, height: h });
@@ -1916,10 +2234,59 @@ function createWindow() {
   win.on('resized', saveBounds);
   win.on('closed', () => { win = null; });
   ensureServerThenLoad();
+  // 舞台起来之后再体检（补丁是网页文件，得能取到才查得出来）
+  setTimeout(() => { deployCheck().catch(() => {}); }, 6000);
 }
 
-function stopDrag() { if (dragTimer) { clearInterval(dragTimer); dragTimer = null; } }
+// ---- Alt + 左键拖动：2026-11-07 重写 ----
+// 反馈是「按住 Alt 拖，窗口越拖越大，还在闪」。本机双屏同缩放 @100% 复现不出来，原因在旧写法里：
+//   1. 每帧 setPosition 只改位置、不带尺寸。窗口一跨到另一块不同缩放的屏，Windows/Chromium 会按
+//      新 DPI 重算一遍尺寸（DIP 不变 = 物理像素变大），下一帧我们只挪位置不管尺寸，于是尺寸就被
+//      系统那么留着；来回拖就来回变，看着就是「越拖越大」。重排重绘也跟着闪。
+//   2. 位移是「按下时的绝对坐标」回算的，跨屏时 DIP 坐标系换了基准，算出来的位置会跳。
+//   3. resized 事件把系统改过的尺寸写进了 config.json，于是变大的尺寸变成永久的。
+// 现在的做法：冻结的是**物理像素尺寸**，每帧都带上宽高；跨屏按新缩放比换算回 DIP（屏幕上看起来
+// 一样大）；位移用「上一帧 → 这一帧」的增量；同一块屏内不碰尺寸，所以不会每帧重排。
+let draggingWindow = false;
+let dragState = null;
+function stopDrag() {
+  if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+  const st = dragState;
+  dragState = null;
+  draggingWindow = false;
+  if (!st) return;
+  try {
+    if (win && !win.isDestroyed()) {
+      // 先把冻结的尺寸和最后的目标位置落实一遍，再读真实 bounds 存盘：别把系统按 DPI 改过的尺寸写进配置
+      win.setBounds({ x: Math.round(st.vx), y: Math.round(st.vy), width: st.w, height: st.h }, false);
+      const b = win.getBounds();
+      saveCfg({ x: b.x, y: b.y, width: b.width, height: b.height });
+      plog(`drag-end bounds=${b.x},${b.y} ${b.width}x${b.height}`);
+      win.webContents.send('pet:zones-reset');   // 尺寸真变了就重扫剪影，点击分区才不会漂
+    }
+  } catch {}
+}
 
+ipcMain.on('pet:drag-start', () => {
+  if (!win || win.isDestroyed() || dragTimer) return;
+  let b;
+  try { b = win.getBounds(); } catch { return; }
+  const start = screen.getCursorScreenPoint();
+  const s0 = screen.getDisplayNearestPoint(start).scaleFactor || 1;
+  dragState = createDragState(b, start, s0);
+  plog(`drag-start cursor=${start.x},${start.y} bounds=${b.x},${b.y} ${b.width}x${b.height} scale=${s0}`);
+  draggingWindow = true;
+  dragTimer = setInterval(() => {
+    if (!win || win.isDestroyed() || !dragState) { stopDrag(); return; }
+    const st = dragState;
+    const before = st.w + 'x' + st.h;
+    // 一帧的数学全在 src/drag.js（纯函数、有 scripts/test-pet.mjs 钉着），这儿只管把结果交给窗口
+    const box = dragFrame(st, screen.getCursorScreenPoint(), (x, y) => screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) }).scaleFactor || 1);
+    if (!box) return;
+    if (before !== box.width + 'x' + box.height) plog(`drag-dpi scale=${st.scale} size=${box.width}x${box.height}`);
+    win.setBounds(box, false);
+  }, 16);
+});
 ipcMain.on('pet:ignore', (_e, ignore) => { if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!!ignore, { forward: true }); });
 // 回复输入卡：打开时把窗口拉到前台拿焦点（不聚焦就打不了字）；发送走 sendReply
 ipcMain.on('pet:reply-open', () => {
@@ -1928,16 +2295,6 @@ ipcMain.on('pet:reply-open', () => {
   try { win.focus(); } catch {}
 });
 ipcMain.handle('pet:reply-send', (_e, text) => sendReply(text));
-ipcMain.on('pet:drag-start', () => {
-  if (!win || dragTimer) return;
-  const start = screen.getCursorScreenPoint();
-  const [wx, wy] = win.getPosition();
-  dragTimer = setInterval(() => {
-    if (!win || win.isDestroyed()) return stopDrag();
-    const p = screen.getCursorScreenPoint();
-    win.setPosition(wx + p.x - start.x, wy + p.y - start.y);
-  }, 16);
-});
 ipcMain.on('pet:drag-end', stopDrag);
 ipcMain.on('pet:need-smart', (e) => {
   try {
@@ -2163,11 +2520,13 @@ function setAutostart(on) {
 const SIZE_MIN = 420, SIZE_MAX = 1400;
 function applySize(w, h, save) {
   if (!win || win.isDestroyed()) return null;
-  const W = Math.max(240, Math.min(1600, Math.round(Number(w) || 380)));
-  const H = Math.max(360, Math.min(2000, Math.round(Number(h) || 680)));
   const [ox, oy] = win.getPosition();
   const [ow, oh] = win.getSize();
   const d = screen.getDisplayNearestPoint({ x: ox + Math.round(ow / 2), y: oy + Math.round(oh / 2) }).workArea;
+  // 上限跟着这块屏走：150% 缩放的 1080p 上工作区只有 ~680 DIP 高，滑到 1320 就是「比屏幕还大」，
+  // 然后 Windows 会按 DPI 自己改尺寸，拖动就开始闪。这里直接夹住，别让配置里出现撑破屏幕的尺寸。
+  const W = Math.max(240, Math.min(1600, Math.min(Math.round(Number(w) || 380), Math.round(d.width * 0.96))));
+  const H = Math.max(360, Math.min(2000, Math.min(Math.round(Number(h) || 680), Math.round(d.height * 0.96))));
   win.setSize(W, H);
   let nx = Math.round(ox + ow / 2 - W / 2);
   let ny = Math.round(oy + oh - H);
@@ -2201,6 +2560,241 @@ function createPanel() {
   return panel;
 }
 
+// ---- 窥屏开关（2026-11-05）----
+// 定时器和探针都活在桥插件那边（DSH 侧，61944），壳子只当遥控器：
+// 读一眼状态、发开关、手动试一次。壳子关了也不影响那边自己判断。
+const PEEK_URL = process.env.WHALE_PET_BRIDGE_URL || 'http://127.0.0.1:61944';
+let peekOn = false, peekLive = false, peekNote = '桥插件没在跑';
+// 拨的是「她是什么性子」，不是分钟数。菜单里只显示名字和一句人话。
+let peekPersona = '';
+let peekPersonaLabel = '';
+let peekPersonaNote = '';
+let peekPersonas = [];               // [{ key, label, note }]
+async function peekSync() {
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, { signal: AbortSignal.timeout(1500) });
+    if (!r.ok) throw new Error('peek ' + r.status);   // 旧版插件没有这个端点，别当它是活的
+    const d = await r.json();
+    peekLive = true;
+    peekOn = !!d.on;
+    peekPersona = String(d.persona || '');
+    peekPersonaLabel = String(d.personaLabel || '');
+    peekPersonaNote = String(d.personaNote || '');
+    if (Array.isArray(d.personas)) peekPersonas = d.personas;
+    if (d.lastResult) peekNote = d.lastResult;
+    else if (d.on) peekNote = d.nextInSec > 0 ? '待会儿再看一眼' : '等着排期';
+    else peekNote = '已关';
+  } catch {
+    peekLive = false;
+    peekNote = '桥插件没在跑';
+  }
+}
+// 换窥屏档位。跟浓度一样是热改，落 pet-bridge.json，跨重启记得。
+async function peekSetPersona(key) {
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ persona: key }), signal: AbortSignal.timeout(4000),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || ('peek ' + r.status));
+    // 老版本桥会忽略 persona 并照样回 200，别拿它的话当成功
+    if (!d.persona || d.persona === 'manual') { say('桥插件还是旧的，得重启 DSH', false, 3600); peekSync(); return; }
+    peekPersona = d.persona;
+    peekPersonaLabel = d.label || d.persona;
+    say(`那就${peekPersonaLabel}一点`, false, 2600);
+  } catch {
+    say('这个没拨过去', false, 2400);
+  }
+  peekSync();
+}
+// 档位名要有个兜底：老桥不认这个字段，菜单里就显示个中性词
+const peekPersonaName = () => peekPersonaLabel || ({ clingy: '黏人', gentle: '温和', cool: '冷淡', yandere: '病娇', manual: '手动' })[peekPersona] || '没读到';
+async function peekToggle(on) {
+  peekOn = on;
+  if (tray) { try { tray.setContextMenu(buildMenu()); } catch {} }
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ on }), signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) throw new Error('peek ' + r.status);
+    const d = await r.json();
+    if (d && typeof d.on === 'boolean') peekOn = d.on;
+  } catch {}
+  peekSync();
+}
+// ---- 情绪（2026-11-06）----
+// 账本和决策都在桥插件那边，壳子只读一眼：菜单里显示她现在什么心情、因为什么。
+// 不在这里算任何东西，也不拿它去改表情——表情由会话里的 [emotion:...] 决定，两套别打架。
+let moodLive = false, moodSummary = '', moodReason = '', moodUrge = null, moodMoment = '', moodBackup = false;
+async function moodSync() {
+  try {
+    const r = await fetch(`${PEEK_URL}/mood`, { signal: AbortSignal.timeout(1500) });
+    if (!r.ok) throw new Error('mood ' + r.status);
+    const d = await r.json();
+    if (d.enabled === false) { moodLive = false; moodSummary = '情绪没开'; moodReason = ''; moodUrge = null; moodMoment = ''; moodBackup = false; return; }
+    moodLive = true;
+    moodSummary = d.summary || '';
+    moodUrge = d.urge || null;
+    // 「此刻」的余温：窥屏留下的短时状态，跟账本分开显示。
+    // 它十分钟就没了，所以得单独挂在标签最前面，不能被摘要挤掉。
+    moodMoment = (d.moments && d.moments.top && d.moments.top.tag) || '';
+    // 有备份才显示「恢复上一次账本」——菜单里不留点了没反应的灰项
+    moodBackup = d.backup === true;
+    const snap = d.snapshot || {};
+    moodReason = (snap.reasons && snap.reasons.length) ? snap.reasons[0] : '';
+  } catch {
+    moodLive = false;
+    moodSummary = '桥插件没在跑';
+    moodReason = '';
+    moodUrge = null;
+    moodMoment = '';
+    moodBackup = false;
+  }
+}
+// 立刻问她一句想不想开口。跟定时那条走同一个判断，所以该被间隔挡住的时候照样挡住。
+async function moodIntensity(name) {
+  try {
+    const r = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ intensity: name }), signal: AbortSignal.timeout(4000),
+    });
+    const d = await r.json().catch(() => ({}));
+    say(d.ok ? `好，那就${d.intensity === 'quiet' ? '少说话' : '多说点'}` : '这个没拨过去', false, 2400);
+  } catch {
+    say('桥插件没在跑', false, 2400);
+  }
+  moodSync();
+}
+async function moodUrgeNow() {
+  try {
+    const r = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ urge: true }), signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error('mood ' + r.status);
+    const d = await r.json();
+    const res = (d && d.urgeResult) || {};
+    if (res.spoke) say('好，那我说一句', false, 2000);
+    else if (res.why === 'off') say('主动开口没开', false, 2400);
+    else if (res.why === 'burst-wait') say('刚才那句还没等到回音', false, 2600);
+    else say('这会儿还不想说话', false, 2400);
+  } catch {
+    say('桥插件没在跑', false, 2400);
+  }
+  moodSync();
+}
+// 哄好她：只清负面，亲近和好心情留着。跟「彻底重来」是两件事。
+async function moodCalm() {
+  try {
+    const r = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ calm: true }), signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) throw new Error('mood ' + r.status);
+    const d = await r.json().catch(() => ({}));
+    // 老版本桥不认 calm，会一路 fall through 回 200 但什么也没清。核对一句再报成功。
+    if (d.calm !== true) say('桥插件还是旧的，得重启 DSH', false, 3600);
+    else say('这次就原谅主人了', false, 3600);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  moodSync();
+}
+
+// 彻底重来：整本清空，连亲近度一起。点错了捞不回来，所以先问一句。
+async function moodResetAll() {
+  const { dialog } = require('electron');
+  const r = await dialog.showMessageBox({
+    type: 'warning',
+    buttons: ['取消', '清空'],
+    defaultId: 0,
+    cancelId: 0,
+    title: '清空情绪账本',
+    message: '要把她的情绪账本整个清掉吗',
+    detail: '会连亲近度一起归零，等于重新认识。旧账本会自动存一份，清完可以点「恢复上一次账本」捞回来。',
+  });
+  if (r.response !== 1) return;
+  try {
+    const res = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reset: true }), signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) throw new Error('mood ' + res.status);
+    say('账本清空了，旧的在备份里', false, 3600);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  moodSync();
+}
+
+// 从备份恢复上一份账本。
+async function moodRestore() {
+  const { dialog } = require('electron');
+  const r = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['取消', '恢复'],
+    defaultId: 0,
+    cancelId: 0,
+    title: '恢复上一次账本',
+    message: '要恢复清空前的账本吗',
+    detail: '当前的账本会被覆盖。',
+  });
+  if (r.response !== 1) return;
+  try {
+    const res = await fetch(`${PEEK_URL}/mood`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ restore: true }), signal: AbortSignal.timeout(6000),
+    });
+    const d = await res.json().catch(() => ({}));
+    say(res.ok ? '恢复好了' : ('没恢复成：' + (d.error || res.status)), false, 3600);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  moodSync();
+}
+
+async function peekNow() {
+  say('那我瞄一眼…', false, 2400);
+  try {
+    const r = await fetch(`${PEEK_URL}/peek`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ now: true }), signal: AbortSignal.timeout(20000),
+    });
+    if (!r.ok) throw new Error('peek ' + r.status);
+    const d = await r.json();
+    const res = (d && d.result) || {};
+    const why = res.why || res.skipped || res.error || '不知道为啥';
+    say(res.delivered ? '瞄到了，等下说' : `这轮没瞄成：${why}`, false, 4200);
+  } catch {
+    say('桥插件没在跑', false, 3600);
+  }
+  peekSync();
+}
+
+// 托盘上的两个动态标签：状态写在组名里，菜单里就不用塞灰行占位。
+// 菜单每 3 秒重建一次，所以这两个函数每 3 秒会被调一次，别在这里发请求。
+function moodMenuLabel() {
+  if (!moodLive) return moodSummary || '没读到';
+  const base = moodSummary || '平静';
+  // 平静的时候没什么可解释的，别把「因为被摸了一下」也挂上去
+  const why = (moodReason && !base.startsWith('平静')) ? '·' + moodReason : '';
+  // 此刻的余温挂最前面：它十分钟就没了，排在尾巴上会被截掉。
+  const mom = moodMoment ? moodMoment + '｜' : '';
+  const t = mom + base + why;
+  return t.length > 24 ? t.slice(0, 23) + '…' : t;
+}
+function urgeMenuLabel() {
+  if (!moodUrge || !moodUrge.enabled) return '没开';
+  const name = ({ quiet: '安静', normal: '正常', clingy: '黏人', chatty: '话痨', unbound: '不拦着' })[moodUrge.intensity]
+    || moodUrge.intensity || '正常';
+  // dayCap 为 0 是「不限」，要写出来，不然托盘上看着像没配上限
+  const cap = moodUrge.dayCap === 0 ? '　不限' : (moodUrge.dayCap ? `/${moodUrge.dayCap}` : '');
+  const burst = moodUrge.burst ? `　正说第 ${moodUrge.burst.step + 1} 句` : '';
+  return `${name}　今天 ${moodUrge.today || 0}${cap} 句${burst}`;
+}
+
 function buildMenu() {
   const fitNow = loadCfg().fit === 'full' ? 'full' : 'portrait';
   const bubbleNow = loadCfg().bubblePos || 'bottom';
@@ -2209,15 +2803,31 @@ function buildMenu() {
   return Menu.buildFromTemplate([
     { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return createWindow(); win.isVisible() ? win.hide() : win.show(); } },
     { type: 'separator' },
-    // 顶层只留 5 组：互动 / 外观 / 情绪 / 设置 / 更多。开关类都收进「互动」，别越铺越长。
+    // 2026-11-05 重排：托盘只放「随手拨的开关」，按她怎么干活分组；
+    // 要填值、要读说明、设一次就不动的东西全部收进「设置…」面板（尺寸滑杆 / 路径 / 帧率 / 联动）。
+    // 口径：互动 = 她怎么回应你；说话 = 她怎么开口；外观 = 长相和位置；情绪 = 她现在怎么了。
+    // 2026-11-06 补一条硬规矩：**状态一律写进组名，组里只放能点的**。
+    // 灰行夹在开关中间最难认，一眼看不出哪个能按。
     { label: '互动', submenu: [
+      (() => { const a = affinityInfo(); return { label: `亲密度 Lv.${a.level} · 今天 ${a.today} 下 · 连续 ${a.streak} 天`, enabled: false }; })(),
+      { type: 'separator' },
       { label: '分区互动（点她按部位反应，光标变软点）', type: 'checkbox', checked: interactive, click: (item) => setInteractive(item.checked, true) },
       { label: '模型桥接（点她会叫醒 DSH 会话）', type: 'checkbox', checked: bridgeOn, click: (item) => setBridge(item.checked, true) },
-      { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },
-      { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
       { label: '指针追踪（视线与身体跟着鼠标）', type: 'checkbox', checked: cursorTrack, click: (item) => { cursorTrack = item.checked; saveCfg({ cursorTrack }); lastCursorKey = ''; if (!cursorTrack && win && !win.isDestroyed()) { try { win.webContents.send('pet:cursor', null); } catch {} } } },
       { label: '智能穿透（只在角色身上响应）', type: 'checkbox', checked: smart, click: (item) => { smart = item.checked; saveCfg({ smart }); if (win) win.webContents.send('pet:smart', smart); } },
       { label: '自动情绪（跟随 DSH 回复）', type: 'checkbox', checked: autoMood, click: (item) => { autoMood = item.checked; saveCfg({ autoMood }); autoMood ? startWatcher() : stopWatcher(); } },
+    ] },
+    { label: '说话', submenu: [
+      { label: '阶段气泡（会话进度冒小泡）', type: 'checkbox', checked: tickBubbleOn(), click: (item) => { saveCfg({ tickBubble: item.checked }); syncTickBubble(); } },
+      { label: '气泡回复钮（点她在桌宠里直接回话）', type: 'checkbox', checked: replyBtnOn, click: (item) => setReplyBtn(item.checked, true) },
+      { label: '回复钮常驻（不跟气泡来去，随时能点）', type: 'checkbox', checked: replyAlwaysOn, enabled: replyBtnOn, click: (item) => setReplyAlways(item.checked, true) },
+      { type: 'separator' },
+      { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (peekLive ? '' : ' · 桥没在跑'), type: 'checkbox', checked: peekOn, click: (item) => peekToggle(item.checked) },
+      // 拨的是性子，不是分钟数。名字后面跟一句人话，点之前知道会得到什么。
+      { label: `  她盯得多紧 · ${peekPersonaName()}${peekPersonaNote ? '（' + peekPersonaNote + '）' : ''}`, enabled: peekLive, submenu: peekPersonas.length ? peekPersonas.map((p) => ({
+        label: `${p.label}　${p.note || ''}`.trim(), type: 'radio', checked: peekPersona === p.key, click: () => peekSetPersona(p.key),
+      })) : [{ label: '桥插件还是旧的', enabled: false }] },
+      { label: `  现在瞄一眼试试 · ${peekNote}`, enabled: peekLive, click: () => peekNow() },
     ] },
     { label: '外观', submenu: [
       { label: '全身 / 近景', submenu: [
@@ -2245,13 +2855,29 @@ function buildMenu() {
       { type: 'separator' },
       { label: '置顶显示', type: 'checkbox', checked: alwaysOnTop, click: (item) => { alwaysOnTop = item.checked; saveCfg({ onTop: alwaysOnTop }); if (win) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver'); } },
     ] },
-    { label: '情绪', submenu: [
-      ...[['happy','开心'],['shy','害羞'],['excited','兴奋'],['thinking','思考'],['sleepy','困'],['proud','得意'],['annoyed','嫌弃'],['surprised','吃惊']].map(([e, label]) => ({ label, click: () => sendMood(e, 0.7) })),
+    // 「情绪」这一组只放能动手的：状态写在组名上，菜单里不留灰行。
+    // 原来那八个预设表情触发器撤了——手动逗她那一下没什么用，表情本来就跟着会话走。
+    { label: `情绪 · ${moodMenuLabel()}`, submenu: [
+      // 名字和行为要对上：哄好只清负面。整本清空是另一件事，藏进二级菜单还得过确认。
+      { label: '哄好她（只清不开心的）', enabled: moodLive, click: () => moodCalm() },
+      { label: '账本 ▸', enabled: moodLive, submenu: [
+        { label: '彻底重来（连亲近度一起清，先问你一句）', click: () => moodResetAll() },
+        ...(moodBackup ? [{ label: '恢复上一次账本', click: () => moodRestore() }] : []),
+      ] },
       { type: 'separator' },
-      { label: '随机来一个', click: () => { const ks = Object.keys(MOODS); sendMood(ks[Math.floor(Math.random() * ks.length)], 0.7); } },
+      { label: `主动开口 · ${urgeMenuLabel()}`, enabled: moodLive && !!(moodUrge && moodUrge.enabled), submenu: [
+        { label: '安静（一天四五句）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'quiet', click: () => moodIntensity('quiet') },
+        { label: '正常（默认）', type: 'radio', checked: !moodUrge || !moodUrge.intensity || moodUrge.intensity === 'normal', click: () => moodIntensity('normal') },
+        { label: '黏人', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'clingy', click: () => moodIntensity('clingy') },
+        { label: '话痨', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'chatty', click: () => moodIntensity('chatty') },
+        { type: 'separator' },
+        // 这一档是真不限句数，自己选的自己认：每句都是一轮会话，上下文会越来越长
+        { label: '不拦着（不限句数）', type: 'radio', checked: (moodUrge && moodUrge.intensity) === 'unbound', click: () => moodIntensity('unbound') },
+      ] },
+      { label: '现在让她说一句', enabled: moodLive && !!(moodUrge && moodUrge.enabled), click: () => moodUrgeNow() },
     ] },
     { label: '复原服装（衣服回默认档）', click: () => resetOutfit() },
-    { label: '设置…（尺寸 / 鲸语 / 模型 / 端口）', click: () => createPanel() },
+    { label: '设置…（尺寸滑杆 / 路径 / 帧率 / 联动）', click: () => createPanel() },
     { type: 'separator' },
     { label: '更多', submenu: [
       { label: '重新载入', click: () => loadStage() },
@@ -2306,6 +2932,10 @@ app.whenReady().then(() => {
     if (autoMood) startWatcher();
     setTimeout(() => { if (voiceEnabled()) warmVoices().catch(() => {}); }, 9000);   // 舞台起来后再预合成台词
     setInterval(idleTick, 45000);
+    setTimeout(() => { peekSync().catch(() => {}); }, 2500);
+    setInterval(() => { peekSync().catch(() => {}); }, 20000);
+    setTimeout(() => { moodSync().catch(() => {}); }, 6000);
+    setInterval(() => { moodSync().catch(() => {}); }, 60000);
     // TTS 保活：启动 90 秒后先热一次（省得开工第一句等 27 秒），之后每 15 分钟一次
     setTimeout(() => keepAliveTick(), 90000);
     setInterval(() => keepAliveTick(), KEEPALIVE_MS);
