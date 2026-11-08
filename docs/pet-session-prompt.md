@@ -129,6 +129,37 @@ ctx.tools.restrict({ allow?: string[], deny?: string[] })
 
 三块一起收，固定开销从约 54k 字符降到 5k 出头。
 
+### 瘦身的时候别把压缩一起砍掉
+
+桌宠会话也是正常会话，聊久了上下文一样会长。压缩不是全局服务，它能开起来全靠预设里挂着的那一组插件——砍插件时很容易连带砍掉，砍完的症状是「这条会话永远压不了」。
+
+上游的标准预设里，压缩不是平铺的，外面包着一层 group：
+
+```yaml
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+```
+
+`isolate.compaction` 是关键：它把这个服务隔离在 group 的作用域里，**每个预设各装配一份**，没留这个 group 的会话就彻底没有压缩，而不是退回全局那份。
+
+所以按 id 挑插件时，要留的是 `compaction` 这个 group 的名字，不是 `compaction-basic`。留整个 group 顺带把 `tool-result-pruner` 也带进来，它在压缩触发后修剪过大的工具输出，桌宠只有一个 `mnemon_recall`，留着无害。
+
+两个要知道的点：
+
+- `command-compact` 提供的是 `/compact`，要有聊天输入框才能敲。桌宠会话没有输入框，这个插件挂上去不会有人用，真正起作用的是 `compaction-basic` 的自动压缩。
+- 压缩要额外调一次模型写摘要，那是一次真实请求。桌宠会话平时靠瘦身省下的固定开销，换来的正是长会话被砍短的能力。
+
 改完要重启 DSH，preset 是启动时装配的。
 
 ---
