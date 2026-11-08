@@ -2,6 +2,14 @@
 
 ## 未发布
 
+### 桌宠会话现在能压缩上下文了
+
+- 2026-11-08 下午发现的：桌宠专用会话压不了上下文。查下来不是 DSH 的问题，是桌宠预设的生成规则只留了 `persona` 一个插件块，把压缩一起裁掉了。
+- 压缩在上游是包在 id 为 `compaction` 的 `cordis:group` 里的，`isolate.compaction` 把服务隔离到预设作用域——每个预设各装配一份，没留这个 group 的会话就彻底没有压缩，不会退回全局那份。
+- 现在生成桌宠预设时保留整个 group：`compaction-basic` 负责自动压缩，`command-compact` 提供 `/compact`，`tool-result-pruner` 修剪过大的工具输出。
+- 顺带把判断写进 `docs/pet-session-prompt.md`：按 id 挑插件时该留的是 group 名 `compaction`，不是 `compaction-basic`；桌宠会话没有输入框，`/compact` 用不上，真正起作用的是自动压缩。
+- 代价：压缩时额外调一次模型写摘要，那是一次真实请求。
+
 ### 睡觉不再算作「没人理」
 
 - 2026-11-08 早上提的：晚上睡觉休息的时间也被记进了心情低落。查账本，当天 7:51 一次性记了 `upset +0.699`，正好十四小时——`idle-away` 按墙钟每小时记 0.05，睡八小时照记八小时。
