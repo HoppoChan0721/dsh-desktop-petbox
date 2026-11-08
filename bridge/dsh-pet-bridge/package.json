@@ -1,6 +1,6 @@
 {
   "name": "dsh-pet-bridge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Reverse bridge: desktop pet touch events wake a dedicated DSH session (or the main one) as user messages.",
   "type": "module",
   "main": "lib/index.js",
