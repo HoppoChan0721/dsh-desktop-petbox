@@ -24,12 +24,14 @@ import { fromTouch, fromScene, fromSpeech, fromIdle, sceneFromPeek } from './sig
 import { render, summarize } from './cue.js';
 import { decide as decideUrge, mark as markUrgeOf, interrupt as interruptUrge, summarizeUrge } from './urge.js';
 import { summarizeMoments, clearMoments } from './moment.js';
+import { createInputProbe } from './input-probe.js';
 import { readFileSync } from 'node:fs';
 
 const IDLE_MIN_MINUTES = 120;        // 少于两小时不算冷落
 const IDLE_TICK_MINUTES = 30;        // 每半小时结算一次，别每轮都记
+const ASLEEP_AFTER_MS = 15 * 60 * 1000; // 键鼠十五分钟没动 = 人不在，这段不算冷落
 
-export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, profileFile = '', urgeIntensity = '', log = () => {}, now = () => Date.now() } = {}) {
+export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, profileFile = '', urgeIntensity = '', log = () => {}, now = () => Date.now(), probe = null } = {}) {
   // 外置调参：不改代码就能换参数。坏文件退回默认——
   // 调参不该有让桥起不来的能力，这是公共插件的底线。
   let profile = baseProfile;
@@ -63,18 +65,49 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
   const store = createStore({ file, profile, log });
   let state = store.open(now());
 
+  // 人在不在：只有 Windows 的输入空闲能分清「睡着了」和「坐着不理她」。
+  // 采不到就如实返回 -1，下面按「不知道」处理——宁可少记一笔委屈，也别凭空生气。
+  const inputProbe = probe || createInputProbe({ log });
+  if (!probe && typeof inputProbe.start === 'function') inputProbe.start();
+
+  /** 把「键鼠一直没动」的时段累进 state.asleepMs。只在拿到新的采样点时推进。 */
+  function sampleAsleep() {
+    const snap = (inputProbe && typeof inputProbe.current === 'function') ? inputProbe.current() : null;
+    if (!snap || !snap.sampledAt || !(snap.idleMs >= 0)) return;
+    const prev = state.lastProbeSampleAt || 0;
+    if (snap.sampledAt <= prev) return;
+    if (snap.idleMs >= ASLEEP_AFTER_MS) {
+      const delta = prev ? Math.max(0, snap.sampledAt - prev) : 0;
+      // 窗口比采样间隔长，说明至少这一整段都没人碰键鼠。
+      state.asleepMs = (state.asleepMs || 0) + Math.min(delta, snap.idleMs);
+    }
+    state.lastProbeSampleAt = snap.sampledAt;
+  }
+
   /** 把「一直没人理」换算成 idle 信号。间隔多久都按实际小时数补，重启也不丢。 */
   function settleIdle(at) {
+    sampleAsleep();
     const last = state.lastInteractionAt || 0;
     if (!last) return;
     const idleMin = (at - last) / 60000;
     if (idleMin < IDLE_MIN_MINUTES) return;
 
+    // 睡觉那段不算冷落。账本记的是「人坐在前面却没人理」，不是「过了多少小时」。
+    const asleepMin = Math.min(idleMin, (state.asleepMs || 0) / 60000);
+    const activeIdleMin = Math.max(0, idleMin - asleepMin);
+
     const lastCount = state.lastIdleCountAt || (last + IDLE_MIN_MINUTES * 60000);
     const gapMin = (at - lastCount) / 60000;
     if (gapMin < IDLE_TICK_MINUTES) return;
 
-    state = ingest(state, fromIdle(idleMin, at, (gapMin / 60)), profile, at);
+    // 一整夜睡过去，醒来活跃时长可能还不够两小时，那就先不记这笔。
+    if (activeIdleMin < IDLE_MIN_MINUTES) {
+      state.lastIdleCountAt = at;
+      return;
+    }
+
+    const share = idleMin > 0 ? activeIdleMin / idleMin : 0;
+    state = ingest(state, fromIdle(activeIdleMin, at, (gapMin / 60) * share), profile, at);
     state.lastIdleCountAt = at;
   }
 
@@ -92,6 +125,8 @@ export function createMood({ file = '', profile: baseProfile = DEFAULT_PROFILE, 
     // 已经在生气的人被摸一下还没消气，是很正常的事；继续念第三句才是程序。
     if (signal && (signal.kind === 'touch' || signal.kind === 'speech')) {
       state = interruptUrge(state);
+      // 人来了，从这一刻重新数「多久没人理」，睡觉的账一笔勾销。
+      state.asleepMs = 0;
     }
     // 真的开口说话，比什么都算数：之前「瞄到一眼」留下的余温当场翻篇。
     // 触摸不算——摸一下不代表他想聊，那点在意留着就留着。
