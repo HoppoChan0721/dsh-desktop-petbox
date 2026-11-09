@@ -42,7 +42,7 @@
 
 | 依赖 | 说明 |
 |---|---|
-| **鲸语 Jingyu Live2D Agent** | 舞台和动作编译器。本外壳适配 `1.4.0-beta.2`，需要 `web/app.mjs`、`web/engine.mjs` |
+| **鲸语 Jingyu Live2D Agent** | 舞台和动作编译器。本外壳适配 `1.4.0-beta.2`，需要 `web/app.mjs`、`web/engine.mjs`。**1.5 不适配，原因见「已知限制」** |
 | **Live2D 模型** | 你自己的 `.model3.json` + moc3 + 贴图 + 物理。**本仓库不含任何模型** |
 | **Live2D Cubism Core** | 从官方 SDK 获取 `live2dcubismcore.min.js`，按 Live2D 许可放进鲸语的 `web/vendor/`。**本仓库不含** |
 | **Node.js ≥ 20** | 跑 Electron 外壳和 CLI |
@@ -335,6 +335,7 @@ Copy-Item -Recurse bridge/dsh-pet-bridge "$env:DSH_HOME/profiles/web/node_module
 ## 已知限制
 
 - 只适配 **鲸语 1.4.0-beta.2** 的 `web/app.mjs` / `web/engine.mjs` 结构
+- **鲸语 1.5 暂不适配，2026-11-09 实测过并主动放弃**：1.5 自带 `/pet.html` 透明舞台和它自己的桌宠，看起来像是能省掉补丁，但那一页不对外暴露任何 JS 句柄；从外部拦 `Live2DModel.prototype.update` 拿到实例、直接写 `coreModel` 参数，会被它的 motion 引擎每帧覆盖，指针驱动的视线、侧身、前探全丢，用起来明显不如现在的补丁模式。补丁模式的 `stageMode` / `preserveDrawingBuffer` 那几处锚点在 1.5 里也都变了，硬升要重写外壳这一层。要试的话把鲸语装在另一个端口，别动现役那份
 - 只在 **Windows**（双 2560×1440、缩放 100%）实测过；透明窗口用 `WS_EX_LAYERED`，全屏独占游戏会盖住她
 - 跨屏拖动 / 高 DPI（125% / 150% / 混合缩放）的逻辑有单测钉着（`npm test`），但**没有在真机上验过**：那台机器上如果有问题，请把 `npm run doctor` 的输出和 `data/pet.log` 里 `drag-` 开头的行发过来
 - 侧身弯腰受模型参数限制：能改 `AngleX / AngleZ / PositionX`，真正折腰要看模型有没有可写的髋/腰参数
