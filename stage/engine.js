@@ -60,6 +60,10 @@
       eyeL: ['ParamEyeLOpen', 'ParamEyeOpen'],
       eyeR: ['ParamEyeROpen', 'ParamEyeOpen'],
       mouth: ['ParamMouthOpenY'],
+      lean: ['LeanInput'],
+      hipX: ['HipAngleX'],
+      posY: ['PositionY'],
+      bodyY2: ['ParamBodyAngleY2'],
     };
     const P = {};
     for (const k of Object.keys(IDS)) P[k] = pick(IDS[k]);
@@ -89,6 +93,14 @@
       ease(P.posX, x * PTR.posX, dt);
       ease(P.ballX, x * 0.8, dt);
       ease(P.ballY, y * 0.6, dt);
+
+      // 俯身：指针在她下方时身子前倾探下去，在上方时轻轻后仰一点
+      const down = Math.max(0, -y);
+      const up = Math.max(0, y);
+      ease(P.lean, -30 * down + 10 * up, dt);
+      ease(P.hipX, -10 * down, dt);
+      ease(P.posY, -5 * down + 2 * up, dt);
+      ease(P.bodyY2, -8 * down, dt);
 
       // 呼吸：慢慢起伏
       const br = 0.5 - 0.5 * Math.cos((t / BREATH_CYCLE) * Math.PI * 2);
