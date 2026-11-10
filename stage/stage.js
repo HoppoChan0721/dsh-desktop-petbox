@@ -1,4 +1,4 @@
-﻿// 自建舞台的渲染层。目标很小：把模型正确画在透明窗里，能眨眼、能待机、能被外部拧参数。
+// 自建舞台的渲染层。目标很小：把模型正确画在透明窗里，能眨眼、能待机、能被外部拧参数。
 // 刻意不做动作编排——那是下一步的事，先把画面站住。
 (function () {
   const err = (msg) => { const el = document.getElementById('err'); if (el) el.textContent = String(msg || ''); };
@@ -66,6 +66,19 @@
     const fitInfo = fit(model);
     window.__stageModel = model;
     window.__stageCore = model.internalModel && model.internalModel.coreModel;
+    window.__petEngine = window.createPetEngine(model);
+
+    // 指针和指令都来自主进程：桌宠大半时间穿透，页面收不到 mousemove
+    if (window.petStage) {
+      window.petStage.onCursor((c) => { if (!window.__freeze) window.__petEngine.pointer(c); });
+      window.petStage.onCommand((cmd) => {
+        if (!cmd || !cmd.type) return;
+        if (cmd.type === 'say') window.__petEngine.say(cmd.mouth);
+        else if (cmd.type === 'emotion') window.__petEngine.emotion(cmd.name);
+        else if (cmd.type === 'motion') window.__petEngine.motion(cmd.name);
+        else if (cmd.type === 'pointer') window.__petEngine.pointer(cmd.value || null);
+      });
+    }
 
     const groups = (() => {
       try {

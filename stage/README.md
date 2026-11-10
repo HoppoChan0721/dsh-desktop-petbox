@@ -1,4 +1,4 @@
-# 自建轻量舞台（stage/）
+﻿# 自建轻量舞台（stage/）
 
 我们自己的 Live2D 舞台，**跟 `src/` 那套桌宠外壳完全隔离**：它有自己的入口、自己的页面，不 import 外壳任何代码，跑起来也不占 61942 / 61943 / 9333。现役桌宠照旧跑原来的入口，两边互不影响。
 
@@ -6,7 +6,8 @@
 
 ## 现在能做什么
 
-- 透明无边框窗口，把模型正确画出来，`pet://` 自定义协议直接读磁盘，**不需要 Python，也不需要任何端口**
+- 指针跟随：头和上身按 ParamAngleX/Y/Z、ParamBodyAngleZ/X、ParamBodyAngleY 叠偏移，带平滑；指针在窗口外也跟
+- 口型与表情：engine.say(0..1) 开合嘴，engine.emotion('脸红') 切表情，动作走 engine.motion('HandRaise')`n- 透明无边框窗口，把模型正确画出来，`pet://` 自定义协议直接读磁盘，**不需要 Python，也不需要任何端口**
 - 自动播模型自带的表情与 Idle 待机动作
 - canvas 开了 `preserveDrawingBuffer`，页内可以直接读 alpha，穿透和点触分区不必再借补丁
 
@@ -30,6 +31,8 @@ node_modules\electron\dist\electron.exe stage\main.js `
 | `main.js` | Electron 入口：注册 `pet://` 协议、开窗口、选模型与 Core |
 | `index.html` | 页面骨架，先加载 Core，再 pixi，再 cubism4，最后 `stage.js` |
 | `stage.js` | 渲染层：建 PIXI 应用、加载模型、按窗口大小摆好 |
+| `engine.js` | 动作引擎：指针跟随、口型、表情、动作。参数真名是 `ParamAngleX` 这类，别写鲸语那套 `AngleX` |
+| `preload.js` | 把主进程的指针和指令送进页面 |
 | `vendor/` | `pixi 6.5.10` 与 `pixi-live2d-display 0.4.0`，都是 MIT，随仓库走 |
 
 **Cubism Core 不进仓库**，跟现在 README 里那条一致，谁用谁自备。

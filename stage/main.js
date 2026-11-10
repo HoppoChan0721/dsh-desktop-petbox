@@ -3,7 +3,7 @@
 //
 // 跑法：node_modules\electron\dist\electron.exe stage\main.js --model="模型目录" [--core="core 文件"] [--cdp=9340]
 //   --core 不给就依次找：环境变量 WHALE_CUBISM_CORE、鲸语 1.4 部署里的 vendor、模型目录
-const { app, BrowserWindow, protocol, net } = require('electron');
+const { app, BrowserWindow, protocol, net, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
@@ -29,6 +29,10 @@ protocol.registerSchemesAsPrivileged([{
   scheme: 'pet',
   privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
 }]);
+
+// 透明置顶窗在 Windows 上会被 Chromium 判成「被别人挡住」而暂停渲染，拖动时还会在两态之间翻，
+// 表现出来就是模型一闪一闪。桌宠永远置顶，这套遮挡计算纯属误判，直接关掉。
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 // 调试口必须在 app ready 之前挂，晚一步 Chromium 就不认
 const cdpPort = arg('cdp', process.env.WHALE_STAGE_CDP || '');
@@ -65,11 +69,32 @@ app.whenReady().then(async () => {
     hasShadow: false,
     resizable: true,
     webPreferences: {
+      preload: path.join(STAGE_DIR, 'preload.js'),
       contextIsolation: true,
       sandbox: false,
       backgroundThrottling: false,
     },
   });
+
+  // 指针：主进程每 33ms 读一次全局光标，归一化后送进页面。页面拿到的永远是真实位置，
+  // 不依赖鼠标事件——桌宠大部分时间是穿透的，页面根本收不到 mousemove。
+  const cursorTimer = setInterval(() => {
+    if (!win || win.isDestroyed()) return;
+    const p = screen.getCursorScreenPoint();
+    const [wx, wy] = win.getPosition();
+    const [ww, wh] = win.getSize();
+    const cx = (p.x - wx) / Math.max(1, ww);
+    const cy = (p.y - wy) / Math.max(1, wh);
+    const x = Math.max(-1, Math.min(1, cx * 2 - 1));
+    const y = Math.max(-1, Math.min(1, 1 - cy * 2));
+    try {
+      win.webContents.send('stage:cursor', {
+        x: +x.toFixed(3), y: +y.toFixed(3),
+        inside: cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1,
+      });
+    } catch (e) {}
+  }, 33);
+  win.on('closed', () => clearInterval(cursorTimer));
 
   const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
   console.log(JSON.stringify({ modelDir: MODEL_DIR, modelFile: modelFile ? '(found)' : 'MISSING', core: CORE_FILE ? '(found)' : 'MISSING' }));
