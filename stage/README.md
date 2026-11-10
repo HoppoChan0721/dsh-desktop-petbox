@@ -27,20 +27,36 @@ node_modules\electron\dist\electron.exe stage\main.js `
 - `--core` 不给就依次找 `WHALE_CUBISM_CORE`、鲸语 1.4 部署的 `web/vendor/`、模型目录本身
 - `--cdp` 给个端口就能用 CDP 挂调试
 
+## 怎么说话（控制口）
+
+`main.js` 在 **127.0.0.1:61945** 开了个只监听本机的 HTTP 口，`--port=` 可改。避开现役桌宠的 61942/61943/9333 和 dsh-pet-bridge 的 61944。
+
+```powershell
+node stage\cli.mjs state
+node stage\cli.mjs say "主人回来啦" --emotion 脸红 --motion HandRaise
+node stage\cli.mjs motion FingerShow
+node stage\cli.mjs emotion 眯眼
+node stage\cli.mjs pointer 0 -1 --hold     # 冻结成固定指针位置
+node stage\cli.mjs pointer reset
+```
+
+HTTP 直接调也行：`/state`、`/say`、`/motion`、`/emotion`、`/pointer`。
+
 ## 目录
 
 | 文件 | 作用 |
 |---|---|
-| `main.js` | Electron 入口：注册 `pet://` 协议、开窗口、选模型与 Core、送指针 |
+| `main.js` | Electron 入口：注册 `pet://` 协议、开窗口、选模型与 Core、送指针、开控制口 |
 | `index.html` | 页面骨架，先加载 Core，再 pixi，再 cubism4，最后 `stage.js` |
 | `stage.js` | 渲染层：建 PIXI 应用、加载模型、把驱动挂到更新链上 |
 | `engine.js` | 驱动层：待机、指针、眨眼、口型、动作、参数写入 |
 | `preload.js` | 把主进程的指针和指令送进页面 |
+| `cli.mjs` | 命令行：走控制口给她发指令 |
 | `vendor/` | `pixi 6.5.10` 与 `pixi-live2d-display 0.4.0`，都是 MIT，随仓库走 |
 
 **Cubism Core 不进仓库**，跟现在 README 里那条一致，谁用谁自备。
 
-## 两个必须记住的坑（都吃过）
+## 三个必须记住的坑（都吃过）
 
 **一、参数名用模型自己的语义名。**
 这个模型的驱动参数是 `AngleX / AngleY / AngleZ / LeanInput / PositionX`，不是 Cubism 标准的 `ParamAngleX`。
@@ -50,6 +66,9 @@ node_modules\electron\dist\electron.exe stage\main.js `
 pixi-live2d-display 的顺序是：动作 → `saveParameters()` → 表情/眨眼/焦点 → `updateNaturalMovements()` → 物理 → `pose` → `o.update()` → **`loadParameters()`**。
 最后一脚把所有参数还原成「动作算完时保存的那份」，所以在中间写进去的东西，几何虽然用上了，参数表里却看不到，下一帧也被抹平。
 现在两个时机各写一次：`updateNaturalMovements` 里算并写（物理这一帧就吃到），`update` 回来后再补写一遍（值才留得住）。
+
+**三、`key1..key13` 是表情专用通道，驱动层不许碰。**
+这套模型所有表情都写这组参数（`脸红` 就是 `key7 += 1`）。驱动层一旦把它们纳入管理，每帧写回默认值 0，等于每帧把表情擦掉一次——表现就是「切了表情但看不出来」。表情交给模型自己的表情管理器，驱动层只管动作和身体。
 
 ## 下一步
 

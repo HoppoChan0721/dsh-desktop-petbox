@@ -135,9 +135,8 @@
       this.hold = new Set(['Clothes1', 'Clothes2', 'Clothes3', 'Clothes4', 'Clothes5', 'Clothes6', 'Clothes7', 'Clothes8']);
 
       this.register(SEMANTIC);
-      const keys = [];
-      for (let i = 1; i <= 13; i++) keys.push('key' + i);
-      this.register(keys);
+      // key1..key13 是表情专用通道，交给模型自己的表情管理器，驱动层绝对不许碰。
+      // 碰过一次：每帧写回默认值 0，等于每帧把表情擦掉，脸红看不出来。
 
       this.idleMotion = null;
       this.ready = this.loadIdle().catch(() => null);

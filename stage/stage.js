@@ -124,7 +124,7 @@
         if (cmd.type === 'motion') engine.motion(cmd.name).catch((e) => err('动作失败：' + ((e && e.message) || e)));
         else if (cmd.type === 'emotion') engine.emotion(cmd.name);
         else if (cmd.type === 'talk' || cmd.type === 'say') engine.talk(cmd.ms);
-        else if (cmd.type === 'pointer') engine.pointer(cmd.value || null);
+        else if (cmd.type === 'pointer') { window.__lockPointer = !!cmd.lock; engine.pointer(cmd.value || null); }
         else if (cmd.type === 'stop') engine.stopMotion();
       });
     }

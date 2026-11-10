@@ -1,11 +1,12 @@
 // 自建轻量舞台的独立入口。刻意跟 src/main.js 完全分开：
 // 现役桌宠照旧跑它自己的入口，这里只负责「我们自己的舞台」能不能站起来。
 //
-// 跑法：node_modules\electron\dist\electron.exe stage\main.js --model="模型目录" [--core="core 文件"] [--cdp=9340]
+// 跑法：node_modules\electron\dist\electron.exe stage\main.js --model="模型目录" [--core="core 文件"] [--cdp=9340] [--port=61945]
 //   --core 不给就依次找：环境变量 WHALE_CUBISM_CORE、鲸语 1.4 部署里的 vendor、模型目录
 const { app, BrowserWindow, protocol, net, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const http = require('node:http');
 const { pathToFileURL } = require('node:url');
 
 const arg = (name, dflt = '') => {
@@ -99,6 +100,74 @@ app.whenReady().then(async () => {
   const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
   console.log(JSON.stringify({ modelDir: MODEL_DIR, modelFile: modelFile ? '(found)' : 'MISSING', core: CORE_FILE ? '(found)' : 'MISSING' }));
   await win.loadURL('pet://stage/index.html?model=' + encodeURIComponent(modelFile));
+
+  // ---- 控制口 ---------------------------------------------------------------
+  // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
+  // 端口刻意避开现役桌宠那套 61942/61943/9333 和 dsh-pet-bridge 的 61944。
+  const PORT = Number(arg('port', process.env.WHALE_STAGE_PORT || '61945'));
+  const push = (cmd) => {
+    try { if (win && !win.isDestroyed()) win.webContents.send('stage:command', cmd); return true; } catch (e) { return false; }
+  };
+  const json = (res, code, body) => {
+    const text = JSON.stringify(body);
+    res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
+    res.end(text);
+  };
+
+  const routes = {
+    '/state': async () => {
+      const s = await win.webContents.executeJavaScript('window.__petEngine ? window.__petEngine.state() : null');
+      const info = await win.webContents.executeJavaScript('window.__stageInfo || null');
+      return { ...s, model: MODEL_DIR, motions: info && info.motions, expressions: info && info.expressions };
+    },
+    '/say': (q) => {
+      const text = q.get('text') || '';
+      const ms = Number(q.get('ms')) || 1200;
+      push({ type: 'talk', ms, text });
+      const emo = q.get('emotion');
+      if (emo) push({ type: 'emotion', name: emo });
+      const mo = q.get('motion');
+      if (mo) push({ type: 'motion', name: mo });
+      return { pushed: true, text, ms, emotion: emo || null, motion: mo || null };
+    },
+    '/motion': (q) => {
+      const name = q.get('name') || '';
+      if (!name) throw new Error('缺 name');
+      push({ type: 'motion', name });
+      return { pushed: true, name };
+    },
+    '/emotion': (q) => {
+      const name = q.get('name') || '';
+      if (!name) throw new Error('缺 name');
+      push({ type: 'emotion', name });
+      return { pushed: true, name };
+    },
+    '/pointer': (q) => {
+      if (q.get('reset') !== null) {
+        push({ type: 'pointer', value: null, lock: false });
+        return { pushed: true, lock: false };
+      }
+      const x = Number(q.get('x') || 0);
+      const y = Number(q.get('y') || 0);
+      const lock = q.get('hold') === '1';
+      push({ type: 'pointer', value: { x, y }, lock });
+      return { pushed: true, x, y, lock };
+    },
+  };
+
+  const server = http.createServer((req, res) => {
+    let url;
+    try { url = new URL(req.url, 'http://127.0.0.1'); } catch (e) { return json(res, 400, { error: 'bad url' }); }
+    const handler = routes[url.pathname];
+    if (!handler) return json(res, 404, { error: 'unknown route', routes: Object.keys(routes) });
+    Promise.resolve()
+      .then(() => handler(url.searchParams, req))
+      .then((body) => json(res, 200, { ok: true, ...body }))
+      .catch((e) => json(res, 500, { ok: false, error: (e && e.message) || String(e) }));
+  });
+  server.on('error', (e) => console.log(JSON.stringify({ controlPort: PORT, error: (e && e.message) || String(e) })));
+  server.listen(PORT, '127.0.0.1', () => console.log(JSON.stringify({ controlPort: PORT, listening: true })));
+  app.on('will-quit', () => { try { server.close(); } catch (e) {} });
 });
 
 app.on('window-all-closed', () => app.quit());
