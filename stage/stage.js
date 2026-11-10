@@ -1,4 +1,4 @@
-// 自建舞台的渲染层。目标很小：把模型正确画在透明窗里，能眨眼、能待机、能被外部拧参数。
+﻿// 自建舞台的渲染层。目标很小：把模型正确画在透明窗里，能眨眼、能待机、能被外部拧参数。
 // 刻意不做动作编排——那是下一步的事，先把画面站住。
 (function () {
   const err = (msg) => { const el = document.getElementById('err'); if (el) el.textContent = String(msg || ''); };
@@ -36,10 +36,13 @@
 
   (async () => {
     if (!modelFile) { err('没有指定模型文件'); return; }
+    // 必须先把模型的时钟接到 PIXI 的 ticker 上：不接的话 update 收到的 dt 一直是 0，
+    // 动作时间不前进、呼吸不走、只有物理在动，看上去就像一张会甩尾巴的静态图。
+    PIXI.live2d.Live2DModel.registerTicker(PIXI.Ticker);
     const model = await PIXI.live2d.Live2DModel.from(modelUrl, {
       autoInteract: false,
       autoUpdate: true,
-      idleMotionGroup: 'Idle',
+      idleMotionGroup: 'idle',
     });
     app.stage.addChild(model);
 
