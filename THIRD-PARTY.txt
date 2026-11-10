@@ -1,4 +1,4 @@
-whale-pet-shell · 第三方组件与素材声明
+﻿whale-pet-shell · 第三方组件与素材声明
 =====================================
 
 本仓库只包含「桌宠外壳」本身的代码（窗口、托盘、控制面板、指针追踪、玩法层、可选联动）。
@@ -21,7 +21,9 @@ Live2D Cubism Core           Live2D 专有软件许可（不随任何仓库分�
 自建舞台（stage/）实际打包的两个库
 --------------------------------
 stage/vendor/pixi.min.js      PixiJS 6.5.10                 MIT   https://github.com/pixijs/pixijs
-stage/vendor/cubism4.min.js   pixi-live2d-display 0.4.0     MIT   https://github.com/guansss/pixi-live2d-display
+stage/vendor/cubism4.colors.min.js  pixi-live2d-display 0.4.0 的改造构建，取自鲸语 web/vendor，MIT
+  https://github.com/guansss/pixi-live2d-display  —— 用官方原版构建时模型鼻梁会出现黑色方块，
+  换这份改造构建就正常，所以跟鲸语保持一致；上游改造内容未公开说明，升级时留意
   两者均为 MIT，可随仓库分发。Cubism Core 仍不打包，由使用者自备，运行时经 pet://stage/core/ 送进页面。
 
 第三方项目

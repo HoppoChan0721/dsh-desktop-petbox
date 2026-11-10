@@ -8,10 +8,13 @@
   const modelFile = new URLSearchParams(location.search).get('model') || '';
   const modelUrl = 'pet://stage/model/' + encodeURIComponent(modelFile);
 
+  const qs = new URLSearchParams(location.search);
+  const RES = Number(qs.get('res')) > 0 ? Number(qs.get('res')) : Math.min(2, window.devicePixelRatio || 1);
+  const AA = qs.get('aa') !== '0';
   const app = new PIXI.Application({
     backgroundAlpha: 0,
-    antialias: true,
-    resolution: Math.min(2, window.devicePixelRatio || 1),
+    antialias: AA,
+    resolution: RES,
     autoDensity: true,
     resizeTo: window,
     // 自己的页面，直接开：穿透判定要读 canvas 的 alpha，开了就不用像别人那样绕
@@ -39,6 +42,27 @@
       idleMotionGroup: 'Idle',
     });
     app.stage.addChild(model);
+
+    // 遮罩缓冲默认 256×256，还要被几十个遮罩上下文瓜分，放大到整屏后边缘就糊成毛边，
+    // 表现是鼻尖、蓝色叠加层这些被裁出来的地方发黑发脏。提到 2048 边缘就干净。
+    (function boostClippingMask() {
+      let tries = 0;
+      const step = () => {
+        const cm = model.internalModel && model.internalModel.renderer && model.internalModel.renderer._clippingManager;
+        if (cm && typeof cm.setClippingMaskBufferSize === 'function') {
+          if (cm.getClippingMaskBufferSize() < 2048) {
+            cm.setClippingMaskBufferSize(2048);
+            cm._maskTexture = null;
+            cm._colorBuffer = null;
+            cm._currentFrameNo = 0;
+          }
+          return;
+        }
+        if (tries++ < 180) requestAnimationFrame(step);
+      };
+      step();
+    })();
+
     const fitInfo = fit(model);
     window.__stageModel = model;
     window.__stageCore = model.internalModel && model.internalModel.coreModel;
