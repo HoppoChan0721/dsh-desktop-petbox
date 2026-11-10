@@ -27,6 +27,17 @@ node_modules\electron\dist\electron.exe stage\main.js `
 - `--core` 不给就依次找 `WHALE_CUBISM_CORE`、鲸语 1.4 部署的 `web/vendor/`、模型目录本身
 - `--cdp` 给个端口就能用 CDP 挂调试
 
+## 怎么跟她玩
+
+| 动作 | 效果 |
+|---|---|
+| 鼠标移到她身上 | 窗口吃鼠标；移到透明处就穿透到底下，不挡主人点东西 |
+| 左键点她 | 按点到的部位反应：头/发 → 眯眼摇头，胸/腰 → 脸红点头，腿 → ＞＜ 点头 |
+| **Alt + 左键拖动** | 拖到桌面任何位置（跨屏、高 DPI 都按物理像素冻结尺寸） |
+| **Ctrl + 滚轮** | 微调大小，脚不动，只有个头变高 |
+
+分区不写死数值：启动后扫一遍画布 alpha 量出剪影，脖子用「头下面最窄的那一行」自动找，其余部位按脖子到下摆的比例切。窗口拉大、缩放、换装都不用重新标定。`node stage\cli.mjs state` 之外还有 `GET /zones` 和 `GET /taps` 可以看当前标定和最近的点触记录。
+
 ## 怎么说话（控制口）
 
 `main.js` 在 **127.0.0.1:61945** 开了个只监听本机的 HTTP 口，`--port=` 可改。避开现役桌宠的 61942/61943/9333 和 dsh-pet-bridge 的 61944。
@@ -50,7 +61,9 @@ HTTP 直接调也行：`/state`、`/say`、`/motion`、`/emotion`、`/pointer`�
 | `index.html` | 页面骨架，先加载 Core，再 pixi，再 cubism4，最后 `stage.js` |
 | `stage.js` | 渲染层：建 PIXI 应用、加载模型、把驱动挂到更新链上 |
 | `engine.js` | 驱动层：待机、指针、眨眼、口型、动作、参数写入 |
-| `preload.js` | 把主进程的指针和指令送进页面 |
+| `interact.js` | 交互层：alpha 判定穿透、剪影标定、分区点触、拖动与缩放 |
+| `drag.js` | Alt 拖动的一帧数学，跨屏 / 高 DPI 冻结物理像素尺寸 |
+| `preload.js` | 主进程与页面之间的桥 |
 | `cli.mjs` | 命令行：走控制口给她发指令 |
 | `vendor/` | `pixi 6.5.10` 与 `pixi-live2d-display 0.4.0`，都是 MIT，随仓库走 |
 

@@ -126,6 +126,7 @@
       this.mouth = 0;
       this.mouthTarget = 0;
       this.mouthUntil = 0;
+      this.impulse = null;
 
       this.blinkNext = 2.0;
       this.blinkFrom = -1;
@@ -237,6 +238,24 @@
       return true;
     }
 
+    // 一次性的小幅冲量，用一个衰减正弦推某个参数再放掉。
+    // 点头、摇头、被戳一下的那种「缩」都是它，不需要额外的动作文件。
+    react(id, amp, ms, cycles) {
+      if (!this.info.has(id)) return false;
+      this.impulse = {
+        id,
+        amp,
+        dur: Math.max(0.08, (num(ms, 0) || 430) / 1000),
+        t0: this.clock,
+        cycles: num(cycles, 0) || 1,
+      };
+      return true;
+    }
+
+    nod() { return this.react('AngleY', -9, 430, 1); }
+
+    shake() { return this.react('AngleX', 8, 460, 1.5); }
+
     emotion(name) {
       try {
         if (this.model && typeof this.model.expression === 'function') {
@@ -273,11 +292,23 @@
       const ctx = { target, set: (id, v) => { if (Number.isFinite(v)) target.set(id, v); } };
       this.applyIdle(ctx);
       this.applyPointer(ctx);
+      this.applyImpulse(ctx, target);
       this.applyGaze(ctx);
       this.applyMouth(ctx);
       this.applyMotion(ctx, target);
       this.applyBlink(ctx, target);
       return target;
+    }
+
+    // 一次性冲量：叠在指针之上，动作层再叠在它之上（演动作时动作说了算）
+    applyImpulse({ set }, target) {
+      const im = this.impulse;
+      if (!im) return;
+      const t = (this.clock - im.t0) / im.dur;
+      if (t >= 1) { this.impulse = null; return; }
+      if (!this.info.has(im.id)) { this.impulse = null; return; }
+      const v = im.amp * Math.sin(t * Math.PI * im.cycles) * (1 - t);
+      set(im.id, num(target.get(im.id), 0) + v);
     }
 
     applyIdle({ set }) {

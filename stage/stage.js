@@ -101,9 +101,12 @@
     app.stage.addChild(model);
     const fitInfo = fit(model);
 
+    const interaction = window.createStageInteraction({ app, model, engine });
+
     window.__stageModel = model;
     window.__stageCore = internal.coreModel;
     window.__petEngine = engine;
+    window.__stageInteraction = interaction;
     window.__stageInspect = (ids) => {
       const out = {};
       const core = internal.coreModel;
@@ -126,6 +129,8 @@
         else if (cmd.type === 'talk' || cmd.type === 'say') engine.talk(cmd.ms);
         else if (cmd.type === 'pointer') { window.__lockPointer = !!cmd.lock; engine.pointer(cmd.value || null); }
         else if (cmd.type === 'stop') engine.stopMotion();
+        else if (cmd.type === 'tap') engine.nod();
+        else if (cmd.type === 'interactive') interaction.setInteractive(cmd.value !== false);
       });
     }
 

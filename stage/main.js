@@ -3,11 +3,12 @@
 //
 // 跑法：node_modules\electron\dist\electron.exe stage\main.js --model="模型目录" [--core="core 文件"] [--cdp=9340] [--port=61945]
 //   --core 不给就依次找：环境变量 WHALE_CUBISM_CORE、鲸语 1.4 部署里的 vendor、模型目录
-const { app, BrowserWindow, protocol, net, screen } = require('electron');
+const { app, BrowserWindow, protocol, net, screen, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
 const { pathToFileURL } = require('node:url');
+const drag = require('./drag');
 
 const arg = (name, dflt = '') => {
   const hit = process.argv.find((a) => a.startsWith('--' + name + '='));
@@ -97,6 +98,55 @@ app.whenReady().then(async () => {
   }, 33);
   win.on('closed', () => clearInterval(cursorTimer));
 
+  // ---- 交互：穿透、拖动、滚轮缩放、点她 --------------------------------------
+  // forward: true 是关键——窗口不吃鼠标时仍然把 mousemove 送进页面，否则页面永远不知道该「醒过来」，
+  // 一旦穿透就再也点不到她。
+  ipcMain.on('stage:ignore', (_e, ignore) => {
+    if (!win || win.isDestroyed()) return;
+    win.setIgnoreMouseEvents(!!ignore, { forward: true });
+  });
+
+  let dragState = null;
+  let dragTimer = null;
+  const scaleAt = (x, y) => {
+    try { return screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) }).scaleFactor || 1; } catch (e) { return 1; }
+  };
+  const stopDrag = () => {
+    if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+    dragState = null;
+  };
+  ipcMain.on('stage:drag-start', () => {
+    if (!win || win.isDestroyed()) return;
+    const c = screen.getCursorScreenPoint();
+    dragState = drag.createDragState(win.getBounds(), c, scaleAt(c.x, c.y));
+    if (dragTimer) clearInterval(dragTimer);
+    dragTimer = setInterval(() => {
+      if (!dragState || !win || win.isDestroyed()) { stopDrag(); return; }
+      const next = drag.dragFrame(dragState, screen.getCursorScreenPoint(), scaleAt);
+      if (next) win.setBounds(next);
+    }, 16);
+  });
+  ipcMain.on('stage:drag-end', stopDrag);
+  win.on('closed', stopDrag);
+
+  // Ctrl + 滚轮：以底部中心为锚点缩放，脚不动、只有个头变高
+  ipcMain.on('stage:wheel', (_e, dir) => {
+    if (!win || win.isDestroyed()) return;
+    const b = win.getBounds();
+    const k = dir > 0 ? 1.06 : 1 / 1.06;
+    const [w, h] = drag.clampSize(b.width * k, b.height * k);
+    win.setBounds({ x: Math.round(b.x + (b.width - w) / 2), y: Math.round(b.y + (b.height - h)), width: w, height: h });
+  });
+
+  const taps = [];
+  ipcMain.on('stage:tap', (_e, payload) => {
+    const rec = Object.assign({}, payload || {});
+    if (!rec.at) rec.at = Date.now();
+    taps.push(rec);
+    if (taps.length > 60) taps.shift();
+    console.log(JSON.stringify({ tap: rec }));
+  });
+
   const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
   console.log(JSON.stringify({ modelDir: MODEL_DIR, modelFile: modelFile ? '(found)' : 'MISSING', core: CORE_FILE ? '(found)' : 'MISSING' }));
   await win.loadURL('pet://stage/index.html?model=' + encodeURIComponent(modelFile));
@@ -152,6 +202,14 @@ app.whenReady().then(async () => {
       const lock = q.get('hold') === '1';
       push({ type: 'pointer', value: { x, y }, lock });
       return { pushed: true, x, y, lock };
+    },
+    '/taps': (q) => {
+      const n = Math.max(1, Math.min(60, Number(q.get('n')) || 20));
+      return { taps: taps.slice(-n) };
+    },
+    '/zones': async () => {
+      const z = await win.webContents.executeJavaScript('window.__stageZones ? window.__stageZones() : null');
+      return { zones: z };
     },
   };
 
