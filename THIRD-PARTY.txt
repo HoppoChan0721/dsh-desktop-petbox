@@ -18,6 +18,12 @@ Live2D Cubism Web Framework  Live2D Open Software License
 Live2D Cubism Core           Live2D 专有软件许可（不随任何仓库分发，需从官方 SDK 获取）
                                             https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html
 
+自建舞台（stage/）实际打包的两个库
+--------------------------------
+stage/vendor/pixi.min.js      PixiJS 6.5.10                 MIT   https://github.com/pixijs/pixijs
+stage/vendor/cubism4.min.js   pixi-live2d-display 0.4.0     MIT   https://github.com/guansss/pixi-live2d-display
+  两者均为 MIT，可随仓库分发。Cubism Core 仍不打包，由使用者自备，运行时经 pet://stage/core/ 送进页面。
+
 第三方项目
 ----------
 鲸语 Jingyu Live2D Agent     https://www.bilibili.com/video/BV1KmxY66EZ3/
