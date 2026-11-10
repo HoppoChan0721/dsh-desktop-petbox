@@ -1,151 +1,407 @@
-// 舞台的动作引擎：指针跟随、俯身、呼吸、眨眼、口型、表情、动作。
+// 舞台的参数驱动层。
 //
-// 关键设计：**一律用「加在模型当前值上」的方式写参数，不用绝对值覆盖。**
-// 因为模型每帧会把自己的参数恢复成它自己算的值（动作、待机、物理都在里面），
-// 我们从外面直接写绝对值，就会把它自己的动作全抹掉——表现就是动作管理器说在播、
-// 画面上却一动不动。改成读一次当前值再加偏移，动作和我们的指针就能同时存在。
+// 一条原则：**所有参数写入只从这里出去**。模型自带的 updateNaturalMovements 会被整个换掉，
+// 每帧从零算一套目标值，再按时间常数追上当前值，最后一次性写进 Cubism 参数。
+// 动作、指针、呼吸、眨眼、说话共用一个出口，谁也别想覆盖谁——之前「动作管理器说在播但画面不动」
+// 和「俯身没反应」都是因为几个地方各写各的，后写的把先写的拍死。
 //
-// 平滑用时间常数：offset += (target - offset) * (1 - exp(-dt/tau))，
-// 按帧插值在 150fps 上会快得发飘，换台机器手感又不一样。
+// 参数名用模型自己的语义名（AngleX / LeanInput / PositionX…），范围、默认值现场从 core 读，
+// 不写死数值。写死过一次，写错名字白折腾好几天。
+//
+// 思路参考鲸语（Jingyu Live2D Agent）公开文档里描述的驱动顺序，代码是自己写的。
 (function () {
-  const PTR = { ax: 18, ay: 12, az: 10, body: 8, posX: 4 };
-  const LEAN = { lean: 30, hip: 10, posY: 5, body2: 8 };
-  const TAU_IDLE = 0.18;
-  const TAU_EYE = 0.02;
-  const BREATH_CYCLE = 4200;
-  const BLINK_MS = 150;
-  const clamp = (v) => Math.max(-1, Math.min(1, Number(v) || 0));
-  const rand = (a, b) => a + Math.random() * (b - a);
+  'use strict';
 
-  window.createPetEngine = function (model) {
-    const im = model.internalModel;
-    const core = im.coreModel;
-    const st = {
-      tx: 0, ty: 0, x: 0, y: 0,
-      mouth: 0, mouthTarget: 0,
-      nextBlink: 0, blinkAt: -1,
-      last: performance.now(),
-      t0: performance.now(),
-    };
-    const offs = new Map();   // 参数 → 当前偏移量
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const smooth = (t) => t * t * (3 - 2 * t);
+  const num = (v, dflt) => (Number.isFinite(v) ? v : dflt);
 
-    const has = (id) => { try { return core.getParameterIndex(id) >= 0; } catch (e) { return false; } };
-    const get = (id) => { try { return core.getParameterValueById(id); } catch (e) { return 0; } };
-    const set = (id, v) => { try { core.setParameterValueById(id, v); } catch (e) {} };
-    const pick = (ids) => ids.find((id) => has(id)) || null;
+  // ---- motion3.json 曲线求值 --------------------------------------------------
+  // Segments 布局：[t0, v0, <kind, ...pts>, <kind, ...pts>, ...]
+  //   kind 0 线性：<t, v>   1 贝塞尔：<c1t, c1v, c2t, c2v, t, v>
+  //   kind 2 台阶：<t, v>   3 反台阶：<t, v>
+  const bez = (a, b, c, d, t) => (1 - t) ** 3 * a + 3 * (1 - t) ** 2 * t * b + 3 * (1 - t) * t * t * c + t ** 3 * d;
 
-    function tauOf(id) { return id && id.indexOf('Eye') >= 0 && id.indexOf('Open') >= 0 ? TAU_EYE : TAU_IDLE; }
+  function sampleCurve(seg, t) {
+    if (!seg || seg.length < 2) return 0;
+    if (t <= seg[0]) return seg[1];
+    let pt = seg[0];
+    let pv = seg[1];
+    let i = 2;
+    while (i < seg.length) {
+      const kind = seg[i++];
+      let nt;
+      let nv;
+      if (kind === 1) {
+        const c1t = seg[i++]; const c1v = seg[i++];
+        const c2t = seg[i++]; const c2v = seg[i++];
+        nt = seg[i++]; nv = seg[i++];
+        if (t <= nt) {
+          let lo = 0;
+          let hi = 1;
+          for (let k = 0; k < 20; k++) {
+            const u = (lo + hi) / 2;
+            if (bez(pt, c1t, c2t, nt, u) < t) lo = u; else hi = u;
+          }
+          return bez(pv, c1v, c2v, nv, (lo + hi) / 2);
+        }
+      } else if (kind === 0) {
+        nt = seg[i++]; nv = seg[i++];
+        if (t <= nt) return pv + (nv - pv) * ((t - pt) / Math.max(1e-8, nt - pt));
+      } else if (kind === 2) {
+        nt = seg[i++]; nv = seg[i++];
+        if (t <= nt) return pv;
+      } else if (kind === 3) {
+        nt = seg[i++]; nv = seg[i++];
+        if (t <= nt) return nv;
+      } else {
+        return pv;
+      }
+      pt = nt; pv = nv;
+    }
+    return pv;
+  }
 
-    // 推进偏移量并返回；不写参数，写参数统一在最后一步
-    function advance(id, target, dt) {
-      if (!id) return 0;
-      const prev = offs.has(id) ? offs.get(id) : 0;
-      const next = prev + (target - prev) * (1 - Math.exp(-dt / tauOf(id)));
-      offs.set(id, next);
-      return next;
+  // ---- 这个模型的语义驱动参数 --------------------------------------------------
+  // 名字取自模型自己的参数表。哪些真的存在，构造时逐个问 core，不存在的直接记进 missing。
+  const SEMANTIC = [
+    'AngleX', 'AngleY', 'AngleZ', 'PositionX', 'PositionY', 'PositionZ', 'LeanInput',
+    'ParamEyeBallX', 'ParamEyeBallY', 'ParamEyeLOpen', 'ParamEyeROpen',
+    'ParamMouthForm', 'ParamMouthOpenY', 'JawOpen', 'ParamBreath',
+    'EyeSmile', 'MouthSmile_L', 'MouthSmile_R',
+    'ParamBrowLY', 'ParamBrowRY', 'BrowInnerUp',
+    'CheeckPuff', 'Mouthpucker', 'MouthFunnel', 'MouthX',
+    'MouthPressLipOpen', 'MouthPuckerWiden',
+    'REyeSquint', 'LEyeSquint', 'TongueOut',
+    'NoseNeer', 'MouthRollUpper', 'MouthRollLower',
+  ];
+
+  // 幅度没有单位，全是参数刻度。数字来自反复试到顺眼的程度，别凭感觉改。
+  const TUNE = {
+    headX: 18,      // 左右转头
+    headY: 12,      // 抬头低头
+    headZ: 14,      // 侧倾
+    lean: 26,       // 前后探身，负值是往下弯
+    posX: 4,        // 上身左右平移
+    posY: 2,        // 上身上下
+    breathAmp: 0.24,
+    breathBase: 0.42,
+    breathHz: 1.45,
+    swayX: 1.15,
+    swayY: 0.7,
+    swayZ: 0.6,
+    swayPosX: 0.5,
+    swayPosZ: 0.35,
+    tauIdle: 0.16,  // 待机归位：慢慢缓过去，不要「啪」地弹回
+    tauActing: 0.055, // 演动作 / 跟指针：跟手
+    tauEye: 0.016,  // 眼睛开合单独走快通道，否则眨眼糊成一片
+    blinkHold: 0.15,
+  };
+
+  class PetEngine {
+    constructor(model, opts) {
+      const options = opts || {};
+      this.model = model;
+      this.internal = model.internalModel;
+      this.core = this.internal.coreModel;
+      this.baseUrl = options.baseUrl || '';
+      this.info = new Map();
+      this.missing = [];
+      this.managed = new Set();
+      this.current = new Map();
+      this.motionCache = new Map();
+      this.clock = 0;
+      this.frames = 0;
+      this.writeErrors = 0;
+
+      this.job = null;
+      this.elapsed = 0;
+      this.jobName = '';
+      this.motionEyes = false;
+
+      this.pointerInput = { x: 0, y: 0 };
+      this.gaze = { x: 0, y: 0 };
+      this.idle = true;
+
+      this.mouth = 0;
+      this.mouthTarget = 0;
+      this.mouthUntil = 0;
+
+      this.blinkNext = 2.0;
+      this.blinkFrom = -1;
+      this.blinkDur = TUNE.blinkHold;
+
+      // 换装是状态不是动作：演完要留在原地，不能一格一格归位穿回去
+      this.hold = new Set(['Clothes1', 'Clothes2', 'Clothes3', 'Clothes4', 'Clothes5', 'Clothes6', 'Clothes7', 'Clothes8']);
+
+      this.register(SEMANTIC);
+      const keys = [];
+      for (let i = 1; i <= 13; i++) keys.push('key' + i);
+      this.register(keys);
+
+      this.idleMotion = null;
+      this.ready = this.loadIdle().catch(() => null);
     }
 
-    const IDS = {
-      ax: ['ParamAngleX', 'AngleX'],
-      ay: ['ParamAngleY', 'AngleY'],
-      az: ['ParamAngleZ', 'AngleZ'],
-      bx: ['ParamBodyAngleX'],
-      bz: ['ParamBodyAngleZ'],
-      posX: ['PositionX'],
-      ballX: ['ParamEyeBallX'],
-      ballY: ['ParamEyeBallY'],
-      breath: ['ParamBreath'],
-      chest: ['ParamChestOpen'],
-      eyeL: ['ParamEyeLOpen', 'ParamEyeOpen'],
-      eyeR: ['ParamEyeROpen', 'ParamEyeOpen'],
-      mouth: ['ParamMouthOpenY'],
-      lean: ['LeanInput'],
-      hipX: ['HipAngleX'],
-      posY: ['PositionY'],
-      bodyY2: ['ParamBodyAngleY2'],
-    };
-    const P = {};
-    for (const k of Object.keys(IDS)) P[k] = pick(IDS[k]);
-
-    im.on('beforeModelUpdate', () => {
-      const now = performance.now();
-      const dt = Math.min(0.05, Math.max(0.001, (now - st.last) / 1000));
-      st.last = now;
-      const t = now - st.t0;
-
-      const k = 1 - Math.exp(-dt / TAU_IDLE);
-      st.x += (st.tx - st.x) * k;
-      st.y += (st.ty - st.y) * k;
-      const x = clamp(st.x), y = clamp(st.y);
-      const sway = Math.sin(t / 5200) * 2.4;
-
-      // 先把这一帧的偏移都算出来
-      const plan = [];
-      const push = (id, target) => { if (id) plan.push([id, advance(id, target, dt)]); };
-
-      push(P.ax, x * PTR.ax);
-      push(P.ay, y * PTR.ay);
-      push(P.az, x * PTR.az + sway);
-      push(P.bx, x * PTR.body);
-      push(P.bz, x * PTR.body * 0.6 + sway * 0.4);
-      push(P.posX, x * PTR.posX);
-      push(P.ballX, x * 0.8);
-      push(P.ballY, y * 0.6);
-
-      // 俯身：指针在下方时前倾探下去，在上方时轻轻后仰
-      const down = Math.max(0, -y), up = Math.max(0, y);
-      push(P.lean, -LEAN.lean * down + 8 * up);
-      push(P.hipX, -LEAN.hip * down);
-      push(P.posY, -LEAN.posY * down + 2 * up);
-      push(P.bodyY2, -LEAN.body2 * down);
-
-      // 呼吸
-      const br = 0.5 - 0.5 * Math.cos((t / BREATH_CYCLE) * Math.PI * 2);
-      push(P.breath, br * 2 - 1);          // 呼吸参数多是 -1..1，偏移量取负一半到正一半
-      if (P.chest) push(P.chest, br * 0.3);
-
-      // 眨眼：偏移量是「闭眼程度」的负数
-      if (st.nextBlink === 0) st.nextBlink = t + rand(2400, 5600);
-      if (st.blinkAt < 0 && t >= st.nextBlink) st.blinkAt = t;
-      let eyeClose = 0;
-      if (st.blinkAt >= 0) {
-        const p = (t - st.blinkAt) / BLINK_MS;
-        if (p >= 1) { st.blinkAt = -1; st.nextBlink = t + rand(2400, 5600); }
-        else eyeClose = 1 - Math.abs(1 - 2 * p);
+    // 登记参数：范围内、默认值都从 core 现场读
+    register(ids) {
+      for (const id of ids) {
+        if (!id || this.info.has(id)) continue;
+        let idx = -1;
+        try { idx = this.core.getParameterIndex(id); } catch (e) { idx = -1; }
+        if (typeof idx !== 'number' || idx < 0) { if (this.missing.indexOf(id) < 0) this.missing.push(id); continue; }
+        let min = -1;
+        let max = 1;
+        let def = 0;
+        try {
+          min = num(this.core.getParameterMinimumValue(idx), -1);
+          max = num(this.core.getParameterMaximumValue(idx), 1);
+          def = num(this.core.getParameterDefaultValue(idx), 0);
+        } catch (e) {}
+        this.info.set(id, { id, min, max, default: def });
+        this.managed.add(id);
       }
-      if (P.eyeL) push(P.eyeL, -eyeClose);
-      if (P.eyeR) push(P.eyeR, -eyeClose);
+    }
 
-      // 口型
-      st.mouth += (st.mouthTarget - st.mouth) * (1 - Math.exp(-dt / 0.05));
+    has(id) { return this.info.has(id); }
 
-      // 最后一次性写：读当前值（模型这帧算出来的）+ 偏移
-      for (const [id, off] of plan) {
-        if (Math.abs(off) < 1e-4) continue;
-        set(id, get(id) + off);
+    // ---- 动作文件 -------------------------------------------------------------
+    motionGroup(name) {
+      let groups = {};
+      try { groups = (this.internal.settings && this.internal.settings.motions) || {}; } catch (e) { groups = {}; }
+      if (!name) return null;
+      if (groups[name]) return { key: name, list: groups[name] };
+      const lower = String(name).toLowerCase();
+      for (const key of Object.keys(groups)) {
+        if (key.toLowerCase() === lower) return { key, list: groups[key] };
       }
-      if (P.mouth) set(P.mouth, get(P.mouth) + st.mouth);
-    });
+      return null;
+    }
 
-    return {
-      pointer(p) {
-        if (!p) { st.tx = 0; st.ty = 0; return; }
-        st.tx = clamp(p.x);
-        st.ty = clamp(p.y);
-      },
-      say(v) { st.mouthTarget = Math.max(0, Math.min(1, Number(v) || 0)); },
-      emotion(name) { try { model.expression(name); return true; } catch (e) { return false; } },
-      motion(name) { try { model.motion(name); return true; } catch (e) { return false; } },
-      state() {
-        return {
-          target: { x: st.tx, y: st.ty },
-          current: { x: +st.x.toFixed(3), y: +st.y.toFixed(3) },
-          mouth: +st.mouth.toFixed(3),
-          blink: st.blinkAt >= 0 ? 'blinking' : Math.round(st.nextBlink - (performance.now() - st.t0)),
-          params: Object.fromEntries(Object.entries(P).filter(([, id]) => id)),
-        };
-      },
-      core,
-    };
-  };
+    async fetchMotion(file) {
+      if (this.motionCache.has(file)) return this.motionCache.get(file);
+      const url = new URL(file, this.baseUrl || location.href).href;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('动作文件读不到：' + file + ' ' + res.status);
+      const json = await res.json();
+      this.motionCache.set(file, json);
+      return json;
+    }
+
+    static toCurves(json, register) {
+      const curves = [];
+      for (const c of (json.Curves || [])) {
+        if (c.Target !== 'Parameter' || !c.Id) continue;
+        register([c.Id]);
+        curves.push({ id: c.Id, segments: c.Segments || [] });
+      }
+      const duration = Math.max(0.1, num(json.Meta && json.Meta.Duration, 1));
+      const eyes = curves.some((c) => c.id === 'ParamEyeLOpen' || c.id === 'ParamEyeROpen');
+      return { curves, duration, eyes };
+    }
+
+    async loadIdle() {
+      const group = this.motionGroup('Idle') || this.motionGroup('idle');
+      if (!group || !group.list || !group.list.length) return null;
+      const file = group.list[0].File || group.list[0].file;
+      if (!file) return null;
+      const json = await this.fetchMotion(file);
+      const { curves, duration } = PetEngine.toCurves(json, (ids) => this.register(ids));
+      this.idleMotion = { curves, duration };
+      return this.idleMotion;
+    }
+
+    // ---- 对外 ---------------------------------------------------------------
+    pointer(p) {
+      if (!p) { this.pointerInput = null; return; }
+      this.pointerInput = { x: clamp(num(p.x, 0), -1, 1), y: clamp(num(p.y, 0), -1, 1) };
+      this.gaze = this.pointerInput;
+    }
+
+    async motion(name) {
+      const group = this.motionGroup(name);
+      if (!group || !group.list || !group.list.length) throw new Error('没有这个动作：' + name);
+      const file = group.list[0].File || group.list[0].file;
+      const json = await this.fetchMotion(file);
+      const { curves, duration, eyes } = PetEngine.toCurves(json, (ids) => this.register(ids));
+      this.job = { curves, duration, file, eyes };
+      this.elapsed = 0;
+      this.jobName = group.key;
+      return { name: group.key, duration, curves: curves.length };
+    }
+
+    stopMotion() { this.job = null; this.elapsed = 0; this.jobName = ''; return true; }
+
+    talk(ms) {
+      const span = num(ms, 0) > 0 ? num(ms, 0) : 1400;
+      this.mouthUntil = this.clock + span / 1000;
+      return true;
+    }
+
+    emotion(name) {
+      try {
+        if (this.model && typeof this.model.expression === 'function') {
+          this.model.expression(name);
+          return true;
+        }
+      } catch (e) { return false; }
+      return false;
+    }
+
+    // ---- 每帧 ---------------------------------------------------------------
+    tick(dtMs) {
+      const dt = clamp(num(dtMs, 0) / 1000, 0, 0.1);
+      if (dt <= 0) return;
+      this.clock += dt;
+      this.frames++;
+      if (this.job) {
+        this.elapsed += dt;
+        if (this.elapsed >= this.job.duration) { this.job = null; this.elapsed = 0; this.jobName = ''; }
+      }
+      const target = this.buildTarget();
+      this.commit(target, dt);
+    }
+
+    // 每帧从零算目标值。目标表填完，等于「这一帧她应该长什么样」。
+    buildTarget() {
+      const target = new Map();
+      for (const id of this.managed) {
+        const p = this.info.get(id);
+        if (!p) continue;
+        // 换装参数的目标值取「当前值」：等于原地不动
+        target.set(id, this.hold.has(id) && this.current.has(id) ? this.current.get(id) : p.default);
+      }
+      const ctx = { target, set: (id, v) => { if (Number.isFinite(v)) target.set(id, v); } };
+      this.applyIdle(ctx);
+      this.applyPointer(ctx);
+      this.applyGaze(ctx);
+      this.applyMouth(ctx);
+      this.applyMotion(ctx, target);
+      this.applyBlink(ctx, target);
+      return target;
+    }
+
+    applyIdle({ set }) {
+      if (!this.idle) return;
+      const phase = this.clock;
+      set('ParamBreath', TUNE.breathBase + TUNE.breathAmp * Math.sin(phase * TUNE.breathHz));
+      set('AngleX', TUNE.swayX * Math.sin(phase * 0.55));
+      set('AngleY', TUNE.swayY * Math.sin(phase * 0.72 + 0.4));
+      set('AngleZ', TUNE.swayZ * Math.sin(phase * 0.48));
+      set('PositionX', TUNE.swayPosX * Math.sin(phase * 0.55 - 0.2));
+      set('PositionZ', TUNE.swayPosZ * Math.sin(phase * 0.48 - 0.25));
+      const idle = this.idleMotion;
+      if (idle && idle.curves.length) {
+        const t = idle.duration > 0 ? phase % idle.duration : 0;
+        for (const c of idle.curves) set(c.id, sampleCurve(c.segments, t));
+      }
+    }
+
+    // 指针往下 → LeanInput 负 → 身子往前下方探，腿和盆骨由作者物理跟着弯
+    applyPointer({ set, target }) {
+      const p = this.pointerInput;
+      if (!p) return;
+      const add = (id, v, keep) => {
+        if (!this.info.has(id)) return;
+        set(id, num(target.get(id), 0) * (keep === undefined ? 0.35 : keep) + v);
+      };
+      add('AngleX', p.x * TUNE.headX);
+      add('AngleY', p.y * TUNE.headY);
+      add('AngleZ', p.x * TUNE.headZ, 0.3);
+      add('LeanInput', p.y * TUNE.lean, 0.2);
+      add('PositionX', p.x * TUNE.posX, 0.3);
+    }
+
+    applyGaze({ set }) {
+      const g = this.gaze;
+      if (!g) return;
+      set('ParamEyeBallX', g.x * 0.5);
+      set('ParamEyeBallY', g.y * 0.4);
+    }
+
+    applyMouth({ set }) {
+      if (this.clock < this.mouthUntil) {
+        // 说话的口型：不追求音素，只要张合有节奏就够
+        const w = Math.sin(this.clock * 17) * 0.5 + 0.5;
+        this.mouthTarget = 0.18 + w * 0.5;
+      } else {
+        this.mouthTarget = 0;
+      }
+      this.mouth += (this.mouthTarget - this.mouth) * 0.25;
+      if (this.mouth > 0.002) set('ParamMouthOpenY', this.mouth);
+    }
+
+    applyMotion(ctx, target) {
+      const job = this.job;
+      if (!job) { this.motionEyes = false; return; }
+      const t = Math.min(this.elapsed, job.duration);
+      for (const c of job.curves) {
+        if (!this.info.has(c.id)) continue;
+        ctx.set(c.id, sampleCurve(c.segments, t));
+      }
+      this.motionEyes = job.eyes;
+    }
+
+    applyBlink({ set }) {
+      if (!this.idle) return;
+      if (this.job && this.motionEyes) return; // 动作自己在管眼睛，别插一脚
+      if (this.clock >= this.blinkNext && this.blinkFrom < 0) this.blinkFrom = this.clock;
+      let open = 1;
+      if (this.blinkFrom >= 0) {
+        const k = (this.clock - this.blinkFrom) / this.blinkDur;
+        if (k >= 1) {
+          this.blinkFrom = -1;
+          this.blinkNext = this.clock + 2.4 + Math.random() * 3.2;
+        } else {
+          // 前 40% 闭，后 60% 开，中间不悬停
+          open = k < 0.4 ? 1 - smooth(k / 0.4) : smooth((k - 0.4) / 0.6);
+        }
+      }
+      set('ParamEyeLOpen', open);
+      set('ParamEyeROpen', open);
+    }
+
+    commit(target, dt) {
+      const tauBase = this.job ? TUNE.tauActing : TUNE.tauIdle;
+      for (const [id, v] of target) {
+        const p = this.info.get(id);
+        if (!p) continue;
+        const prev = this.current.has(id) ? this.current.get(id) : p.default;
+        const tau = id.indexOf('Eye') >= 0 && id.indexOf('Open') >= 0 ? TUNE.tauEye : tauBase;
+        let next = prev + (v - prev) * (1 - Math.exp(-dt / tau));
+        if (!Number.isFinite(next)) next = p.default;
+        next = clamp(next, p.min, p.max);
+        this.current.set(id, next);
+        try { this.core.setParameterValueById(id, next); } catch (e) { this.writeErrors++; }
+      }
+    }
+
+    // pixi-live2d-display 每帧在 update 结尾会 loadParameters()，把参数还原成「动作算完时保存的值」。
+    // 所以光在 update 中间写没用，一帧之末会被抹掉。模型归位之后必须再补一遍，值才留得住。
+    reassert() {
+      for (const [id, v] of this.current) {
+        try { this.core.setParameterValueById(id, v); } catch (e) { this.writeErrors++; }
+      }
+    }
+
+    state() {
+      return {
+        clock: +this.clock.toFixed(2),
+        frames: this.frames,
+        idle: this.idle,
+        motion: this.jobName || null,
+        motionCurves: this.job ? this.job.curves.map((c) => c.id) : [],
+        elapsed: +this.elapsed.toFixed(2),
+        duration: this.job ? this.job.duration : 0,
+        pointer: this.pointerInput,
+        managed: this.managed.size,
+        missing: this.missing.slice(0, 40),
+        idleCurves: this.idleMotion ? this.idleMotion.curves.length : 0,
+        writeErrors: this.writeErrors,
+      };
+    }
+  }
+
+  window.createPetEngine = (model, opts) => new PetEngine(model, opts);
+  window.PetEngineSample = sampleCurve;
 })();

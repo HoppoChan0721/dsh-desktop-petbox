@@ -1,4 +1,4 @@
-﻿# 自建轻量舞台（stage/）
+# 自建轻量舞台（stage/）
 
 我们自己的 Live2D 舞台，**跟 `src/` 那套桌宠外壳完全隔离**：它有自己的入口、自己的页面，不 import 外壳任何代码，跑起来也不占 61942 / 61943 / 9333。现役桌宠照旧跑原来的入口，两边互不影响。
 
@@ -6,9 +6,12 @@
 
 ## 现在能做什么
 
-- 指针跟随：头和上身按 ParamAngleX/Y/Z、ParamBodyAngleZ/X、ParamBodyAngleY 叠偏移，带平滑；指针在窗口外也跟
-- 口型与表情：engine.say(0..1) 开合嘴，engine.emotion('脸红') 切表情，动作走 engine.motion('HandRaise')`n- 透明无边框窗口，把模型正确画出来，`pet://` 自定义协议直接读磁盘，**不需要 Python，也不需要任何端口**
-- 自动播模型自带的表情与 Idle 待机动作
+- **所有参数写入只从 `engine.js` 出**：待机呼吸摆动、眨眼、指针跟随、动作播放、说话口型，一个出口，互不覆盖
+- 指针跟随：头 `AngleX/Y/Z`、探身 `LeanInput`、上身 `PositionX`，带时间常数平滑，指针在窗口外也跟
+- 动作：读 `motion3.json` 自己求值，播完自动归位。`engine.motion('HandRaise')`
+- 表情：`engine.emotion('脸红')`，走模型自带表情
+- 口型：`engine.talk(毫秒)` 张嘴说话
+- 透明无边框窗口，`pet://` 自定义协议直接读磁盘，**不需要 Python，也不需要任何端口**
 - canvas 开了 `preserveDrawingBuffer`，页内可以直接读 alpha，穿透和点触分区不必再借补丁
 
 ## 怎么跑
@@ -28,18 +31,30 @@ node_modules\electron\dist\electron.exe stage\main.js `
 
 | 文件 | 作用 |
 |---|---|
-| `main.js` | Electron 入口：注册 `pet://` 协议、开窗口、选模型与 Core |
+| `main.js` | Electron 入口：注册 `pet://` 协议、开窗口、选模型与 Core、送指针 |
 | `index.html` | 页面骨架，先加载 Core，再 pixi，再 cubism4，最后 `stage.js` |
-| `stage.js` | 渲染层：建 PIXI 应用、加载模型、按窗口大小摆好 |
-| `engine.js` | 动作引擎：指针跟随、口型、表情、动作。参数真名是 `ParamAngleX` 这类，别写鲸语那套 `AngleX` |
+| `stage.js` | 渲染层：建 PIXI 应用、加载模型、把驱动挂到更新链上 |
+| `engine.js` | 驱动层：待机、指针、眨眼、口型、动作、参数写入 |
 | `preload.js` | 把主进程的指针和指令送进页面 |
 | `vendor/` | `pixi 6.5.10` 与 `pixi-live2d-display 0.4.0`，都是 MIT，随仓库走 |
 
 **Cubism Core 不进仓库**，跟现在 README 里那条一致，谁用谁自备。
 
+## 两个必须记住的坑（都吃过）
+
+**一、参数名用模型自己的语义名。**
+这个模型的驱动参数是 `AngleX / AngleY / AngleZ / LeanInput / PositionX`，不是 Cubism 标准的 `ParamAngleX`。
+`ParamAngleX` 这类在本模型里是物理**输出**，写进去当场被物理覆盖，读回来永远是 0——所以「俯身没反应」「动作管理器说在播但画面不动」都从这里来的。
+
+**二、`internalModel.update` 收尾会 `loadParameters()`。**
+pixi-live2d-display 的顺序是：动作 → `saveParameters()` → 表情/眨眼/焦点 → `updateNaturalMovements()` → 物理 → `pose` → `o.update()` → **`loadParameters()`**。
+最后一脚把所有参数还原成「动作算完时保存的那份」，所以在中间写进去的东西，几何虽然用上了，参数表里却看不到，下一帧也被抹平。
+现在两个时机各写一次：`updateNaturalMovements` 里算并写（物理这一帧就吃到），`update` 回来后再补写一遍（值才留得住）。
+
 ## 下一步
 
-1. 动作引擎：待机微动、指针跟随（`AngleX / AngleY / AngleZ / LeanInput / PositionX`）、口型、情绪表情
-2. 把外壳那层的托盘、气泡、情绪端口接过来，让她能被 `/say` 和 mood 驱动
-3. 穿透与点触分区搬过来验证
-4. 参数彩蛋：裙子、换装表情（模型里有 `裙子切换`、`鞋子`、`胸衣` 这些表情名）
+1. 把外壳那层的托盘、气泡、情绪端口接过来，让她能被 `/say` 和 mood 驱动
+2. 穿透与点触分区搬过来验证
+3. 参数彩蛋：裙子、换装表情（模型里有 `裙子切换`、`鞋子`、`胸衣` 这些表情名）
+
+调试钩子：`window.__lockPointer = true` 冻结外部指针、`window.__freeze = true` 冻结驱动、`window.__stageInspect([id])` 读参数、`window.__petEngine.state()` 看状态。
