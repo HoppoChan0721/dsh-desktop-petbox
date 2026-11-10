@@ -198,13 +198,22 @@ app.whenReady().then(async () => {
     },
     '/say': (q) => {
       const text = q.get('text') || '';
-      const ms = Number(q.get('ms')) || 1200;
-      push({ type: 'talk', ms, text });
+      const ms = Number(q.get('ms')) || 0;
+      if (!text) throw new Error('缺 text');
+      push({ type: 'say', text, ms });
       const emo = q.get('emotion');
-      if (emo) push({ type: 'emotion', name: emo });
+      if (emo) push({ type: 'emotion', name: emo, ms: Number(q.get('emotionMs')) || 0 });
       const mo = q.get('motion');
       if (mo) push({ type: 'motion', name: mo });
-      return { pushed: true, text, ms, emotion: emo || null, motion: mo || null };
+      return { pushed: true, text, ms: ms || null, emotion: emo || null, motion: mo || null };
+    },
+    '/wait': (q) => {
+      push({ type: 'wait', ms: Number(q.get('ms')) || 0 });
+      return { pushed: true };
+    },
+    '/bubble': (q) => {
+      push({ type: q.get('hide') !== null ? 'bubble-hide' : 'wait' });
+      return { pushed: true };
     },
     '/motion': (q) => {
       const name = q.get('name') || '';

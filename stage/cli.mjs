@@ -47,13 +47,15 @@ async function call(pathname, query) {
 const { flags, rest } = takeFlags(argv.slice(1));
 
 if (cmd === 'state') await call('/state');
-else if (cmd === 'say') await call('/say', { text: rest.join(' '), ms: flags.ms, emotion: flags.emotion, motion: flags.motion });
+else if (cmd === 'say') await call('/say', { text: rest.join(' '), ms: flags.ms, emotion: flags.emotion, emotionMs: flags['emotion-ms'], motion: flags.motion });
+else if (cmd === 'wait') await call('/wait', { ms: flags.ms });
+else if (cmd === 'hide') await call('/bubble', { hide: 1 });
 else if (cmd === 'motion') await call('/motion', { name: rest[0] || flags.name });
 else if (cmd === 'emotion') await call('/emotion', { name: rest[0] || flags.name });
 else if (cmd === 'pointer') {
   if (rest[0] === 'reset') await call('/pointer', { reset: 1 });
   else await call('/pointer', { x: rest[0] || 0, y: rest[1] || 0, hold: flags.hold ? 1 : undefined });
 } else {
-  console.error('用法：state | say <文本> | motion <名字> | emotion <名字> | pointer <x> <y> [--hold] | pointer reset');
+  console.error('用法：state | say <文本> | wait | hide | motion <名字> | emotion <名字> | pointer <x> <y> [--hold] | pointer reset');
   process.exit(2);
 }

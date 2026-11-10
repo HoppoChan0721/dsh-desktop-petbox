@@ -142,7 +142,11 @@
       profile = null;
       setTimeout(() => { profile = scanProfile(); }, delay === undefined ? 600 : delay);
     }
-    window.__stageZones = () => (ensureProfile() ? { bbox: profile.bbox, anchors: profile.anchors, rows: profile.rows.length } : null);
+    window.__stageZones = () => {
+      const p = ensureProfile();
+      if (!p) return null;
+      return { bbox: p.bbox, anchors: p.anchors, rows: p.rows.length, headSample: p.rows.slice(0, 10) };
+    };
     window.__stageZonesReset = resetProfile;
 
     // 点击坐标 → 剪影比例；落在剪影外面就返回 null
@@ -234,6 +238,26 @@
     setTimeout(() => resetProfile(0), 1200);
     setTimeout(() => { sendIgnore(true); }, 0);
 
+    // 头顶的屏幕坐标：气泡要贴在这上面。
+    // 不能用「剪影最上面 12% 里最宽的那一行」——那往往是头发最蓬的地方，比头顶低一大截；
+    // 也不能用包围盒中心——这套模型尾巴往右伸得远，盒子中心会偏到她右侧去。
+    // 正确做法：y 取剪影最顶那一行，x 取「顶下 3%」那一行的左右中点，那一行已经很靠近头顶中心了。
+    function headAnchor() {
+      const W = canvas.clientWidth || canvas.width;
+      const H = canvas.clientHeight || canvas.height;
+      const p = ensureProfile();
+      if (!p || !p.rows || !p.rows.length) return { x: W / 2, y: H * 0.14 };
+      const span = Math.max(1e-4, p.bbox.bottom - p.bbox.top);
+      const goal = p.bbox.top + span * 0.03;
+      let row = p.rows[0];
+      let bestD = Infinity;
+      for (const r of p.rows) {
+        const d = Math.abs(r.y - goal);
+        if (d < bestD) { bestD = d; row = r; }
+      }
+      return { x: ((row.l + row.r) / 2) * W, y: p.bbox.top * H };
+    }
+
     return {
       tap,
       get ignored() { return ignored; },
@@ -244,6 +268,7 @@
         applyCursor(false);
       },
       alphaAt,
+      headAnchor,
       resetProfile,
     };
   }

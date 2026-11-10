@@ -36,6 +36,8 @@ node_modules\electron\dist\electron.exe stage\main.js `
 | **Alt + 左键拖动** | 拖到桌面任何位置（跨屏、高 DPI 都按物理像素冻结尺寸） |
 | **Ctrl + 滚轮** | 微调大小，脚不动，只有个头变高 |
 
+说话时头顶冒气泡：贴着她的头顶走（不是贴在窗口角上），逐字出水，到点自己淡掉；等待的时候是三个点在跳。泡不吃鼠标，绝不挡点击。
+
 窗口的大小和位置记在 `userData\stage-window.json`，重启不用重新调。`GET /window?w=&h=` 可以直接设。
 
 分区不写死数值：启动后扫一遍画布 alpha 量出剪影，脖子用「头下面最窄的那一行」自动找，其余部位按脖子到下摆的比例切。窗口拉大、缩放、换装都不用重新标定。`GET /zones` 和 `GET /taps` 可以看当前标定和最近的点触记录。
@@ -47,13 +49,15 @@ node_modules\electron\dist\electron.exe stage\main.js `
 ```powershell
 node stage\cli.mjs state
 node stage\cli.mjs say "主人回来啦" --emotion 脸红 --motion HandRaise
+node stage\cli.mjs wait                # 三个点的等待泡
+node stage\cli.mjs hide                # 收起气泡
 node stage\cli.mjs motion FingerShow
 node stage\cli.mjs emotion 眯眼
 node stage\cli.mjs pointer 0 -1 --hold     # 冻结成固定指针位置
 node stage\cli.mjs pointer reset
 ```
 
-HTTP 直接调也行：`/state`、`/say`、`/motion`、`/emotion`、`/pointer`。
+HTTP 直接调也行：`/state`、`/say`、`/wait`、`/bubble?hide=1`、`/motion`、`/emotion`、`/pointer`。
 
 ## 目录
 
@@ -64,7 +68,9 @@ HTTP 直接调也行：`/state`、`/say`、`/motion`、`/emotion`、`/pointer`�
 | `stage.js` | 渲染层：建 PIXI 应用、加载模型、把驱动挂到更新链上 |
 | `engine.js` | 驱动层：待机、指针、眨眼、口型、动作、参数写入 |
 | `interact.js` | 交互层：alpha 判定穿透、剪影标定、分区点触、拖动与缩放 |
+| `bubble.js` | 气泡层：贴着头顶的说话泡、逐字出水、等待三点 |
 | `drag.js` | Alt 拖动的一帧数学，跨屏 / 高 DPI 冻结物理像素尺寸 |
+| `PLAN.md` | 把外壳成果搬进来的接入计划与进展记录 |
 | `preload.js` | 主进程与页面之间的桥 |
 | `cli.mjs` | 命令行：走控制口给她发指令 |
 | `vendor/` | `pixi 6.5.10` 与 `pixi-live2d-display 0.4.0`，都是 MIT，随仓库走 |
