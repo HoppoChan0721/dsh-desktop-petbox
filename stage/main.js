@@ -182,7 +182,9 @@ app.whenReady().then(async () => {
 
   const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
   console.log(JSON.stringify({ modelDir: MODEL_DIR, modelFile: modelFile ? '(found)' : 'MISSING', core: CORE_FILE ? '(found)' : 'MISSING' }));
-  await win.loadURL('pet://stage/index.html?model=' + encodeURIComponent(modelFile));
+  // --sway=1.6 待机摆动幅度倍数：头发/裙摆的物理全靠它，太小看着死。不填就用引擎默认。
+  const swayArg = arg('sway', process.env.WHALE_SWAY || '');
+  await win.loadURL('pet://stage/index.html?model=' + encodeURIComponent(modelFile) + (swayArg ? '&sway=' + encodeURIComponent(swayArg) : ''));
 
   // ---- 控制口 ---------------------------------------------------------------
   // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
@@ -247,7 +249,8 @@ app.whenReady().then(async () => {
     '/state': async () => {
       const s = await win.webContents.executeJavaScript('window.__petEngine ? window.__petEngine.state() : null');
       const info = await win.webContents.executeJavaScript('window.__stageInfo || null');
-      return { ...s, model: MODEL_DIR, motions: info && info.motions, expressions: info && info.expressions, gaze: tracker.state() };
+      const stats = await win.webContents.executeJavaScript('window.__stageStats ? window.__stageStats() : null');
+      return { ...s, model: MODEL_DIR, motions: info && info.motions, expressions: info && info.expressions, stats, gaze: tracker.state() };
     },
     // 指针策略：看状态、开关追踪、手动挂起。
     // /gaze?circle=2 是演示/自检钩子——走真实的绕圈判定和三节反应，只是不真的挪鼠标。

@@ -15,7 +15,7 @@ const ok = (cond, name, extra = '') => {
 };
 
 const DEG = Math.PI * 2;
-const CENTER = { minR: TUNE.minR, zoneR: 320 };   // 相当于窗口高 1182 时的调戏区
+const CENTER = { zoneR: 320 };   // 相当于窗口高 1182 时的调戏区（出区线 416）
 
 // 绕着头转一圈，逐格喂给状态机，返回这一圈里触发的节号
 // 注意要「多喂一格」：真实鼠标是连续的，转角是逐渐累加的；
@@ -94,23 +94,45 @@ console.log('绕圈判定（一圈一圈喂进去，看第几圈触发）');
 // ---- 4b. 指针瞬移（跳变）不算转角 ----
 {
   const s = createSpinState({ turnsPerStage: 2 });
-  const a = spinTurns(s, { now: 1000, turns: 1.5 });
+  let now = 1000;
+  spinSample(s, now, 140, 0, CENTER);        // 先在「右边」定个角度
   const before = s.accum;
-  // 从「正上方」一下闪到「正下方」：差了 π 弧度，是跳不是手转
-  const jump = spinSample(s, a.now + 16, 0, 140, CENTER);
-  spinSample(s, a.now + 32, 0, -140, CENTER);
-  ok(jump === 0 && Math.abs(s.accum - before) < 0.01, '瞬移不改变累计', (s.accum / DEG).toFixed(2));
+  // 一下闪到「左边」：差了 π 弧度，是跳不是手转
+  now += 16;
+  const jump = spinSample(s, now, -140, 0, CENTER);
+  ok(jump === 0 && Math.abs(s.accum - before) < 1e-6, '瞬移不改变累计', (s.accum / DEG).toFixed(3));
 }
 
-// ---- 5. 手离开调戏区 → 清零 ----
+// ---- 5. 手离开调戏区 → 清零；贴着头心不算但不作废 ----
 {
   const s = createSpinState({ turnsPerStage: 2 });
   const r = spinTurns(s, { now: 1000, turns: 1.4 });
   ok(Math.abs(s.accum) > 0, '区内累计有值');
-  spinSample(s, r.now + 16, 400, 0, CENTER);   // 超出 zoneR 320
-  ok(Math.abs(s.accum) === 0, '手出区，累计清零');
-  const near = spinSample(s, r.now + 32, 20, 0, CENTER);   // 太靠近头心（< minR）
-  ok(near === 0 && Math.abs(s.accum) === 0, '贴着头心转不算（半径太小）');
+  spinSample(s, r.now + 16, 500, 0, CENTER);   // 超出出区线（zoneR 320 × 1.3 = 416）
+  ok(Math.abs(s.accum) === 0, '手真出区，累计清零');
+  const before = spinTurns(s, { now: r.now + 32, turns: 1.2 });
+  const kept = Math.abs(s.accum);
+  // 贴着头心（离圆心 20px）：圈住头心的转动照样算，不再因为「半径太小」被扔掉
+  spinSample(s, before.now + 16, 20, 0, CENTER);
+  ok(kept > 0 && Math.abs(s.accum) !== kept, '贴着头心也照算转角', kept.toFixed(2));
+  // 边缘抖一下（还没到出区线）也不该扔进度
+  spinSample(s, before.now + 32, 360, 0, CENTER);
+  ok(Math.abs(s.accum) > 0, '在调戏区外沿那一圈不扔进度（1.3 倍才出区）');
+}
+
+// ---- 5b. 绕小圈（每圈都从头的近处经过）也能攒满一节 ----
+{
+  const s = createSpinState({ turnsPerStage: 2 });
+  // 圆心偏下 80px、半径 120：每圈都会经过离头心 40px 的地方（旧版到这里就清零了）
+  let now = 1000;
+  const fired = [];
+  for (let i = 0; i <= 48 * 2 + 2; i++) {
+    const a = DEG * i / 48;
+    now += 16;
+    const st = spinSample(s, now, Math.cos(a) * 120, 80 + Math.sin(a) * 120, CENTER);
+    if (st) fired.push(st);
+  }
+  ok(fired[0] === 1, '绕小圈经过头心附近，照样能攒满并触发', 'fired=' + JSON.stringify(fired));
 }
 
 // ---- 6. 发晕 / 生气期间不看鼠标 ----
@@ -152,7 +174,7 @@ console.log('参数（改了这几个数，手感就变了，别随手动）');
   ok(TUNE.turnsPerStage === 6, '默认一节 6 圈（主人 2026-11-01 说两圈太灵敏）');
   ok(TUNE.gapMs === 700, '手停 700ms 作废');
   ok(TUNE.suspendMs[1] === 3600 && TUNE.suspendMs[2] === 4000, '发晕 3.6s、嫌弃 4s 不看鼠标');
-  ok(TUNE.minR === 55, '贴着头心 55px 内不算转圈');
+  ok(TUNE.zoneR === 0.45 && TUNE.zoneExit === 1.3, '调戏区 0.45 倍窗高、出区 1.3 倍');
   const s = createSpinState({ turnsPerStage: 99 });
   ok(s.turnsPerStage === 6, '节数越界回落到 6', String(s.turnsPerStage));
   const s2 = createSpinState({ turnsPerStage: 2 });

@@ -92,6 +92,10 @@
     swayZ: 0.6,
     swayPosX: 0.5,
     swayPosZ: 0.35,
+    // 待机摆动放大倍数：头发/裙摆的物理全靠这点输入在动，摆太小整只看着「死」。
+    // 1.0 = 最初那套很小的摆手感；1.6 = 现在默认（比鲸语那套节律摇摆 8/7 还收敛）。
+    // 想现场比一比：启动加 --sway=1 或 --sway=2.4。
+    swayScale: 1.6,
     tauIdle: 0.16,  // 待机归位：慢慢缓过去，不要「啪」地弹回
     tauActing: 0.055, // 演动作 / 跟指针：跟手
     tauEye: 0.016,  // 眼睛开合单独走快通道，否则眨眼糊成一片
@@ -123,6 +127,7 @@
       this.pointerInput = { x: 0, y: 0 };
       this.gaze = { x: 0, y: 0 };
       this.idle = true;
+      this.swayScale = Number(options.sway) > 0 ? Number(options.sway) : TUNE.swayScale;
 
       this.mouth = 0;
       this.mouthTarget = 0;
@@ -218,7 +223,13 @@
 
     // ---- 对外 ---------------------------------------------------------------
     pointer(p) {
-      if (!p) { this.pointerInput = null; return; }
+      if (!p) {
+        // 不跟指针了（人走开 / 发晕 / 生气期间）：身体回正，**眼睛也要回正**。
+        // 以前只清 pointerInput 不清 gaze，结果身子回正了眼睛还黏在鼠标上。
+        this.pointerInput = null;
+        this.gaze = { x: 0, y: 0 };
+        return;
+      }
       this.pointerInput = { x: clamp(num(p.x, 0), -1, 1), y: clamp(num(p.y, 0), -1, 1) };
       this.gaze = this.pointerInput;
     }
@@ -340,12 +351,13 @@
     applyIdle({ set }) {
       if (!this.idle) return;
       const phase = this.clock;
+      const k = this.swayScale;
       set('ParamBreath', TUNE.breathBase + TUNE.breathAmp * Math.sin(phase * TUNE.breathHz));
-      set('AngleX', TUNE.swayX * Math.sin(phase * 0.55));
-      set('AngleY', TUNE.swayY * Math.sin(phase * 0.72 + 0.4));
-      set('AngleZ', TUNE.swayZ * Math.sin(phase * 0.48));
-      set('PositionX', TUNE.swayPosX * Math.sin(phase * 0.55 - 0.2));
-      set('PositionZ', TUNE.swayPosZ * Math.sin(phase * 0.48 - 0.25));
+      set('AngleX', TUNE.swayX * k * Math.sin(phase * 0.55));
+      set('AngleY', TUNE.swayY * k * Math.sin(phase * 0.72 + 0.4));
+      set('AngleZ', TUNE.swayZ * k * Math.sin(phase * 0.48));
+      set('PositionX', TUNE.swayPosX * k * Math.sin(phase * 0.55 - 0.2));
+      set('PositionZ', TUNE.swayPosZ * k * Math.sin(phase * 0.48 - 0.25));
       const idle = this.idleMotion;
       if (idle && idle.curves.length) {
         const t = idle.duration > 0 ? phase % idle.duration : 0;
@@ -456,6 +468,7 @@
         elapsed: +this.elapsed.toFixed(2),
         duration: this.job ? this.job.duration : 0,
         pointer: this.pointerInput,
+        eye: { x: +num(this.gaze && this.gaze.x, 0).toFixed(3), y: +num(this.gaze && this.gaze.y, 0).toFixed(3) },
         emotion: this.emotionName || null,
         managed: this.managed.size,
         missing: this.missing.slice(0, 40),

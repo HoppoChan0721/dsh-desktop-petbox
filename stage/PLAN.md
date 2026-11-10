@@ -114,4 +114,9 @@
   - 圆心用**剪影头顶**（`interact.js` 的 `reportHead()` 报 `{x, top, span}` 给主进程），兜底才是外壳那两个写死比例。
   - 验证：`node scripts/test-gaze.mjs` 31 条纯数学用例（`npm test` 已带上）；实机用 `node stage\cli.mjs gaze circle 2` 跑真实的判定和反应（不挪真鼠标），三节依次触发、`/state` 里 emotion 依次是 圈圈眼 / 屑屑眼 / 黑脸。
   - 演示可以临时把一节改成 2 圈：启动前 `$env:WHALE_SPIN_TURNS='2'`，正常是 6。
+- 2026-11-10 深夜 · 主人试了三个问题，一并修：
+  - **「一直转没触发」**：两条原因叠在一起。①`zoneR` 只有 0.27 倍窗高（319px），绕着整个身子转会被判出区；②贴着头心（<55px）直接 `spinClear`，可越靠近圆心角速度越快，一次就丢掉大半圈。现在**只要指针在她窗口里就累计**，离开窗口才清零；半径不设下限。
+  - **眼睛不回正**：`engine.pointer(null)` 只清 `pointerInput` 没清 `gaze`，身子回正了眼睛还黏着。现在一起清。
+  - **头发物理不如鲸语**：模型更新走 `PIXI.Ticker.shared`，只锁 `app.ticker` 没用（实测还是 160+ 帧），两个都锁到 60；顺便摘掉 pixi 自带的 `eyeBlink / breath / updateFocus`（鲸语也这么干，避免和我们的驱动每帧互相覆盖）；待机摆动放大到 1.6 倍（`--sway=` 可调），头发有了输入才动得起来。
+  - 验证：`npm test` 71+33 全绿；`/state` 里 tick 率 59.3 次/秒、`stats.maxFps` 60；`gaze?track=0` 之后 `pointer=null`、`eye={0,0}`；`gaze circle 6` 触发第一节。
 - 2026-11-10 · 下一步：第 3 步点触记录与反向桥（外壳那套分区语气词 + 亲密度账本 + 反推 61944）。

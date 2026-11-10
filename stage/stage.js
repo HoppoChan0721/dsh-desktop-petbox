@@ -25,6 +25,19 @@
   document.getElementById('stage').appendChild(app.view);
   window.__stageApp = app;
 
+  // 锁 60 帧：鲸语那边同一个补丁（`pixi.ticker.maxFPS = 60`）不是省性能，是手感——
+  // 高刷屏跑满 144Hz 时同一套物理参数每帧积分步长变小，头发摆动看着比鲸语「死」。
+  // 想放开就 ?fps=0（不限）或 ?fps=90。
+  {
+    const raw = qs.get('fps');
+    const tf = raw === null ? 60 : Number(raw);
+    const cap = Number.isFinite(tf) && tf >= 0 ? tf : 60;
+    app.ticker.maxFPS = cap;
+    // 模型不是挂在 app.ticker 上的：pixi-live2d-display 的 autoUpdate 用的是 PIXI.Ticker.shared，
+    // 所以两个都要锁，只锁 app 那个等于只限了渲染、没人管模型更新（实测还是 160+ 帧）。
+    try { if (PIXI.Ticker && PIXI.Ticker.shared) PIXI.Ticker.shared.maxFPS = cap; } catch (e) {}
+  }
+
   function fit(model) {
     // 用 app.screen 而不是 renderer.width/resolution：screen 是 PIXI 自己算出来的逻辑尺寸，
     // 在它自己的 resize 事件里读到的已经是新值。之前读 renderer 的尺寸，赶在 PIXI 更新之前拿到的是
@@ -74,7 +87,7 @@
       step();
     })();
 
-    const engine = window.createPetEngine(model, { baseUrl: new URL('.', modelUrl).href });
+    const engine = window.createPetEngine(model, { baseUrl: new URL('.', modelUrl).href, sway: Number(qs.get('sway')) || undefined });
 
     // 关键接线，两个时机缺一不可：
     //
@@ -85,6 +98,15 @@
     //    把参数还原成动作算完时保存的那份。第 1 步写进去的值会被整片抹掉，
     //    于是补写一遍，值才真的留到渲染。
     const internal = model.internalModel;
+
+    // 这三样交给我们自己：眨眼（engine.applyBlink）、呼吸（engine.applyIdle 写 ParamBreath）、
+    // 视线（engine.applyGaze 写 ParamEyeBallX/Y）。不关掉的话它们每帧还会各写一遍，
+    // 参数最后谁赢看顺序，表现就是眼睛「黏」在鼠标上、眨眼节奏怪。
+    // 鲸语也是这么处理的（eyeBlink/breath/updateFocus 全摘掉）。
+    internal.eyeBlink = undefined;
+    internal.breath = undefined;
+    internal.updateFocus = () => {};
+
     let lastStamp = performance.now();
     internal.updateNaturalMovements = function () {
       const now = performance.now();
@@ -164,6 +186,10 @@
       } catch (e) { return { motions: [], expressions: [], error: String(e) }; }
     })();
     window.__stageInfo = { modelFile, fit: fitInfo, ...groups, engine: engine.state() };
+    // 帧率：舞台锁 60。看 /state 里的 stats.fps 就知道有没有跑对。
+    // 注意 FPS 是「屏幕刷新率」不是「模型每秒更新几次」：模型走 Ticker.shared 的节流，
+    // 实际更新频率看 /state 里 frames 的增量（锁 60 时约 50~60 次/秒）。
+    window.__stageStats = () => ({ rawRafFps: Math.round(PIXI.Ticker.shared.FPS), maxFps: PIXI.Ticker.shared.maxFPS });
     document.title = '鲸鱼舞台 · ' + (groups.motions || []).join('/');
 
     window.addEventListener('resize', () => { try { fit(model); } catch (e) {} });
