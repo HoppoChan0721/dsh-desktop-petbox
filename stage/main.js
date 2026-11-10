@@ -27,6 +27,17 @@ const CORE_FILE = (() => {
   return candidates.find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || '';
 })();
 
+// 窗口大小和位置记在 userData 里，重启不用重新调。
+// 只存一百来个字节，不进仓库（userData 在系统盘，仓库只放代码）。
+function boundsPath() { return path.join(app.getPath('userData'), 'stage-window.json'); }
+function loadBounds() {
+  try {
+    const b = JSON.parse(fs.readFileSync(boundsPath(), 'utf8'));
+    if (b && Number.isFinite(b.width) && Number.isFinite(b.height) && b.width > 100 && b.height > 100) return b;
+  } catch (e) {}
+  return null;
+}
+
 protocol.registerSchemesAsPrivileged([{
   scheme: 'pet',
   privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
@@ -62,9 +73,12 @@ app.whenReady().then(async () => {
     return fileResponse(STAGE_DIR, rel);
   });
 
+  const saved = loadBounds();
   const win = new BrowserWindow({
-    width: 531,
-    height: 950,
+    width: saved ? saved.width : 531,
+    height: saved ? saved.height : 950,
+    x: saved ? saved.x : undefined,
+    y: saved ? saved.y : undefined,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -97,6 +111,18 @@ app.whenReady().then(async () => {
     } catch (e) {}
   }, 33);
   win.on('closed', () => clearInterval(cursorTimer));
+
+  let saveTimer = null;
+  const saveBounds = () => {
+    if (!win || win.isDestroyed()) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try { fs.writeFileSync(boundsPath(), JSON.stringify(win.getBounds())); } catch (e) {}
+    }, 400);
+  };
+  win.on('resize', saveBounds);
+  win.on('move', saveBounds);
+  win.on('close', () => { try { fs.writeFileSync(boundsPath(), JSON.stringify(win.getBounds())); } catch (e) {} });
 
   // ---- 交互：穿透、拖动、滚轮缩放、点她 --------------------------------------
   // forward: true 是关键——窗口不吃鼠标时仍然把 mousemove 送进页面，否则页面永远不知道该「醒过来」，
@@ -210,6 +236,14 @@ app.whenReady().then(async () => {
     '/zones': async () => {
       const z = await win.webContents.executeJavaScript('window.__stageZones ? window.__stageZones() : null');
       return { zones: z };
+    },
+    '/window': (q) => {
+      const b = win.getBounds();
+      const [w, h] = drag.clampSize(Number(q.get('w')) || b.width, Number(q.get('h')) || b.height);
+      const x = q.get('x') !== null ? Number(q.get('x')) : b.x;
+      const y = q.get('y') !== null ? Number(q.get('y')) : b.y;
+      win.setBounds({ x: Math.round(x), y: Math.round(y), width: w, height: h });
+      return { bounds: win.getBounds() };
     },
   };
 

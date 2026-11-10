@@ -26,9 +26,13 @@
   window.__stageApp = app;
 
   function fit(model) {
-    const W = app.renderer.width / app.renderer.resolution;
-    const H = app.renderer.height / app.renderer.resolution;
+    // 用 app.screen 而不是 renderer.width/resolution：screen 是 PIXI 自己算出来的逻辑尺寸，
+    // 在它自己的 resize 事件里读到的已经是新值。之前读 renderer 的尺寸，赶在 PIXI 更新之前拿到的是
+    // 上一次的旧值，窗口一变，模型的底部锚点就掉到窗口外面，脚和鞋子被截掉一截。
+    const W = app.screen.width;
+    const H = app.screen.height;
     const box = model.getLocalBounds();
+    if (!box || box.width < 1 || box.height < 1 || W < 2 || H < 2) return null;
     const scale = Math.min(W / box.width, H / box.height) * 0.98;
     model.scale.set(scale);
     model.anchor.set(0.5, 1);
@@ -147,5 +151,13 @@
     document.title = '鲸鱼舞台 · ' + (groups.motions || []).join('/');
 
     window.addEventListener('resize', () => { try { fit(model); } catch (e) {} });
+    // PIXI 的 resizeTo: window 是它自己接的，window 的 resize 事件比它早一步。
+    // 挂到 renderer 的 resize 上，等它量完再算，才不会用到旧尺寸。
+    if (app.renderer && typeof app.renderer.on === 'function') {
+      app.renderer.on('resize', () => {
+        try { fit(model); } catch (e) {}
+        try { if (window.__stageInteraction) window.__stageInteraction.resetProfile(120); } catch (e) {}
+      });
+    }
   })().catch((e) => err('模型加载失败：' + ((e && e.message) || e)));
 })();

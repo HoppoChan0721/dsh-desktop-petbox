@@ -15,6 +15,12 @@
   const ALPHA_MIN = 12;
   const bridge = window.petStage;
 
+  // 悬停在她身上时的光标：一个蓝色软点 + 白描边，热点在正中。比手型光标柔和，也不抢她。
+  const PET_CURSOR_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+    + "<circle cx='16' cy='16' r='10' fill='#5aa9ff' fill-opacity='0.28'/>"
+    + "<circle cx='16' cy='16' r='5.5' fill='#2a7fff' fill-opacity='0.95' stroke='#ffffff' stroke-width='2'/></svg>";
+  const PET_CURSOR = 'url("data:image/svg+xml;utf8,' + encodeURIComponent(PET_CURSOR_SVG) + '") 16 16, pointer';
+
   // 点中某个部位之后她的反应。表情走模型自带的，动作走我们自己合成的小幅点头/摇头。
   const REACTION = {
     hair: { emotion: '眯眼', move: 'nod' },
@@ -64,9 +70,15 @@
       return alphaAt(clientX, clientY) > ALPHA_MIN;
     }
 
-    // 鼠标移动时决定这一格吃不吃鼠标。手快的时候按位置缓存，别每像素都 readPixels，
-    // 那是同步读显存，太快会掉帧。
+    // 鼠标移动时决定这一格吃不吃鼠标，顺便换光标。
+    // 手快的时候按位置缓存，别每像素都 readPixels，那是同步读显存，太快会掉帧。
+    let overNow = null;
     function applyCursor(over) {
+      const on = !!interactive && !!over && !dragging;
+      if (on !== overNow) {
+        overNow = on;
+        document.documentElement.style.cursor = on ? PET_CURSOR : 'default';
+      }
       if (!interactive) { sendIgnore(true); return; }
       if (dragging) { sendIgnore(false); return; }
       sendIgnore(!over);
@@ -225,7 +237,12 @@
     return {
       tap,
       get ignored() { return ignored; },
-      setInteractive(on) { interactive = !!on; applyCursor(false); },
+      setInteractive(on) {
+        interactive = !!on;
+        overNow = null;
+        document.documentElement.style.cursor = 'default';
+        applyCursor(false);
+      },
       alphaAt,
       resetProfile,
     };

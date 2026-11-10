@@ -96,6 +96,7 @@
     tauActing: 0.055, // 演动作 / 跟指针：跟手
     tauEye: 0.016,  // 眼睛开合单独走快通道，否则眨眼糊成一片
     blinkHold: 0.15,
+    expressionMs: 2600, // 表情挂多久后自动归位
   };
 
   class PetEngine {
@@ -127,6 +128,8 @@
       this.mouthTarget = 0;
       this.mouthUntil = 0;
       this.impulse = null;
+      this.emotionTimer = null;
+      this.emotionName = '';
 
       this.blinkNext = 2.0;
       this.blinkFrom = -1;
@@ -256,14 +259,27 @@
 
     shake() { return this.react('AngleX', 8, 460, 1.5); }
 
-    emotion(name) {
+    // 表情不会自己回去：模型挂上就一直挂着。所以演完记得主动 reset，
+    // 不然点她一次，脸红能挂到天荒地老。
+    emotion(name, ms) {
+      const mgr = this.internal && this.internal.motionManager && this.internal.motionManager.expressionManager;
+      if (!mgr) return false;
+      clearTimeout(this.emotionTimer);
       try {
-        if (this.model && typeof this.model.expression === 'function') {
-          this.model.expression(name);
+        if (!name) {
+          mgr.resetExpression();
+          this.emotionName = '';
           return true;
         }
+        this.model.expression(name);
+        this.emotionName = name;
+        const span = num(ms, 0) > 0 ? num(ms, 0) : TUNE.expressionMs;
+        this.emotionTimer = setTimeout(() => {
+          try { mgr.resetExpression(); } catch (e) {}
+          this.emotionName = '';
+        }, span);
+        return true;
       } catch (e) { return false; }
-      return false;
     }
 
     // ---- 每帧 ---------------------------------------------------------------
