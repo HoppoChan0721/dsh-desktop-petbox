@@ -456,6 +456,7 @@
         elapsed: +this.elapsed.toFixed(2),
         duration: this.job ? this.job.duration : 0,
         pointer: this.pointerInput,
+        emotion: this.emotionName || null,
         managed: this.managed.size,
         missing: this.missing.slice(0, 40),
         idleCurves: this.idleMotion ? this.idleMotion.curves.length : 0,

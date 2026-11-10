@@ -140,7 +140,10 @@
     // 只扫一次不够：窗口尺寸、缩放、换装都会让剪影变。标定失败就退化成「整块都算身上」。
     function resetProfile(delay) {
       profile = null;
-      setTimeout(() => { profile = scanProfile(); }, delay === undefined ? 600 : delay);
+      setTimeout(() => {
+        profile = scanProfile();
+        reportHead();
+      }, delay === undefined ? 600 : delay);
     }
     window.__stageZones = () => {
       const p = ensureProfile();
@@ -258,6 +261,22 @@
       return { x: ((row.l + row.r) / 2) * W, y: p.bbox.top * H };
     }
 
+    // 把头顶报给主进程：绕圈判定要用「真实的头」当圆心，不能用窗口中心。
+    // 报的是窗口比例（画布铺满窗口），主进程按窗口像素换算，窗口缩放拖动都不用重报。
+    function reportHead() {
+      const p = ensureProfile();
+      if (!p || !bridge || !bridge.head) return;
+      const W = canvas.clientWidth || canvas.width;
+      const H = canvas.clientHeight || canvas.height;
+      if (W < 8 || H < 8) return;
+      const a = headAnchor();
+      bridge.head({
+        x: +(a.x / W).toFixed(4),
+        top: +p.bbox.top.toFixed(4),
+        span: +(p.bbox.bottom - p.bbox.top).toFixed(4),
+      });
+    }
+
     return {
       tap,
       get ignored() { return ignored; },
@@ -269,6 +288,7 @@
       },
       alphaAt,
       headAnchor,
+      reportHead,
       resetProfile,
     };
   }

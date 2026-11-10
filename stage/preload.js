@@ -16,4 +16,6 @@ contextBridge.exposeInMainWorld('petStage', {
   dragEnd() { ipcRenderer.send('stage:drag-end'); },
   wheel(dir) { ipcRenderer.send('stage:wheel', dir > 0 ? 1 : -1); },
   tap(payload) { ipcRenderer.send('stage:tap', payload); },
+  // 剪影标定出来的头顶位置（相对窗口的比例）：主进程拿它当绕圈判定的圆心
+  head(h) { ipcRenderer.send('stage:head', h); },
 });

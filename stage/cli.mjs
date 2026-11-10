@@ -57,7 +57,13 @@ else if (cmd === 'emotion') await call('/emotion', { name: rest[0] || flags.name
 else if (cmd === 'pointer') {
   if (rest[0] === 'reset') await call('/pointer', { reset: 1 });
   else await call('/pointer', { x: rest[0] || 0, y: rest[1] || 0, hold: flags.hold ? 1 : undefined });
+} else if (cmd === 'gaze') {
+  if (rest[0] === 'off') await call('/gaze', { track: 0 });
+  else if (rest[0] === 'on') await call('/gaze', { track: 1 });
+  else if (rest[0] === 'hide') await call('/gaze', { suspend: flags.ms || 8000 });
+  else if (rest[0] === 'circle') await call('/gaze', { circle: rest[1] || 2, r: flags.r });
+  else await call('/gaze');
 } else {
-  console.error('用法：state | say <文本> | wait | hide | motion <名字> | emotion <名字> | pointer <x> <y> [--hold] | pointer reset');
+  console.error('用法：state | say <文本> | wait | hide | motion <名字> | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>]');
   process.exit(2);
 }

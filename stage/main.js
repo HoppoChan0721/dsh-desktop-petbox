@@ -10,6 +10,7 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const drag = require('./drag');
+const gaze = require('./gaze');
 
 const arg = (name, dflt = '') => {
   const hit = process.argv.find((a) => a.startsWith('--' + name + '='));
@@ -102,25 +103,21 @@ app.whenReady().then(async () => {
     },
   });
 
-  // 指针：主进程每 33ms 读一次全局光标，归一化后送进页面。页面拿到的永远是真实位置，
-  // 不依赖鼠标事件——桌宠大部分时间是穿透的，页面根本收不到 mousemove。
-  const cursorTimer = setInterval(() => {
-    if (!win || win.isDestroyed()) return;
-    const p = screen.getCursorScreenPoint();
-    const [wx, wy] = win.getPosition();
-    const [ww, wh] = win.getSize();
-    const cx = (p.x - wx) / Math.max(1, ww);
-    const cy = (p.y - wy) / Math.max(1, wh);
-    const x = Math.max(-1, Math.min(1, cx * 2 - 1));
-    const y = Math.max(-1, Math.min(1, 1 - cy * 2));
-    try {
-      win.webContents.send('stage:cursor', {
-        x: +x.toFixed(3), y: +y.toFixed(3),
-        inside: cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1,
-      });
-    } catch (e) {}
-  }, 33);
-  win.on('closed', () => clearInterval(cursorTimer));
+  // 指针策略全在 gaze.js 里：主进程每 33ms 读一次全局光标，归一化后送进页面。
+  // 页面拿到的永远是真实位置，不依赖鼠标事件——桌宠大部分时间是穿透的，页面根本收不到 mousemove。
+  // 它同时负责那套手感细节：鼠标停太久就当人走开、离开本屏回正、正中心死区、绕头转圈的三节。
+  // 「转圈之后长什么样」在主进程下面 spinReact 里决定，gaze 只给节号。
+  const tracker = gaze.createStageGaze({
+    getWindow: () => win,
+    onCursor: (c) => {
+      try { if (win && !win.isDestroyed()) win.webContents.send('stage:cursor', c); } catch (e) {}
+    },
+    onSpin: (stage) => spinReact(stage),
+  });
+  win.on('closed', () => tracker.stop());
+
+  // 页面标定完剪影会把头顶位置报上来，绕圈判定就用真实的头当圆心
+  ipcMain.on('stage:head', (_e, h) => { tracker.setHead(h); });
 
   let saveTimer = null;
   const saveBounds = () => {
@@ -200,6 +197,25 @@ app.whenReady().then(async () => {
     res.end(text);
   };
 
+  // 绕着她转圈的三节：发晕 → 嫌弃 → 生气（外壳那套玩法，2026-11-01 主人点的）。
+  // 这里只决定「长什么样」：表情走模型自带的，动作走 motion，台词只用语气词——
+  // 语气词是个开口，什么回复都能往下接；说死了后面那条真回复就接不上。
+  const SPIN_REACT = {
+    1: { emotion: '圈圈眼', ms: 3200, line: '呀…头好晕…' },
+    2: { emotion: '屑屑眼', ms: 2600, line: '哼…', motion: 'HandRaise' },
+    3: { emotion: '黑脸', ms: 5200, line: '别转了…', motion: 'HandRaise' },
+  };
+  function spinReact(stage) {
+    const r = SPIN_REACT[stage];
+    if (!r) return;
+    push({ type: 'emotion', name: r.emotion, ms: r.ms });
+    if (r.motion) push({ type: 'motion', name: r.motion });
+    if (r.line) push({ type: 'say', text: r.line, ms: 2600 });
+    console.log(JSON.stringify({ spin: stage, emotion: r.emotion }));
+  }
+
+  tracker.start();
+
   // 调 TTS 桥：合成 + 下载 wav，回 {job_id, duration}。冷启动第一句要 27 秒，别当坏。
   const voiceReady = () => { try { return fs.existsSync(VOICE_PREPARE); } catch (e) { return false; } };
   const prepareVoice = (text) => new Promise((resolve, reject) => {
@@ -231,7 +247,18 @@ app.whenReady().then(async () => {
     '/state': async () => {
       const s = await win.webContents.executeJavaScript('window.__petEngine ? window.__petEngine.state() : null');
       const info = await win.webContents.executeJavaScript('window.__stageInfo || null');
-      return { ...s, model: MODEL_DIR, motions: info && info.motions, expressions: info && info.expressions };
+      return { ...s, model: MODEL_DIR, motions: info && info.motions, expressions: info && info.expressions, gaze: tracker.state() };
+    },
+    // 指针策略：看状态、开关追踪、手动挂起。
+    // /gaze?circle=2 是演示/自检钩子——走真实的绕圈判定和三节反应，只是不真的挪鼠标。
+    '/gaze': (q) => {
+      if (q.get('track') !== null) tracker.setTrack(q.get('track') !== '0');
+      if (q.get('suspend') !== null) tracker.suspend(Number(q.get('suspend')) || 0);
+      if (q.get('circle') !== null) {
+        const r = tracker.simulateCircle(Number(q.get('circle')) || 1, { r: Number(q.get('r')) || undefined });
+        return { ...tracker.state(), simulated: r };
+      }
+      return tracker.state();
     },
     '/say': (q) => {
       const text = q.get('text') || '';
