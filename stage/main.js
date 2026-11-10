@@ -7,6 +7,7 @@ const { app, BrowserWindow, protocol, net, screen, ipcMain } = require('electron
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
+const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const drag = require('./drag');
 
@@ -38,6 +39,12 @@ function loadBounds() {
   return null;
 }
 
+// 语音是可选集成：给了 TTS 桥脚本才有声音，没给就纯文字气泡，绝不因为缺 TTS 报错。
+// 桥的协议（沿用外壳那份）：环境变量 SAY_TEXT 传文本，stdout 打一行 JSON {job_id, duration}，
+// wav 落在 VOICE_DIR 里叫做 <job_id>.wav。
+const VOICE_PREPARE = arg('voice', process.env.WHALE_VOICE_PREPARE || 'F:\\DaFeiYu\\tools\\pet-voice-prepare.mjs');
+const VOICE_DIR = arg('voice-dir', process.env.WHALE_VOICE_DIR || 'F:\\AI\\VoiceService\\gateway\\downloads');
+
 protocol.registerSchemesAsPrivileged([{
   scheme: 'pet',
   privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
@@ -46,6 +53,8 @@ protocol.registerSchemesAsPrivileged([{
 // 透明置顶窗在 Windows 上会被 Chromium 判成「被别人挡住」而暂停渲染，拖动时还会在两态之间翻，
 // 表现出来就是模型一闪一闪。桌宠永远置顶，这套遮挡计算纯属误判，直接关掉。
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// 页面是自己开的窗口，放语音不该要求用户先点一下
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 // 调试口必须在 app ready 之前挂，晚一步 Chromium 就不认
 const cdpPort = arg('cdp', process.env.WHALE_STAGE_CDP || '');
@@ -66,6 +75,7 @@ app.whenReady().then(async () => {
     // 分开成 pet://model 之类的独立源会被当成跨域，fetch 直接失败。
     const rel = url.pathname.replace(/^\//, '');
     if (rel.startsWith('model/')) return fileResponse(MODEL_DIR, rel.slice('model/'.length));
+    if (rel.startsWith('voice/')) return fileResponse(VOICE_DIR, rel.slice('voice/'.length));
     if (rel.startsWith('core/')) {
       if (!CORE_FILE) return new Response('cubism core missing', { status: 404 });
       return net.fetch(pathToFileURL(CORE_FILE).toString());
@@ -190,6 +200,33 @@ app.whenReady().then(async () => {
     res.end(text);
   };
 
+  // 调 TTS 桥：合成 + 下载 wav，回 {job_id, duration}。冷启动第一句要 27 秒，别当坏。
+  const voiceReady = () => { try { return fs.existsSync(VOICE_PREPARE); } catch (e) { return false; } };
+  const prepareVoice = (text) => new Promise((resolve, reject) => {
+    if (!voiceReady()) return reject(new Error('没有 TTS 桥脚本：' + VOICE_PREPARE));
+    let out = '';
+    let child;
+    try {
+      child = spawn('node', [VOICE_PREPARE], {
+        env: { ...process.env, SAY_TEXT: text, WHALE_PET_DATA: path.join(STAGE_DIR, '..', 'data') },
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) { return reject(e); }
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.stderr.on('data', (d) => { out += d.toString(); });
+    child.on('error', reject);
+    child.on('close', () => {
+      const line = String(out).trim().split('\n').filter((l) => l.trim().startsWith('{')).pop();
+      if (!line) return reject(new Error('TTS 桥没有输出 JSON'));
+      try {
+        const job = JSON.parse(line);
+        if (job.error) return reject(new Error(String(job.error)));
+        resolve(job);
+      } catch (e) { reject(e); }
+    });
+  });
+
   const routes = {
     '/state': async () => {
       const s = await win.webContents.executeJavaScript('window.__petEngine ? window.__petEngine.state() : null');
@@ -198,14 +235,38 @@ app.whenReady().then(async () => {
     },
     '/say': (q) => {
       const text = q.get('text') || '';
-      const ms = Number(q.get('ms')) || 0;
       if (!text) throw new Error('缺 text');
-      push({ type: 'say', text, ms });
       const emo = q.get('emotion');
-      if (emo) push({ type: 'emotion', name: emo, ms: Number(q.get('emotionMs')) || 0 });
       const mo = q.get('motion');
+      const wantVoice = q.get('voice') === '1' || q.get('voice') === 'true';
+      if (emo) push({ type: 'emotion', name: emo, ms: Number(q.get('emotionMs')) || 0 });
       if (mo) push({ type: 'motion', name: mo });
-      return { pushed: true, text, ms: ms || null, emotion: emo || null, motion: mo || null };
+      if (!wantVoice) {
+        const ms = Number(q.get('ms')) || 0;
+        push({ type: 'say', text, ms });
+        return { pushed: true, text, ms: ms || null, voice: false, emotion: emo || null, motion: mo || null };
+      }
+      // 语音要等合成：先冒等待泡，好了气泡和声音一起出场，字按音频时长摊平
+      push({ type: 'wait' });
+      prepareVoice(text).then((job) => {
+        const ms = Math.round((Number(job.duration) || 0) * 1000);
+        push({ type: 'say', text, ms: ms + 700, reveal: Math.round(ms * 0.92), voice: true });
+        push({ type: 'voice', url: 'pet://stage/voice/' + encodeURIComponent(job.job_id) + '.wav' });
+      }).catch((e) => {
+        push({ type: 'say', text, ms: 0, voice: true });
+        push({ type: 'error', text: 'TTS：' + ((e && e.message) || e) });
+      });
+      return { pushed: true, text, voice: true, queued: true, emotion: emo || null, motion: mo || null };
+    },
+    '/voice': (q) => {
+      const job = q.get('job') || '';
+      if (!job) throw new Error('缺 job（wav 的 job_id）');
+      push({ type: 'voice', url: 'pet://stage/voice/' + encodeURIComponent(job) + '.wav' });
+      return { pushed: true, job, ready: voiceReady() };
+    },
+    '/voice-stop': () => {
+      push({ type: 'voice-stop' });
+      return { pushed: true };
     },
     '/wait': (q) => {
       push({ type: 'wait', ms: Number(q.get('ms')) || 0 });

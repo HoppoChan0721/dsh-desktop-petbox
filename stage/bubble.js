@@ -97,19 +97,24 @@
       if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     }
 
-    // 逐字出水：每 30ms 一个字符，长句也不会等太久
-    function type(text, hold) {
+    // 逐字出水：默认每 30ms 一个字符；给了 reveal（毫秒）就按整句摊平，
+    // 有语音的时候用音频时长来定，字和声音才对得上。
+    function type(text, hold, reveal) {
       clearTimeout(typeTimer);
       clearTimeout(hideTimer);
       el.textContent = '';
       show();
+      const n = Math.max(1, text.length);
+      const gap = Number(reveal) > 0
+        ? Math.max(18, Math.min(140, Math.round(Number(reveal) / n)))
+        : 30;
       let i = 0;
       const tick = () => {
         i++;
         el.textContent = text.slice(0, i);
         place();
         if (i < text.length) {
-          typeTimer = setTimeout(tick, 30);
+          typeTimer = setTimeout(tick, gap);
         } else {
           hideTimer = setTimeout(hide, hold);
         }
@@ -118,11 +123,11 @@
     }
 
     return {
-      say(text, ms) {
+      say(text, ms, reveal) {
         const t = compact(text).slice(0, 300);
         if (!t) return false;
         const hold = Number(ms) > 0 ? Number(ms) : Math.max(2200, Math.min(9000, t.length * 130));
-        type(t, hold);
+        type(t, hold, reveal);
         return true;
       },
       // 等待态：三个点在那儿跳，自己不说话

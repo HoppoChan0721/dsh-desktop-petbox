@@ -107,12 +107,14 @@
 
     const interaction = window.createStageInteraction({ app, model, engine });
     const bubble = window.createStageBubble({ app, interaction });
+    const voice = window.createStageVoice({ engine });
 
     window.__stageModel = model;
     window.__stageCore = internal.coreModel;
     window.__petEngine = engine;
     window.__stageInteraction = interaction;
     window.__stageBubble = bubble;
+    window.__stageVoice = voice;
     window.__stageInspect = (ids) => {
       const out = {};
       const core = internal.coreModel;
@@ -133,11 +135,16 @@
         if (cmd.type === 'motion') engine.motion(cmd.name).catch((e) => err('动作失败：' + ((e && e.message) || e)));
         else if (cmd.type === 'emotion') engine.emotion(cmd.name, cmd.ms);
         else if (cmd.type === 'say') {
-          bubble.say(cmd.text, cmd.ms);
-          // 口型时长跟着字数走，说长句的时候嘴不会提前闭
-          const chars = String(cmd.text || '').length;
-          engine.talk(cmd.ms || Math.max(1200, Math.min(9000, chars * 180)));
-        } else if (cmd.type === 'talk') engine.talk(cmd.ms);
+          // ms 给了就按它停留，reveal 给了就按它摊平逐字速度（有语音时 = 音频时长）
+          bubble.say(cmd.text, cmd.ms, cmd.reveal);
+          if (!cmd.voice) {
+            const chars = String(cmd.text || '').length;
+            engine.talk(cmd.ms || Math.max(1200, Math.min(9000, chars * 180)));
+          }
+        } else if (cmd.type === 'voice') {
+          voice.play(cmd.url).catch(() => {});
+        } else if (cmd.type === 'voice-stop') voice.stop();
+        else if (cmd.type === 'error') err(cmd.text);
         else if (cmd.type === 'wait') bubble.wait(cmd.ms);
         else if (cmd.type === 'bubble-hide') bubble.hide();
         else if (cmd.type === 'pointer') { window.__lockPointer = !!cmd.lock; engine.pointer(cmd.value || null); }

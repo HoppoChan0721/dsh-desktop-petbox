@@ -49,6 +49,7 @@
 - 做：接 TTS 桥（`voicePrepare` + `voiceWavDir`），wav 进来后用 `wavEnvelope` 的方式取包络驱动口型，音频和气泡对齐
 - 依赖：外部 TTS 服务；冷启动第一句要 27 秒，别当坏
 - 验：`cli.mjs say "..." --voice`，有声、嘴型跟得上、气泡和声音对齐
+- 状态：**已完成**（`voice.js`）
 
 ### 第 3 步 · 点触记录与反向桥
 
@@ -96,4 +97,11 @@
   - 字号按窗口宽度算 `W * 0.032`，窗口小的时候 22px 会顶掉半个身子。
   - 泡是 `pointer-events:none`，绝不挡点击。
   - 配套：控制口 `/say` 现在发 `{type:'say', text, ms}`，口型时长按字数估；新增 `/wait`、`/bubble?hide=1`，命令行 `wait` / `hide`。
-- 2026-11-10 · 下一步：第 2 步语音（要先确认 TTS 桥的入口和 wav 目录在哪）。
+- 2026-11-10 · 第 2 步完成：`voice.js` 语音链路。要点：
+  - TTS 桥沿用外壳那份协议（`SAY_TEXT` 进、stdout 一行 `{job_id, duration}` 出、wav 落在 `VOICE_DIR/<job_id>.wav`），主进程 `spawn('node', [脚本])` 调，不重写。
+  - wav 由 `pet://stage/voice/<job_id>.wav` 喂给页面，走同源，不走 file://。
+  - 包络在页面里算：`decodeAudioData` 解码后每 1/60 秒取 RMS，归一化乘 1.6（不抬的话正常说话口型只有一半大）。逐帧 `engine.setVoice(v, ms)`，引擎在 `applyMouth` 里优先用包络，没语音才回落到合成张合。
+  - 气泡逐字速度由 `reveal` 控制，有语音时按音频时长摊平，字和声音才对得上。
+  - `/say?voice=1` 立刻返回 `queued`，先冒等待泡，TTS 好了再一起出场。失败回落到纯文字并报错。
+  - 实测：TTS 热态 9 秒出声，口型 `ParamMouthOpenY` 打到 0.73，播完自动归零。
+- 2026-11-10 · 下一步：第 3 步点触记录与反向桥。

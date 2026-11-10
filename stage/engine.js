@@ -127,6 +127,8 @@
       this.mouth = 0;
       this.mouthTarget = 0;
       this.mouthUntil = 0;
+      this.voiceLevel = 0;
+      this.voiceUntil = 0;
       this.impulse = null;
       this.emotionTimer = null;
       this.emotionName = '';
@@ -238,6 +240,14 @@
     talk(ms) {
       const span = num(ms, 0) > 0 ? num(ms, 0) : 1400;
       this.mouthUntil = this.clock + span / 1000;
+      return true;
+    }
+
+    // 语音包络：由 voice.js 每帧喂进来，值是 0..1，ms 是这一格的存活时间。
+    // 有语音在放的时候口型听它的，没语音才用上面那个合成张合。
+    setVoice(level, ms) {
+      this.voiceLevel = clamp(num(level, 0), 0, 1);
+      this.voiceUntil = this.clock + Math.max(0.05, (num(ms, 0) || 60) / 1000);
       return true;
     }
 
@@ -366,8 +376,14 @@
     }
 
     applyMouth({ set }) {
+      if (this.voiceUntil > this.clock) {
+        // 有语音：口型照着包络走，跟得快一点，不然会拖成一片
+        this.mouth += (this.voiceLevel - this.mouth) * 0.5;
+        if (this.mouth > 0.002) set('ParamMouthOpenY', this.mouth);
+        return;
+      }
       if (this.clock < this.mouthUntil) {
-        // 说话的口型：不追求音素，只要张合有节奏就够
+        // 没有语音时的口型：不追求音素，只要张合有节奏就够
         const w = Math.sin(this.clock * 17) * 0.5 + 0.5;
         this.mouthTarget = 0.18 + w * 0.5;
       } else {

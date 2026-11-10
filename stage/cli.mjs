@@ -47,7 +47,9 @@ async function call(pathname, query) {
 const { flags, rest } = takeFlags(argv.slice(1));
 
 if (cmd === 'state') await call('/state');
-else if (cmd === 'say') await call('/say', { text: rest.join(' '), ms: flags.ms, emotion: flags.emotion, emotionMs: flags['emotion-ms'], motion: flags.motion });
+else if (cmd === 'say') await call('/say', { text: rest.join(' '), ms: flags.ms, emotion: flags.emotion, emotionMs: flags['emotion-ms'], motion: flags.motion, voice: flags.voice ? 1 : undefined });
+else if (cmd === 'voice') await call('/voice', { job: rest[0] || flags.job });
+else if (cmd === 'voice-stop') await call('/voice-stop');
 else if (cmd === 'wait') await call('/wait', { ms: flags.ms });
 else if (cmd === 'hide') await call('/bubble', { hide: 1 });
 else if (cmd === 'motion') await call('/motion', { name: rest[0] || flags.name });

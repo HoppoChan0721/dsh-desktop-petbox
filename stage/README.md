@@ -38,6 +38,14 @@ node_modules\electron\dist\electron.exe stage\main.js `
 
 说话时头顶冒气泡：贴着她的头顶走（不是贴在窗口角上），逐字出水，到点自己淡掉；等待的时候是三个点在跳。泡不吃鼠标，绝不挡点击。
 
+带语音说话时气泡、嘴型、声音三条线对齐：wav 的 RMS 包络逐帧喂给口型，气泡逐字速度按音频时长摊平。TTS 是可选集成，没有它也能纯文字说话。
+
+## 语音怎么配
+
+TTS 桥沿用外壳那份协议，默认找 `F:\DaFeiYu\tools\pet-voice-prepare.mjs`，wav 目录 `F:\AI\VoiceService\gateway\downloads`，都能用 `--voice=` / `--voice-dir=` 或环境变量 `WHALE_VOICE_PREPARE` / `WHALE_VOICE_DIR` 改。
+
+桥的约定：环境变量 `SAY_TEXT` 传文本，stdout 打一行 `{job_id, duration}`，wav 落成 `<job_id>.wav`。冷启动第一句要 27 秒，热态 4~9 秒，那不是坏了。
+
 窗口的大小和位置记在 `userData\stage-window.json`，重启不用重新调。`GET /window?w=&h=` 可以直接设。
 
 分区不写死数值：启动后扫一遍画布 alpha 量出剪影，脖子用「头下面最窄的那一行」自动找，其余部位按脖子到下摆的比例切。窗口拉大、缩放、换装都不用重新标定。`GET /zones` 和 `GET /taps` 可以看当前标定和最近的点触记录。
@@ -49,6 +57,9 @@ node_modules\electron\dist\electron.exe stage\main.js `
 ```powershell
 node stage\cli.mjs state
 node stage\cli.mjs say "主人回来啦" --emotion 脸红 --motion HandRaise
+node stage\cli.mjs say "主人回来啦" --voice    # 出声，气泡和口型跟着音频走
+node stage\cli.mjs voice <job_id>             # 重播已经合成好的那条
+node stage\cli.mjs voice-stop
 node stage\cli.mjs wait                # 三个点的等待泡
 node stage\cli.mjs hide                # 收起气泡
 node stage\cli.mjs motion FingerShow
@@ -69,6 +80,7 @@ HTTP 直接调也行：`/state`、`/say`、`/wait`、`/bubble?hide=1`、`/motion
 | `engine.js` | 驱动层：待机、指针、眨眼、口型、动作、参数写入 |
 | `interact.js` | 交互层：alpha 判定穿透、剪影标定、分区点触、拖动与缩放 |
 | `bubble.js` | 气泡层：贴着头顶的说话泡、逐字出水、等待三点 |
+| `voice.js` | 语音层：放 wav、取 RMS 包络驱动口型、和气泡对齐 |
 | `drag.js` | Alt 拖动的一帧数学，跨屏 / 高 DPI 冻结物理像素尺寸 |
 | `PLAN.md` | 把外壳成果搬进来的接入计划与进展记录 |
 | `preload.js` | 主进程与页面之间的桥 |
