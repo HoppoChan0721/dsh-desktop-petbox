@@ -119,4 +119,11 @@
   - **眼睛不回正**：`engine.pointer(null)` 只清 `pointerInput` 没清 `gaze`，身子回正了眼睛还黏着。现在一起清。
   - **头发物理不如鲸语**：模型更新走 `PIXI.Ticker.shared`，只锁 `app.ticker` 没用（实测还是 160+ 帧），两个都锁到 60；顺便摘掉 pixi 自带的 `eyeBlink / breath / updateFocus`（鲸语也这么干，避免和我们的驱动每帧互相覆盖）；待机摆动放大到 1.6 倍（`--sway=` 可调），头发有了输入才动得起来。
   - 验证：`npm test` 71+33 全绿；`/state` 里 tick 率 59.3 次/秒、`stats.maxFps` 60；`gaze?track=0` 之后 `pointer=null`、`eye={0,0}`；`gaze circle 6` 触发第一节。
+- 2026-11-10 深夜第二轮（主人再提三条）：
+  - 一节 **6 圈改成 4 圈**（6 圈转得太累）。
+  - 第二节不再抬手（只 `屑屑眼`）。
+  - 第三节的手「抬一下就弹回去」：`engine.motion(name, {hold:true})` 演完停在最后一帧，
+    黑脸挂 6.5 秒，提前 1 秒播模型自带的 `HandLower`，1.017 秒刚好在表情复原那一刻放完。
+    实测时间线：0~1.1s 抬手 → 1.13s 冻住按在胸口约 4.4 秒 → 5.5s 开始放 → 6.5s 表情和手一起复原。
+  - 新口子：`/motion?hold=1`、`/motion-stop`，命令行 `motion HandRaise --hold`、`motion stop`。
 - 2026-11-10 · 下一步：第 3 步点触记录与反向桥（外壳那套分区语气词 + 亲密度账本 + 反推 61944）。

@@ -52,7 +52,10 @@ else if (cmd === 'voice') await call('/voice', { job: rest[0] || flags.job });
 else if (cmd === 'voice-stop') await call('/voice-stop');
 else if (cmd === 'wait') await call('/wait', { ms: flags.ms });
 else if (cmd === 'hide') await call('/bubble', { hide: 1 });
-else if (cmd === 'motion') await call('/motion', { name: rest[0] || flags.name });
+else if (cmd === 'motion') {
+  if (rest[0] === 'stop') await call('/motion-stop');
+  else await call('/motion', { name: rest[0] || flags.name, hold: flags.hold ? 1 : undefined });
+}
 else if (cmd === 'emotion') await call('/emotion', { name: rest[0] || flags.name });
 else if (cmd === 'pointer') {
   if (rest[0] === 'reset') await call('/pointer', { reset: 1 });

@@ -234,16 +234,17 @@
       this.gaze = this.pointerInput;
     }
 
-    async motion(name) {
+    async motion(name, opts) {
       const group = this.motionGroup(name);
       if (!group || !group.list || !group.list.length) throw new Error('没有这个动作：' + name);
       const file = group.list[0].File || group.list[0].file;
       const json = await this.fetchMotion(file);
       const { curves, duration, eyes } = PetEngine.toCurves(json, (ids) => this.register(ids));
-      this.job = { curves, duration, file, eyes };
+      // hold：演完停在最后一帧，不自己归位（举手是状态，得等主人那口气消了再放下来）
+      this.job = { curves, duration, file, eyes, hold: !!(opts && opts.hold) };
       this.elapsed = 0;
       this.jobName = group.key;
-      return { name: group.key, duration, curves: curves.length };
+      return { name: group.key, duration, curves: curves.length, hold: this.job.hold };
     }
 
     stopMotion() { this.job = null; this.elapsed = 0; this.jobName = ''; return true; }
@@ -311,7 +312,10 @@
       this.frames++;
       if (this.job) {
         this.elapsed += dt;
-        if (this.elapsed >= this.job.duration) { this.job = null; this.elapsed = 0; this.jobName = ''; }
+        if (this.elapsed >= this.job.duration) {
+          if (this.job.hold) this.elapsed = this.job.duration;   // 停在最后一帧，等人家发话
+          else { this.job = null; this.elapsed = 0; this.jobName = ''; }
+        }
       }
       const target = this.buildTarget();
       this.commit(target, dt);

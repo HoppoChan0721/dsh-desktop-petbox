@@ -154,7 +154,7 @@
       });
       window.petStage.onCommand((cmd) => {
         if (!cmd || !cmd.type) return;
-        if (cmd.type === 'motion') engine.motion(cmd.name).catch((e) => err('动作失败：' + ((e && e.message) || e)));
+        if (cmd.type === 'motion') engine.motion(cmd.name, { hold: !!cmd.hold }).catch((e) => err('动作失败：' + ((e && e.message) || e)));
         else if (cmd.type === 'emotion') engine.emotion(cmd.name, cmd.ms);
         else if (cmd.type === 'say') {
           // ms 给了就按它停留，reveal 给了就按它摊平逐字速度（有语音时 = 音频时长）

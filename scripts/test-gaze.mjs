@@ -171,12 +171,12 @@ console.log('绕圈判定（一圈一圈喂进去，看第几圈触发）');
 console.log('');
 console.log('参数（改了这几个数，手感就变了，别随手动）');
 {
-  ok(TUNE.turnsPerStage === 6, '默认一节 6 圈（主人 2026-11-01 说两圈太灵敏）');
+  ok(TUNE.turnsPerStage === 4, '默认一节 4 圈（主人 2026-11-10 深夜定，6 圈嫌多）');
   ok(TUNE.gapMs === 700, '手停 700ms 作废');
   ok(TUNE.suspendMs[1] === 3600 && TUNE.suspendMs[2] === 4000, '发晕 3.6s、嫌弃 4s 不看鼠标');
   ok(TUNE.zoneR === 0.45 && TUNE.zoneExit === 1.3, '调戏区 0.45 倍窗高、出区 1.3 倍');
   const s = createSpinState({ turnsPerStage: 99 });
-  ok(s.turnsPerStage === 6, '节数越界回落到 6', String(s.turnsPerStage));
+  ok(s.turnsPerStage === 4, '节数越界回落到 4', String(s.turnsPerStage));
   const s2 = createSpinState({ turnsPerStage: 2 });
   ok(s2.turnsPerStage === 2, '演示用的 2 圈可以设');
 }

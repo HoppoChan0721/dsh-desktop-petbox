@@ -202,18 +202,28 @@ app.whenReady().then(async () => {
   // 绕着她转圈的三节：发晕 → 嫌弃 → 生气（外壳那套玩法，2026-11-01 主人点的）。
   // 这里只决定「长什么样」：表情走模型自带的，动作走 motion，台词只用语气词——
   // 语气词是个开口，什么回复都能往下接；说死了后面那条真回复就接不上。
+  // 第三节的手要「抬到胸口一直按着」：举手动作用 hold 停在最后一帧，等黑脸快走完
+  // 再用模型自带的「举手切默认手」放下来。lowerLead = 提前多少毫秒开始放，
+  // 放下来要 1.017 秒，让它和黑脸同时复原，而不是脸先好了手还举着。
   const SPIN_REACT = {
     1: { emotion: '圈圈眼', ms: 3200, line: '呀…头好晕…' },
-    2: { emotion: '屑屑眼', ms: 2600, line: '哼…', motion: 'HandRaise' },
-    3: { emotion: '黑脸', ms: 5200, line: '别转了…', motion: 'HandRaise' },
+    2: { emotion: '屑屑眼', ms: 2600, line: '哼…' },
+    3: { emotion: '黑脸', ms: 6500, line: '别转了…', motion: 'HandRaise', hold: true, lower: 'HandLower', lowerLead: 1000 },
   };
+  let spinLowerTimer = null;
   function spinReact(stage) {
     const r = SPIN_REACT[stage];
     if (!r) return;
     push({ type: 'emotion', name: r.emotion, ms: r.ms });
-    if (r.motion) push({ type: 'motion', name: r.motion });
+    if (r.motion) push({ type: 'motion', name: r.motion, hold: !!r.hold });
     if (r.line) push({ type: 'say', text: r.line, ms: 2600 });
-    console.log(JSON.stringify({ spin: stage, emotion: r.emotion }));
+    if (r.lower) {
+      // 表情到点会自己 resetExpression；手提前 lowerLead 开始放，两件事同一刻收尾
+      clearTimeout(spinLowerTimer);
+      const at = Math.max(0, r.ms - (r.lowerLead || 0));
+      spinLowerTimer = setTimeout(() => push({ type: 'motion', name: r.lower }), at);
+    }
+    console.log(JSON.stringify({ spin: stage, emotion: r.emotion, motion: r.motion || null }));
   }
 
   tracker.start();
@@ -309,8 +319,13 @@ app.whenReady().then(async () => {
     '/motion': (q) => {
       const name = q.get('name') || '';
       if (!name) throw new Error('缺 name');
-      push({ type: 'motion', name });
-      return { pushed: true, name };
+      const hold = q.get('hold') === '1' || q.get('hold') === 'true';
+      push({ type: 'motion', name, hold });
+      return { pushed: true, name, hold };
+    },
+    '/motion-stop': () => {
+      push({ type: 'stop' });
+      return { pushed: true };
     },
     '/emotion': (q) => {
       const name = q.get('name') || '';
