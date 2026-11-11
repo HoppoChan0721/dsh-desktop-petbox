@@ -12,6 +12,7 @@ const { pathToFileURL } = require('node:url');
 const drag = require('./drag');
 const gaze = require('./gaze');
 const Cfg = require('./config');
+const Touch = require('./touch');
 
 // 单实例：托盘图标点第二遍、开机自启和手动启动撞在一起时，别再开第二只
 let activeWin = null;
@@ -191,13 +192,49 @@ app.whenReady().then(async () => {
     win.setBounds({ x: Math.round(b.x + (b.width - w) / 2), y: Math.round(b.y + (b.height - h)), width: w, height: h });
   });
 
+  // ---- 点触账本 --------------------------------------------------------------
+  // 流水落 data/touch.jsonl，统计落 data/touch-stats.json，跟外壳那套是同一份文件，
+  // 所以以前攒的亲密度不会因为换舞台清零。
+  // 「摸完长什么样」由 touch.decide 决定：部位表情 + 语气词，另加两种语境
+  // （隔很久没摸会一惊一乍、今天被摸太多会黏人）和连击翻脸。
+  const book = Touch.createTouchBook({ dir: Cfg.DATA_DIR });
+  let bridgeWarned = false;
+
+  // 反向桥：把点触事件 POST 给 DSH 侧的 dsh-pet-bridge（fire-and-forget，失败只记一次）
+  function forwardTouch(ev) {
+    if (cfg.bridge === false) return;
+    const url = String(cfg.bridgeUrl || 'http://127.0.0.1:61944/event').trim();
+    if (!url) return;
+    try {
+      const u = new URL(url);
+      const body = JSON.stringify(ev);
+      const req = http.request({
+        hostname: u.hostname,
+        port: u.port || 80,
+        path: (u.pathname || '/') + (u.search || ''),
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        timeout: 1500,
+      }, (res) => { res.resume(); });
+      req.on('error', (e) => { if (!bridgeWarned) { bridgeWarned = true; console.log('bridge post failed: ' + e.message); } });
+      req.on('timeout', () => { try { req.destroy(); } catch (e) {} });
+      req.end(body);
+    } catch (e) {}
+  }
+
   const taps = [];
   ipcMain.on('stage:tap', (_e, payload) => {
-    const rec = Object.assign({}, payload || {});
-    if (!rec.at) rec.at = Date.now();
-    taps.push(rec);
+    const r = book.record(payload || {});
+    if (!r) return;
+    taps.push(r.ev);
     if (taps.length > 60) taps.shift();
-    console.log(JSON.stringify({ tap: rec }));
+    forwardTouch(r.ev);
+    const react = r.reaction;
+    // 表情由主进程统一决定：部位默认表情 + 语境覆盖（黏人/一惊一乍/翻脸），
+    // 页面那边只负责点头摇头，别两边同时改表情互相打。
+    if (react.emotion) push({ type: 'emotion', name: react.emotion, ms: react.many ? 2600 : 1800 });
+    if (react.text) push({ type: 'say', text: react.text, ms: 2600 });
+    console.log(JSON.stringify({ tap: r.ev, react: { emotion: react.emotion, text: react.text, tone: react.tone, many: react.many } }));
   });
 
   const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
@@ -379,6 +416,17 @@ app.whenReady().then(async () => {
       const n = Math.max(1, Math.min(60, Number(q.get('n')) || 20));
       return { taps: taps.slice(-n) };
     },
+    // 记账自检：最近 n 条流水 + 亲密度统计
+    '/touches': (q) => {
+      const n = Math.max(1, Math.min(200, Number(q.get('n')) || 20));
+      let lines = [];
+      try {
+        lines = fs.readFileSync(book.ledgerFile, 'utf8').split('\n').filter((l) => l.trim());
+      } catch (e) {}
+      const tail = lines.slice(-n).map((l) => { try { return JSON.parse(l); } catch (e) { return { raw: l }; } });
+      return { count: lines.length, ledger: book.ledgerFile, touches: tail };
+    },
+    '/affinity': () => ({ affinity: book.info() }),
     '/zones': async () => {
       const z = await win.webContents.executeJavaScript('window.__stageZones ? window.__stageZones() : null');
       return { zones: z };

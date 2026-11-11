@@ -11,13 +11,9 @@
 
 ## 1. 立刻要做的第一件事
 
-**第 3 步：点触记录与反向桥。**
+**第 4 步：情绪端口 61943。** `persona\mood.ps1` 现在还往 61943 发，舞台没接之前那边是哑的；照 `/say` `/emotion` 的写法在 `stage\main.js` 的 routes 里加就好。之后是第 6 步 DSH 桥（61942）。
 
-- 点她 → 追加 `F:\DaFeiYu\projects\whale-pet-shell\data\touch.jsonl` → 算亲密度 → POST 到 `bridgeUrl`（现役是 `http://127.0.0.1:61944/event`）→ 把 DSH 会话叫醒
-- 本地反应（表情 + 点头/摇头）已经有了，在第 3 步里保留
-- **先只做本地记录和 `/taps`，桥那头等主人点头再连**
-- 参考实现：外壳 `src\main.js` 的 `handleTouch` `recordTouch` `appendTouch` `forwardTouch` `affinityInfo`（约 690~760 行）
-- 接着第 4 步情绪端口 61943：`persona\mood.ps1` 现在还是往 61943 发，舞台没接之前那边是哑的
+第 3 步（点触账本 + 亲密度 + 反向桥）2026-11-11 晚已经接完，见第 3 节。
 
 ## 2. 先确认舞台在不在跑
 
@@ -61,7 +57,19 @@ node stage\cli.mjs pointer 0 -1 --hold        # 冻结指针位置（验证探�
 node stage\cli.mjs pointer reset
 ```
 
-控制口 `127.0.0.1:61945`：`/state` `/say` `/voice` `/voice-stop` `/wait` `/bubble?hide=1` `/motion` `/emotion` `/pointer` `/taps` `/zones` `/window` `/gaze` `/config` `/panel` `/menu`。
+控制口 `127.0.0.1:61945`：`/state` `/say` `/voice` `/voice-stop` `/wait` `/bubble?hide=1` `/motion` `/emotion` `/pointer` `/taps` `/touches` `/affinity` `/zones` `/window` `/gaze` `/config` `/panel` `/menu`。
+
+点触那条链（2026-11-11 晚接完）：
+
+```powershell
+node stage\cli.mjs touches 5                   # 最近 5 条流水（data\touch.jsonl）
+node stage\cli.mjs affinity                    # 亲密度：总次数/今天/连几天/最爱被摸哪
+```
+
+- 落盘跟外壳那套是**同一份文件**（`data\touch.jsonl`、`data\touch-stats.json`），所以以前攒的 67 下和 Lv 不会清零
+- 反应由 `stage\touch.js` 的 `decide()` 定：部位表情 + 语气词，外加「隔 6 小时没摸会一惊一乍」「今天被摸 15 下以上会黏人」「同部位连击 3~5 下翻脸」，连击阈值随亲密度 Lv.4/Lv.6 抬到 4/5 下
+- **表情只在主进程定**，页面那边 `interact.js` 只做点头摇头。两边同时改表情会互相打，看着像闪一下又回去
+- 反向桥默认开：`data\stage-config.json` 的 `bridge` / `bridgeUrl`（`http://127.0.0.1:61944/event`），失败只记一次日志，不影响本地反应
 
 托盘菜单 / 右键她 / 设置面板三处看到的是同一套东西（开关、尺寸、帧率、摆动、绕圈圈数）。命令行对应：
 
@@ -97,6 +105,7 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
 | `stage\voice.js` | 放 wav、RMS 包络驱动口型 |
 | `stage\drag.js` | 跨屏高 DPI 拖动数学（从 `src\drag.js` 原样搬，别重写） |
 | `stage\gaze.js` | 指针策略：轮询、静止丢失追踪、离屏回正、绕圈三节判定（纯数学可单测） |
+| `stage\touch.js` | 点触账本：`touch.jsonl` 流水、`touch-stats.json` 亲密度、分区语气池 + 语境/连击判定（纯函数可单测） |
 | `stage\config.js` | 舞台配置：`data\stage-config.json` 的读写与默认值 |
 | `stage\panel.html` `panel.js` `panel-preload.js` | 设置面板：尺寸滑杆、帧率、摆动、圈数、三个开关 |
 | `stage\tray-32.png` `tray-256.png` | 托盘/面板图标（从 `assets\` 复制，stage 不 import src） |
@@ -141,8 +150,8 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 
 ## 7. 未结项 / 等主人拍板
 
-- 第 3 步要不要真连反向桥（连了会唤醒 DSH 会话）
 - 第 4 步情绪端口 61943 还没接，`persona\mood.ps1` 现在是往空气里发
+- 点触台词只有气泡，没走 TTS（外壳那边有预合成命中的做法，一串「唔…」现合成要 4~8 秒，不值）
 - 语音：气泡和音频起点仍有约 50~100ms 差（页面 fetch+解码耗时），要不要提前预热
 - 换装表情（`裙子切换` `鞋子` `胸衣` `体型1/2`）还没验证过在舞台上的持久性——外壳那边有「换装是状态不是动作、演完不能穿回去」的处理
 - 老外壳（`src\`）什么时候删/归档：现在留着当回退，`npm run start:legacy`
@@ -159,7 +168,8 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 ## 9. 变更记录
 
 ```
-<下一次提交>  第 5 步托盘/右键菜单/设置面板 + 第 7 步入口切到 stage（config.js / panel.*）
+<下一次提交>  第 3 步点触账本：流水/亲密度/语境语气/反向桥（stage\touch.js + 61 条单测）
+7742f24  摆动幅度/频率提到看得见的量级，头角+身体角一起摆
 5494d94  绕圈判据放宽、眼睛回正、锁 60 帧、待机摆动 ×1.6
 9c34506  指针手感细节：绕头转圈三节 / 静止丢失追踪 / 瞬移防护（stage\gaze.js）
 2815e3c  接入第 2 步：语音链路，wav 包络驱动口型

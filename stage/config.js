@@ -21,6 +21,8 @@ const DEFAULTS = {
   sway: 1.6,             // 待机摆动倍数：头发物理全靠它
   spinTurns: 4,          // 绕她转几圈算一节（2~20）
   smartIgnore: true,     // 智能穿透：只在角色身上吃鼠标
+  bridge: true,          // 点触转给 DSH 侧桥（61944）；关掉只断这一条，本地反应照做
+  bridgeUrl: 'http://127.0.0.1:61944/event',
 };
 
 function load() {

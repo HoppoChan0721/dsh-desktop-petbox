@@ -21,17 +21,19 @@
     + "<circle cx='16' cy='16' r='5.5' fill='#2a7fff' fill-opacity='0.95' stroke='#ffffff' stroke-width='2'/></svg>";
   const PET_CURSOR = 'url("data:image/svg+xml;utf8,' + encodeURIComponent(PET_CURSOR_SVG) + '") 16 16, pointer';
 
-  // 点中某个部位之后她的反应。表情走模型自带的，动作走我们自己合成的小幅点头/摇头。
+  // 点中某个部位之后的**本地**动作：只点头摇头，表情交给主进程统一决定。
+  // 理由：表情要按语境覆盖（黏人 / 隔久没摸 / 连击翻脸），那些数只有主进程手里有；
+  // 两边同时改表情会互相打，看起来就是表情闪一下又回去。
   const REACTION = {
-    hair: { emotion: '眯眼', move: 'nod' },
-    head: { emotion: '眯眼', move: 'shake' },
-    neck: { emotion: '＞＜', move: 'shake' },
-    chest: { emotion: '脸红', move: 'nod' },
-    waist: { emotion: '脸红', move: 'nod' },
-    skirt: { emotion: '眯眼', move: 'shake' },
-    leg: { emotion: '＞＜', move: 'nod' },
-    foot: { emotion: '流冷汗', move: 'nod' },
-    body: { emotion: null, move: 'nod' },
+    hair: { move: 'nod' },
+    head: { move: 'shake' },
+    neck: { move: 'shake' },
+    chest: { move: 'nod' },
+    waist: { move: 'nod' },
+    skirt: { move: 'shake' },
+    leg: { move: 'nod' },
+    foot: { move: 'nod' },
+    body: { move: 'nod' },
   };
 
   function createInteraction({ app, model, engine }) {
@@ -200,7 +202,6 @@
 
     function react(zone) {
       const r = REACTION[zone] || REACTION.body;
-      if (r.emotion) engine.emotion(r.emotion);
       if (r.move === 'nod') engine.nod();
       else if (r.move === 'shake') engine.shake();
     }

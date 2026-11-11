@@ -57,6 +57,7 @@
 - 做：点她 → 追加 `data/touch.jsonl`、算亲密度、POST 到 `bridgeUrl`；本地反应保留
 - 依赖：`dsh-pet-bridge` 在 61944 跑着
 - 验：`node cli\pet.mjs touches 20` 能看到记录；DSH 会话被唤醒
+- 状态：**已完成**（2026-11-11 晚）。`stage/touch.js` 独立模块：`decide()` 纯函数、`createTouchBook()` 记账；跟外壳同一份 `data/touch.jsonl` / `touch-stats.json`，老账不清零；控制口加 `/touches` `/affinity`，命令行 `touches` / `affinity`；表情改由主进程统一定（部位 + 黏人/一惊一乍/翻脸三种语境），页面只做点头摇头；反向桥默认开，`stage-config.json` 的 `bridge` / `bridgeUrl` 能关
 
 ### 第 4 步 · 情绪端口
 
@@ -149,5 +150,18 @@
   - 拖尺寸闪：`resizeTo: window` 每来一次 resize 就重建缓冲区，还叠着每次重算 fit + 重扫剪影（同步读整张画布），
     拖动时几十个扫描排队 → 卡 + 闪。改成自己按 25fps 节流 `renderer.resize`，剪影只在停手 200ms 后扫一次，
     扫描定时器同一时刻只留一个。
-- 2026-11-11 · 下一步：第 3 步点触记录与反向桥（外壳那套分区语气词 + 亲密度账本 + 反推 61944），
-  以及第 4 步情绪端口 61943（`mood.ps1` 现在还是往 61943 发，接上之前那边是哑的）。
+- 2026-11-11 18:5x · 第 3 步点触账本接完（主人说「先继续，细节后面再优化」）：
+  - 新模块 `stage/touch.js`：`decide()` 是纯函数（部位 × 连击数 × 亲密度 × 语境 → 表情 + 台词），
+    `createTouchBook()` 只管落盘。`scripts/test-touch.mjs` 61 条单测，`npm test` 现在 71 + 33 + 61。
+  - **跟外壳共用同一份账**：`data/touch.jsonl` 流水、`data/touch-stats.json` 统计，所以以前那 67 下、
+    连 7 天、最爱被摸头这些都还在，没清零。
+  - 语境三条照搬：隔 6 小时没摸 → 第一下一惊一乍（`流冷汗` + `呀…`）；今天被摸 15 下以上 → 第一下黏人
+    （`脸红` + `嘿嘿…`）；同部位连击到 3 下翻脸（`＞＜` + `呃…`），亲密度 Lv.4 / Lv.6 把阈值抬到 4 / 5 下。
+    第二下只换表情不出声，连点不刷气泡。
+  - 表情**只由主进程定**，`interact.js` 里的 `REACTION` 删掉 emotion 只留点头摇头。两边同时改表情会互相打，
+    表现是表情闪一下又回去。
+  - 控制口加 `/touches?n=` `/affinity`，命令行 `touches [n]` / `affinity`；反向桥默认开
+    （`stage-config.json` 的 `bridge` / `bridgeUrl`，61944 不在只记一次日志）。
+  - 实测：连点三下 → `眯眼`+`唔…` → 只有 `眯眼` → `＞＜`+`呃…`；`/affinity` 回 `total 69 / today 3 / streak 7 / Lv.2`。
+- 2026-11-11 · 下一步：第 4 步情绪端口 61943（`mood.ps1` 现在还是往 61943 发，接上之前那边是哑的），
+  然后第 6 步 DSH 桥 61942。
