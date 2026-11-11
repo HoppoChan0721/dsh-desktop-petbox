@@ -13,6 +13,7 @@ const drag = require('./drag');
 const gaze = require('./gaze');
 const Cfg = require('./config');
 const KeepAlive = require('./keepalive');
+const Text = require('./text');
 const Touch = require('./touch');
 const Mood = require('./mood');
 const Plan = require('./plan');
@@ -522,8 +523,12 @@ app.whenReady().then(async () => {
       return tracker.state();
     },
     '/say': (q) => {
-      const text = q.get('text') || '';
-      if (!text) throw new Error('缺 text');
+      // 台词先过一道「剥舞台说明」：桥认不出的 [眼神闪烁] 这种原来会挂在气泡里还被念出来。
+      // 这一层是兜底——旧桥、命令行、别的调用方都可能直接塞带括号的文本过来。
+      const raw = q.get('text') || '';
+      if (!raw) throw new Error('缺 text');
+      const text = Text.stripDirections(raw);
+      if (!text) return { pushed: false, skipped: '只有舞台说明，没有台词', raw };
       const emo = q.get('emotion');
       const mo = q.get('motion');
       const wantVoice = q.get('voice') === '1' || q.get('voice') === 'true';

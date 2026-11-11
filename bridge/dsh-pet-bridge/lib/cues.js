@@ -88,6 +88,19 @@ function normVerb(v) {
   return ALIASES[k] || k;
 }
 
+// 「舞台说明」判据：纯中文/中文标点、够短、没有 ASCII 字母数字和冒号。
+// 跟舞台那份 stage/text.js 是同一套规则（两边都剥，混搭版本也不会漏括号）。
+const DIRECTION_MAX = 12;
+const CONTENTY = /[A-Za-z0-9@#$%^&*_=+<>{}|\\/:：]/;
+export function looksLikeDirection(inner) {
+  const s = String(inner == null ? '' : inner).trim();
+  if (!s) return false;
+  if (s.length > DIRECTION_MAX) return false;
+  if (CONTENTY.test(s)) return false;
+  if (/[[\]【】]/.test(s)) return false;
+  return true;
+}
+
 // 明确是指令的动词：写错参数时整条吃掉并记一笔，免得气泡里冒出 [emotion:unknown] 这种半截标记
 const KNOWN_VERBS = new Set([
   'emotion', 'gesture', 'expr', 'look', 'nod', 'shake', 'tilt', 'blink',
@@ -124,6 +137,12 @@ function parseOne(raw) {
   const bareVerb = normVerb(inner);
   if (bareVerb === 'smile') return { kind: 'smile', seconds: 1.8 };
   if (bareVerb === 'talk') return { kind: 'talk', seconds: 2.4 };
+  // 其余裸动词给个默认幅度：[点头] [歪头] [眨眼] [nod] [tilt] 都是人话，不该被当成写错
+  if (bareVerb === 'nod') return { kind: 'nod', count: 2, seconds: 1.4 };
+  if (bareVerb === 'shake') return { kind: 'shake_head', count: 2, seconds: 1.6 };
+  if (bareVerb === 'tilt') return { kind: 'tilt', direction: 'right', seconds: 1.8 };
+  if (bareVerb === 'blink') return { kind: 'blink', side: 'both', count: 1, seconds: 0.5 };
+  if (bareVerb === 'look') return { kind: 'look', direction: 'center', seconds: 1.2 };
 
   const m = inner.match(/^([^:：]+)[:：](.*)$/);
   if (!m) return null;
@@ -294,6 +313,22 @@ export function parseCues(text) {
   }
   out += src.slice(pos);
   out = out.replace(/[ \t]{2,}/g, ' ').replace(/^[\s,，、。:：]+/, '').replace(/\s+$/g, '');
+
+  // 剩下的括号里，凡是「一看就是舞台说明」的也别留：气泡里挂着 [眼神闪烁]，TTS 还会念出来。
+  // 认不出的指令不算错，只是没地方演——记一条 notes，然后从台词里拿掉。
+  // 判据跟舞台那份 stage/text.js 一样：纯中文/中文标点、够短、没有 ASCII 字母数字和冒号。
+  const stripped = [];
+  const cleaned = out.replace(/\[([^[\]]{1,40})\]|【([^【】]{1,40})】/g, (m, a, b) => {
+    const inner = a === undefined ? b : a;
+    if (!looksLikeDirection(inner)) return m;
+    stripped.push(m);
+    return ' ';
+  }).replace(/[ \t]{2,}/g, ' ').trim();
+  if (cleaned) {
+    // 剥掉了才记账；整句只剩说明时下面会把原文留回去，这时候就不该说「剥掉了」
+    for (const s of stripped) notes.push(`当作舞台说明剥掉了：${s}`);
+    out = cleaned;
+  }
 
   return { text: out, emotion, gesture, moves, notes };
 }
