@@ -13,6 +13,7 @@ const drag = require('./drag');
 const gaze = require('./gaze');
 const Cfg = require('./config');
 const Touch = require('./touch');
+const Mood = require('./mood');
 
 // 单实例：托盘图标点第二遍、开机自启和手动启动撞在一起时，别再开第二只
 let activeWin = null;
@@ -401,6 +402,32 @@ app.whenReady().then(async () => {
       push({ type: 'emotion', name });
       return { pushed: true, name };
     },
+    // 心情端口的作用：把 `persona\mood.ps1` 那台状态机的七种心情翻成舞台反应。
+    // 两种用法：
+    //   /mood?emotion=害羞&intensity=0.8   直接给
+    //   /mood                               读 mood.json（mood.ps1 的落盘文件）自动跟
+    '/mood': (q) => {
+      let name = q.get('emotion') || q.get('mood') || '';
+      let k = q.get('intensity');
+      let source = 'query';
+      if (!name) {
+        try {
+          const file = String(cfg.moodJson || Cfg.MOOD_JSON);
+          const j = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
+          name = String(j.mood || '');
+          if (k === null) k = j.intensity;
+          source = file;
+        } catch (e) {
+          throw new Error('没有 emotion 参数，也读不到 mood.json：' + ((e && e.message) || e));
+        }
+      }
+      const p = Mood.plan(name, k === null ? undefined : Number(k));
+      push({ type: 'mood', plan: p });
+      if (p.expression) push({ type: 'emotion', name: p.expression, ms: p.expressionMs });
+      return { pushed: true, source, plan: p };
+    },
+    // 心情表自检：有哪些、各自会变成什么样
+    '/moods': () => ({ moods: Mood.names().map((n) => Mood.plan(n, Mood.DEFAULT_INTENSITY)) }),
     '/pointer': (q) => {
       if (q.get('reset') !== null) {
         push({ type: 'pointer', value: null, lock: false });

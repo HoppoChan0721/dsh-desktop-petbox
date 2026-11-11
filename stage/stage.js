@@ -177,6 +177,11 @@
         else if (cmd.type === 'stop') engine.stopMotion();
         else if (cmd.type === 'tap') engine.nod();
         else if (cmd.type === 'interactive') interaction.setInteractive(cmd.value !== false);
+        else if (cmd.type === 'mood') {
+          engine.setMood(cmd.plan || null);
+          if (cmd.plan && cmd.plan.gesture === 'nod') engine.nod();
+          else if (cmd.plan && cmd.plan.gesture === 'shake') engine.shake();
+        }
       });
     }
 

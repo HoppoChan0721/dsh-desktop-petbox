@@ -12,6 +12,8 @@ const path = require('node:path');
 const APP_ROOT = path.join(__dirname, '..');
 const DATA_DIR = path.join(APP_ROOT, 'data');
 const CFG_FILE = path.join(DATA_DIR, 'stage-config.json');
+// 心情是 persona 那边的状态机在维护，舞台只读它的落盘结果
+const MOOD_JSON = process.env.WHALE_MOOD_JSON || 'F:\\DaFeiYu\\persona\\mood.json';
 
 const DEFAULTS = {
   interactive: true,     // 分区互动：点她按部位反应
@@ -23,6 +25,7 @@ const DEFAULTS = {
   smartIgnore: true,     // 智能穿透：只在角色身上吃鼠标
   bridge: true,          // 点触转给 DSH 侧桥（61944）；关掉只断这一条，本地反应照做
   bridgeUrl: 'http://127.0.0.1:61944/event',
+  moodJson: MOOD_JSON,   // 心情来源文件
 };
 
 function load() {
@@ -40,4 +43,4 @@ function save(patch) {
   return next;
 }
 
-module.exports = { APP_ROOT, DATA_DIR, CFG_FILE, DEFAULTS, load, save };
+module.exports = { APP_ROOT, DATA_DIR, CFG_FILE, MOOD_JSON, DEFAULTS, load, save };

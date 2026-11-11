@@ -68,12 +68,17 @@ else if (cmd === 'pointer') {
   else await call('/gaze');
 } else if (cmd === 'touches') await call('/touches', { n: rest[0] || flags.n });
 else if (cmd === 'affinity') await call('/affinity');
+else if (cmd === 'mood') {
+  // 不带参数 = 跟 mood.json 自动对齐；带了就照给的来
+  if (rest[0]) await call('/mood', { emotion: rest[0], intensity: flags.intensity });
+  else await call('/mood');
+} else if (cmd === 'moods') await call('/moods');
 else if (cmd === 'config') {
   if (rest.length) await call('/config', { json: rest.join(' ') });
   else await call('/config');
 } else if (cmd === 'panel') await call('/panel');
 else if (cmd === 'menu') await call('/menu');
 else {
-  console.error('用法：state | say <文本> | wait | hide | motion <名字> [--hold] | motion stop | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>] | touches [n] | affinity | config [json] | panel | menu');
+  console.error('用法：state | say <文本> | wait | hide | motion <名字> [--hold] | motion stop | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>] | touches [n] | affinity | mood [心情] [--intensity 0.8] | moods | config [json] | panel | menu');
   process.exit(2);
 }

@@ -134,6 +134,7 @@
       this.gaze = { x: 0, y: 0 };
       this.idle = true;
       this.swayScale = Number(options.sway) > 0 ? Number(options.sway) : TUNE.swayScale;
+      this.moodState = null;   // { name, at, ms, sway, lean, tilt }，由 setMood 写入
 
       this.mouth = 0;
       this.mouthTarget = 0;
@@ -358,21 +359,50 @@
       set(im.id, num(target.get(im.id), 0) + v);
     }
 
+    // 心情偏置的信封：进来 0.8 秒淡入、末尾 1.5 秒淡出，中间恒定。
+    // 不这么做的话心情一变，摆动幅度会「啪」地跳一下，像卡了一帧。
+    moodEnv() {
+      const md = this.moodState;
+      if (!md) return null;
+      const t = this.clock - md.at;
+      if (md.ms > 0 && t >= md.ms) { this.moodState = null; return null; }
+      const inK = Math.min(1, Math.max(0, t / 0.8));
+      const outK = md.ms > 0 ? Math.min(1, Math.max(0, (md.ms - t) / 1.5)) : 1;
+      return { w: inK * outK, sway: md.sway, lean: md.lean, tilt: md.tilt };
+    }
+
+    setMood(p) {
+      const o = p || {};
+      this.moodState = {
+        name: o.name || '',
+        at: this.clock,
+        ms: Math.max(0, Number(o.holdMs) || 0),
+        sway: Number(o.sway) > 0 ? Number(o.sway) : 1,
+        lean: Number(o.lean) || 0,
+        tilt: Number(o.tilt) || 0,
+      };
+      // 表情不在这里写：它归表达式管理器，主进程会另外推一条 emotion，用它的时长
+      return this.moodState;
+    }
+
     applyIdle({ set }) {
       if (!this.idle) return;
       const phase = this.clock;
-      const k = this.swayScale;
+      const env = this.moodEnv();
+      const k = this.swayScale * (env ? 1 + (env.sway - 1) * env.w : 1);
       set('ParamBreath', TUNE.breathBase + TUNE.breathAmp * Math.sin(phase * TUNE.breathHz));
       // 摆动频率都提到 4~7 秒一个来回：以前是 11~17 秒一轮，慢到看不出「在晃」，
       // 再加上幅度只有 1~3 度，主人试了两次都说「没生效」。
       set('AngleX', TUNE.swayX * k * Math.sin(phase * 1.1));
       set('AngleY', TUNE.swayY * k * Math.sin(phase * 1.3 + 0.4));
-      set('AngleZ', TUNE.swayZ * k * Math.sin(phase * 0.9));
+      set('AngleZ', TUNE.swayZ * k * Math.sin(phase * 0.9) + (env ? env.tilt * env.w : 0));
       set('PositionX', TUNE.swayPosX * k * Math.sin(phase * 1.1 - 0.2));
       set('PositionZ', TUNE.swayPosZ * k * Math.sin(phase * 0.9 - 0.25));
       // 身体角：裙摆、蕾丝、缎带的物理链就是吃它。频率比头略慢，看起来像重心在挪
       set('ParamBodyAngleX', TUNE.swayBodyX * k * Math.sin(phase * 1.05 + 0.9));
       set('ParamBodyAngleZ', TUNE.swayBodyZ * k * Math.sin(phase * 0.85 - 0.4));
+      // 心情的重心偏置：认真会往前压、担心会缩一下
+      if (env && env.lean) set('LeanInput', env.lean * env.w);
       const idle = this.idleMotion;
       if (idle && idle.curves.length) {
         const t = idle.duration > 0 ? phase % idle.duration : 0;
@@ -490,6 +520,7 @@
         idleCurves: this.idleMotion ? this.idleMotion.curves.length : 0,
         writeErrors: this.writeErrors,
         sway: this.swayScale,
+        mood: this.moodState ? this.moodState.name : null,
       };
     }
   }
