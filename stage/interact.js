@@ -292,6 +292,39 @@
       return { x: ((row.l + row.r) / 2) * W, y: p.bbox.top * H };
     }
 
+    // 阶段气泡的出生点（跟着外壳那套）：在上半身轮廓里随机挑一行，再在这一行里随机横坐标。
+    // 四分之三落在这一行的外侧两段（头发边 / 肩 / 手臂），四分之一整行随机——
+    // 这样正脸不会被泡糊住，又确实是「上半身哪儿都可能冒」。
+    const TICK_BAND_TOP = 0.06;
+    const TICK_BAND_BOTTOM = 0.46;
+    function tickSpot() {
+      const W = canvas.clientWidth || canvas.width;
+      const H = canvas.clientHeight || canvas.height;
+      const p = ensureProfile();
+      if (!p || !p.rows || !p.rows.length) {
+        return { x: W * (0.32 + Math.random() * 0.36), y: H * (0.16 + Math.random() * 0.2) };
+      }
+      const span = Math.max(1e-4, p.bbox.bottom - p.bbox.top);
+      // 注意：bbox 和 rows[].y 都是**归一化比例**（0~1），别再除一次窗口高度
+      const yn = p.bbox.top + span * (TICK_BAND_TOP + Math.random() * (TICK_BAND_BOTTOM - TICK_BAND_TOP));
+      let best = p.rows[0];
+      let bestD = Infinity;
+      for (const r of p.rows) {
+        const d = Math.abs(r.y - yn);
+        if (d < bestD) { bestD = d; best = r; }
+      }
+      if (best && best.r > best.l + 0.01) {
+        const s = best.r - best.l;
+        let t;
+        if (Math.random() < 0.25) t = 0.14 + Math.random() * 0.72;
+        else t = Math.random() < 0.5 ? 0.04 + Math.random() * 0.28 : 0.68 + Math.random() * 0.28;
+        return { x: (best.l + s * t) * W, y: yn * H };
+      }
+      // 这一行几乎没扫到东西（头顶边缘 / 侧脸）：退到剪影中线附近，别扔到窗外
+      const mid = ((p.bbox.left || 0) + (p.bbox.right || 1)) / 2;
+      return { x: mid * W + (Math.random() - 0.5) * Math.max(40, (p.bbox.right - p.bbox.left) * W * 0.5), y: yn * H };
+    }
+
     // 把头顶报给主进程：绕圈判定要用「真实的头」当圆心，不能用窗口中心。
     // 报的是窗口比例（画布铺满窗口），主进程按窗口像素换算，窗口缩放拖动都不用重报。
     function reportHead() {
@@ -336,6 +369,7 @@
       get smart() { return smart; },
       alphaAt,
       headAnchor,
+      tickSpot,
       reportHead,
       resetProfile,
     };

@@ -29,12 +29,17 @@
       '#bubble .dot:nth-child(2){animation-delay:.15s}',
       '#bubble .dot:nth-child(3){animation-delay:.3s}',
       '@keyframes stageDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}',
-      // 阶段气泡：小圆泡，从肩线冒出来往上飘。跟正文气泡分开，
-      // 正文是「她在说话」，这个是「进度/状态」，不该抢同一块地方。
-      '.tick{position:absolute;z-index:9998;box-sizing:border-box;padding:4px 9px;border-radius:14px;',
-      'max-width:62%;background:rgba(255,255,255,.9);color:#33534e;box-shadow:0 3px 10px rgba(0,0,0,.14);',
-      'font-family:system-ui,"Microsoft YaHei";line-height:1.35;white-space:nowrap;overflow:hidden;',
-      'text-overflow:ellipsis;pointer-events:none;will-change:transform,opacity}',
+      // 阶段气泡：圆滚滚的泡，从上半身任意位置冒出来，边往上飘边左右晃。几颗一起，各自 2~4 秒飘完消失。
+      // 外框 .tick-puff 只做位移（左右摆 + 上浮），.tick 是泡本体（圆/椭圆）。
+      // 这套是外壳那边原样搬过来的：主人点名的就是这个手感。
+      // 高光点和中心亮斑在外壳那边就去掉了——泡小字多时高光正好压在顶部那行字上，看着像字被糊掉一块。
+      '.tick-puff{position:absolute;left:0;top:0;pointer-events:none;z-index:9998;will-change:transform,opacity}',
+      '.tick{position:relative;display:flex;align-items:center;justify-content:center;border-radius:50%;overflow:hidden;box-sizing:border-box;',
+      'background:linear-gradient(158deg,rgba(246,252,255,.92),rgba(228,244,255,.86) 48%,rgba(172,212,242,.78) 100%);',
+      'color:#1c3550;font:13px/1.22 system-ui,"Microsoft YaHei";pointer-events:none;',
+      'box-shadow:0 5px 14px rgba(26,74,128,.16),inset 0 0 0 1.5px rgba(255,255,255,.7),inset 0 -9px 16px rgba(140,190,235,.22)}',
+      '.tick-txt{display:flex;align-items:center;justify-content:center;text-align:center;overflow:hidden;',
+      'word-break:break-word;overflow-wrap:anywhere;white-space:pre-line}',
     ].join('');
     document.head.appendChild(style);
   }
@@ -129,66 +134,128 @@
     }
 
     // ---- 阶段气泡 -----------------------------------------------------------
-    // 一颗泡 = 自己飘上去 + 淡出，2~4 秒。同时最多 4 颗，多了直接顶掉最老的。
-    // 位置按剪影算：肩膀那条线（头顶往下 22% 的跨度），偏出去那侧，
-    // 这样正脸不会被几颗泡糊住。
-    const MAX_TICKS = 4;
+    // 一颗泡 = 外框 .tick-puff 只负责飘（上浮 + 左右摆 + 微转）+ 泡本体 .tick（圆/椭圆）。
+    // 出生点不是固定位置：在上半身轮廓里随机挑一行、再在这一行里随机横坐标，
+    // 四分之三落在这一行的外侧两段（头发边 / 肩 / 手臂），这样正脸不会被泡糊住。
+    // 泡的大小跟着字数走，短句是小圆泡，长一点摊成椭圆（横竖比最多 1.45，别摊成条）。
+    const MAX_TICKS = 5;
     const ticks = [];
 
     function tick(text, ms) {
-      const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 40);
-      if (!t) return null;
-      const life = Math.max(2000, Math.min(4000, Number(ms) || 3000));
+      const full = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 40);
+      if (!full) return null;
+      const life = Math.max(2000, Math.min(4000, Number(ms) || 3000));   // 单颗 2~4 秒
       const W = app.screen.width || 531;
       const H = app.screen.height || 950;
-      let a = null;
-      try { a = interaction && interaction.headAnchor ? interaction.headAnchor() : null; } catch (e) { a = null; }
-      const cx = a ? a.x : W / 2;
-      const cy = a ? Math.min(H - 40, a.y + H * 0.22) : H * 0.3;
-      const side = Math.random() < 0.5 ? -1 : 1;
-      const offX = side * (W * 0.1 + Math.random() * W * 0.12);
+      const nchar = full.length;
 
+      const hh = Math.round(Math.max(54, Math.min(80, 52 + nchar * 1.6)));
+      const aspect = Math.min(1.45, 1 + Math.max(0, nchar - 9) * 0.022);
+      const ww = Math.round(hh * aspect);
+
+      const puff = document.createElement('div');
+      puff.className = 'tick-puff';
       const el = document.createElement('div');
       el.className = 'tick';
-      el.textContent = t;
-      el.style.fontSize = Math.max(11, Math.min(16, Math.round(W * 0.024))) + 'px';
-      layer.appendChild(el);
-      const left = Math.round(Math.max(4, Math.min(W - 40, cx + offX)));
-      const top = Math.round(Math.max(4, Math.min(H - 30, cy)));
-      el.style.left = left + 'px';
-      el.style.top = top + 'px';
+      el.style.width = ww + 'px';
+      el.style.height = hh + 'px';
+      const txt = document.createElement('div');
+      txt.className = 'tick-txt';
+      // 文字框取内接矩形（0.71 倍），贴在椭圆上也不会被圆角切掉笔画
+      const boxW = Math.round(ww * 0.71);
+      const boxH = Math.round(hh * 0.71);
+      txt.style.width = boxW + 'px';
+      txt.style.height = boxH + 'px';
+      // 短中文短语手动对半分两行，不然在圆泡里会被挤成 3+1 个字
+      let shown = full;
+      if (nchar >= 4 && nchar <= 10 && !/[\sA-Za-z0-9]/.test(full)) {
+        const cut = Math.ceil(nchar / 2);
+        shown = full.slice(0, cut) + '\n' + full.slice(cut);
+      }
+      txt.textContent = shown;
+      el.appendChild(txt);
+      puff.appendChild(el);
+      layer.appendChild(puff);
 
-      const rise = 46 + Math.random() * 54;
-      const drift = side * (10 + Math.random() * 18);
+      // 字号自适应：泡小字多就往下缩，13 → 9px
+      let fs = 13;
+      txt.style.fontSize = fs + 'px';
+      while (fs > 9 && txt.scrollHeight > boxH + 1) { fs -= 1; txt.style.fontSize = fs + 'px'; }
+
+      // 出生点：有剪影就用剪影（上半身外侧两段），没有就退回上半身中间那片
+      let spot = null;
+      try { spot = interaction && interaction.tickSpot ? interaction.tickSpot() : null; } catch (e) { spot = null; }
+      if (!spot) spot = { x: W * (0.32 + Math.random() * 0.36), y: H * (0.16 + Math.random() * 0.2) };
+
+      // 跟已经在飘的泡别叠在一起：位置随机抽，抽到挤了就重抽，最多试 7 次
+      const overlaps = (l, t) => {
+        for (const p of ticks) {
+          const q = p.getBoundingClientRect();
+          if (l + ww + 6 < q.left || l > q.right + 6) continue;
+          if (t + hh + 6 < q.top || t > q.bottom + 6) continue;
+          return true;
+        }
+        return false;
+      };
+      let left = 0;
+      let top = 0;
+      for (let k = 0; k < 7; k++) {
+        left = Math.max(2, Math.min(W - ww - 2, Math.round(spot.x - ww / 2)));
+        top = Math.max(2, Math.min(H - hh - 2, Math.round(spot.y - hh / 2)));
+        if (!overlaps(left, top)) break;
+        try { spot = interaction && interaction.tickSpot ? interaction.tickSpot() : spot; } catch (e) {}
+      }
+      puff.style.left = left + 'px';
+      puff.style.top = top + 'px';
+
+      // 飘升距离：够到顶部还剩 4px 就行，别飞出窗外
+      const rise = Math.round(Math.min(72 + Math.random() * 62, Math.max(28, top - 4)));
+      // 整体漂移：八成往外飘（离开身体中线），这样正脸不容易被几颗泡糊住
+      const bodyX = W / 2;
+      const outward = spot.x >= bodyX ? 1 : -1;
+      const dir = Math.random() < 0.8 ? outward : (Math.random() < 0.5 ? -1 : 1);
+      const drift = dir * (12 + Math.random() * 24);
+      const amp = 7 + Math.random() * 10;         // 左右抖动幅度
+      const freq = 0.8 + Math.random() * 0.9;     // 一趟晃几个来回
+      const phase = Math.random() * Math.PI * 2;
+      const steps = Math.max(20, Math.min(34, Math.round(life / 130)));
       const frames = [];
-      const steps = 18;
       for (let i = 0; i <= steps; i++) {
         const p = i / steps;
-        const o = p < 0.08 ? p / 0.08 : (p < 0.62 ? 1 : Math.max(0, (1 - p) / 0.38));
-        const x = drift * p + Math.sin(p * Math.PI * 2.2) * 5;
-        const y = -rise * (0.35 * p + 0.65 * p * p);
-        frames.push({ opacity: +o.toFixed(3), transform: 'translate3d(' + x.toFixed(1) + 'px,' + y.toFixed(1) + 'px,0)' });
+        const ramp = Math.min(1, p * 1.8);                       // 刚冒出来先别晃，站稳了再摆
+        const sw = Math.sin(phase + p * Math.PI * 2 * freq) * ramp;
+        const x = drift * p + amp * sw;
+        const y = -rise * (0.3 * p + 0.7 * p * p);               // 越飘越快，像真气泡
+        const rot = sw * 4.2;
+        const o = p < 0.07 ? p / 0.07 : (p < 0.6 ? 1 : Math.max(0, (1 - p) / 0.4));
+        const s = p < 0.14 ? 0.6 + (p / 0.14) * 0.48 : (p < 0.26 ? 1.08 - ((p - 0.14) / 0.12) * 0.08 : 1);
+        frames.push({
+          offset: +p.toFixed(3),
+          opacity: +o.toFixed(3),
+          transform: 'translate3d(' + x.toFixed(1) + 'px,' + y.toFixed(1) + 'px,0) rotate(' + rot.toFixed(2) + 'deg) scale(' + s.toFixed(3) + ')',
+        });
       }
+
       let anim = null;
       const drop = () => {
-        try { el.remove(); } catch (e) {}
-        const i = ticks.indexOf(el);
+        try { puff.remove(); } catch (e) {}
+        const i = ticks.indexOf(puff);
         if (i >= 0) ticks.splice(i, 1);
       };
       try {
-        anim = el.animate(frames, { duration: life, easing: 'linear', fill: 'forwards' });
+        anim = puff.animate(frames, { duration: life, easing: 'linear', fill: 'forwards' });
         anim.onfinish = drop;
         anim.oncancel = drop;
       } catch (e) {
         // 老内核没有 WAAPI 就退化成定时消失，别让一颗泡卡在屏幕上
         setTimeout(drop, life);
       }
-      ticks.push(el);
+      ticks.push(puff);
       while (ticks.length > MAX_TICKS) {
         const old = ticks.shift();
         if (old) { try { old.remove(); } catch (e) {} }
       }
-      return { text: t, ms: life, count: ticks.length };
+      return { text: full, ms: life, w: ww, h: hh, fs, count: ticks.length };
     }
 
     return {
