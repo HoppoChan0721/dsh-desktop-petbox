@@ -29,7 +29,7 @@ const DEFAULTS = {
   tickBubble: true,      // 阶段气泡：DSH 会话跑长任务时从肩线冒小泡
   replyBtn: true,        // 回复钮：说完话冒出来一个小钮，点开能直接打字
   replyAlways: false,    // 常驻：钮一直挂在头顶右侧
-  panelAutoClose: true,  // 设置面板失焦就收起（点外面自动关）；不喜欢就关掉
+  panelAutoClose: false, // 设置面板失焦就收起；默认关——主人要的是「菜单」能自己关，面板要能一直摆着
   voiceVolume: 0.6,      // 语音音量 0~1；只影响听感，口型大小照旧
   ttsKeepAlive: true,    // 语音服务保活：定时探活，服务冷着就拉起来并热身，别让第一句等 27 秒
   ttsKeepMinutes: 5,     // 探活间隔（分钟）；探活本身很便宜，热身只在服务刚起来那次做

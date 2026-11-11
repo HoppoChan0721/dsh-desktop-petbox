@@ -80,7 +80,7 @@ function paintKeepAlive(ka) {
   $('tickBubble').checked = cfg.tickBubble !== false;
   $('replyBtn').checked = cfg.replyBtn !== false;
   $('replyAlways').checked = cfg.replyAlways === true;
-  $('panelAutoClose').checked = cfg.panelAutoClose !== false;
+  $('panelAutoClose').checked = cfg.panelAutoClose === true;
   $('ttsKeepAlive').checked = cfg.ttsKeepAlive !== false;
   $('ttsKeepMinutes').value = String(Math.max(1, Number(cfg.ttsKeepMinutes) || 5));
   if (s.voice === false) {

@@ -197,13 +197,19 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
 - 位置记在 `%APPDATA%\whale-pet-shell\panel-window.json`，跟舞台窗那份（`stage-window.json`）分开存，互不拽
 - 存下来的坐标如果落在所有屏幕之外（拔了副屏、换分辨率），会退回「跟着鼠标那块屏居中」，并把新坐标写回文件
 - 找不回来的时候：菜单 ▸ 打开设置面板，或者 `curl 127.0.0.1:61945/panel?reset=1`
-- **点面板外面自动收起**（2026-11-11 晚，主人要的）：靠 `panel.on('blur')` —— 失焦就 `close()`，
-  也就是点桌面、点别的窗口、点托盘菜单都会收。开关在面板「点面板外面自动收起」（`panelAutoClose`，默认开）
+- **托盘右键菜单点外面自动收**（2026-11-11 晚）：托盘那条必须走 `tray.popUpContextMenu(menu)`，
+  它把菜单的宿主设成托盘、拿到正常激活权，Windows 才会在点到别处时收掉。
+  早先用的是 `Menu.popup({ window: win })`：桌宠窗是透明置顶、常年穿透不吃鼠标，
+  菜单借它的壳弹出却拿不到激活，点外面没有任何事件关它，就一直挂着（主人报的就是这个）
+- 右键她本人还是走 `popup({ window: win })`，那时候窗口活着、鼠标也在窗口上，普通 popup 的关闭是好的
+- 「点面板外面自动收起」是**另一件事**，默认关（`panelAutoClose`），开关在面板最下面；
+  它靠 `panel.on('blur')` 关窗，勾上之后点击面板外面就会收
 - 踩过的坑：blur 和托盘左键的顺序是「先 blur 关掉、后 click 到」，
   不记一笔就会当成「没开过」又开一个新的，看着像点了关不掉。现在记 `panelBlurClosedAt`，
   600ms 内的 toggle 直接当「关闭」处理
 - 调试口：`/panel?where=1` 回当前 bounds + 各屏 workArea；`/panel?at=120,300` 摆过去；`/panel?close=1` 关掉；
-  `/panel?toggle=1` 跟托盘左键同一个函数；`/status` 里的 `panel` 字段能看 `open/visible/focused/autoClose`
+  `/panel?toggle=1` 跟托盘左键同一个函数；`/status` 里的 `panel` 字段能看 `open/visible/focused/autoClose`；
+  `/menu?open=1` 按托盘右键那条路真弹一次菜单（自检用）
 - 踩过的坑：`moved` 事件攒 400ms 再落盘的定时器里**别用全局 `panel`**——旧窗口的定时器晚到一步时，
   全局变量已经指向新窗口，会把新窗口的坐标当成旧窗口的存下去。要用创建时抓住的那个窗口引用
 

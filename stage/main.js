@@ -705,7 +705,12 @@ app.whenReady().then(async () => {
       return { opened: true };
     },
     // 菜单结构自检：不做任何事，只把当前菜单拍平成文字，方便远程确认项和勾选状态
-    '/menu': async () => {
+    '/menu': async (q) => {
+      // ?open=1 按托盘右键那条路真弹一次（自检用：确认 popUpContextMenu 这条路不炸）
+      if (q.get('open') !== null) {
+        await trayMenu();
+        return { opened: true, tray: !!tray };
+      }
       // 先问一次桥，否则桥那几项的勾选状态会是空的（菜单自己弹之前也会问）
       try { await refreshBridge(); } catch (e) {}
       const flat = [];
@@ -899,7 +904,7 @@ app.whenReady().then(async () => {
 
   function panelInfo() {
     const open = !!(panel && !panel.isDestroyed());
-    return { open, visible: open ? panel.isVisible() : false, focused: open ? panel.isFocused() : false, autoClose: cfg.panelAutoClose !== false };
+    return { open, visible: open ? panel.isVisible() : false, focused: open ? panel.isFocused() : false, autoClose: cfg.panelAutoClose === true };
   }
 
   // 托盘左键 = 开关设置面板（她藏起来的时候先把她叫回来）。
@@ -966,7 +971,7 @@ app.whenReady().then(async () => {
     // 点面板外面（失焦）就收起来。开关在面板里，默认开：
     // 这套东西别人也下载，有人喜欢让它开着不动，那就得能关。
     self.on('blur', () => {
-      if (cfg.panelAutoClose === false) return;
+      if (cfg.panelAutoClose !== true) return;
       if (!self || self.isDestroyed()) return;
       panelBlurClosedAt = Date.now();
       self.close();
@@ -1065,11 +1070,36 @@ app.whenReady().then(async () => {
 
   // 弹菜单前先问一次桥：窥屏/主动开口的勾选状态得是当下的，不能是十分钟前的缓存。
   // 桥没装或没跑也很快——连接被拒是毫秒级，不会让菜单卡住。
-  async function popupMenu() {
-    if (!win || win.isDestroyed()) return;
+  //
+  // 「点菜单外面要自己收起来」这条：托盘菜单必须走 tray.popUpContextMenu()，
+  // 它会把菜单的宿主窗口设成托盘、拿到正常的激活权，Windows 才会在点到别处时收掉。
+  // 之前一律用 Menu.popup({ window: win })：桌宠窗是透明置顶、还常年穿透不吃鼠标，
+  // 菜单借它的壳弹出却拿不到激活，点外面没有任何事件把它关掉，就一直挂着。
+  let openMenu = null;
+
+  async function buildMenu() {
+    if (!win || win.isDestroyed()) return null;
     try { await refreshBridge(); } catch (e) {}
-    if (!win || win.isDestroyed()) return;
-    Menu.buildFromTemplate(menuTemplate()).popup({ window: win });
+    if (!win || win.isDestroyed()) return null;
+    return Menu.buildFromTemplate(menuTemplate());
+  }
+
+  // 托盘右键：交给 Tray 自己弹，点外面自动关
+  async function trayMenu() {
+    const m = await buildMenu();
+    if (!m) return;
+    openMenu = m;
+    tray.popUpContextMenu(m);
+    // 菜单是同步阻塞之外的东西，没有「关闭」回调；下一次弹之前把它置空就行
+    setTimeout(() => { if (openMenu === m) openMenu = null; }, 30000);
+  }
+
+  // 右键她本人：这时候窗口是活的、鼠标在窗口上，普通 popup 的关闭逻辑是好的
+  async function popupMenu() {
+    const m = await buildMenu();
+    if (!m) return;
+    openMenu = m;
+    m.popup({ window: win, callback: () => { if (openMenu === m) openMenu = null; } });
   }
 
   function createTray() {
@@ -1081,7 +1111,7 @@ app.whenReady().then(async () => {
     tray.setToolTip('安娜 · 鲸鱼舞台');
     // 左键开关设置面板，右键才是菜单——托盘的老规矩，别反着来
     tray.on('click', () => trayLeftClick());
-    tray.on('right-click', () => popupMenu());
+    tray.on('right-click', () => trayMenu());
   }
 
   ipcMain.on('stage:menu', () => popupMenu());
