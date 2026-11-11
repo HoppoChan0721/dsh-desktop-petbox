@@ -681,6 +681,7 @@ app.whenReady().then(async () => {
     // 面板：不带参数就开/抬到前面；?reset=1 回正中；?where=1 报当前窗口坐标（调试用）；
     // ?at=120,300 摆过去（脚本/自检用，跟手拖一样会落盘）
     '/panel': (q) => {
+      if (q.get('toggle') !== null) return { visible: togglePanel() };
       if (q.get('close') !== null) {
         if (panel && !panel.isDestroyed()) panel.close();
         return { closed: true };
@@ -890,6 +891,22 @@ app.whenReady().then(async () => {
     return panel.getBounds();
   }
 
+  // 托盘左键 = 开关设置面板（她藏起来的时候先把她叫回来）。
+  // 以前左键也弹菜单：菜单没点选就一直在那儿，面板还会一直挂着，主人被这个坑过。
+  function togglePanel() {
+    if (panel && !panel.isDestroyed()) {
+      if (panel.isVisible()) { panel.close(); return false; }
+      panel.show(); panel.focus(); return true;
+    }
+    openPanel();
+    return true;
+  }
+
+  function trayLeftClick() {
+    if (win && !win.isDestroyed() && !win.isVisible()) { win.show(); return; }
+    togglePanel();
+  }
+
   function openPanel() {
     if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
     // 头一次开（或上次那块屏已经不在了）就居中——居中在哪块屏？跟着鼠标那块，
@@ -936,11 +953,8 @@ app.whenReady().then(async () => {
     return self;
   }
 
-  const FPS_CHOICES = [30, 60, 90, 0];
-  const SWAY_CHOICES = [1, 1.6, 2.4];
-  const SPIN_CHOICES = [2, 3, 4, 6, 8];
+  // 帧率/摆动/圈数/尺寸/开关全都在设置面板里，菜单里不再给一份
   const VOL_CHOICES = [0.2, 0.4, 0.6, 0.8, 1];
-  const KEEP_CHOICES = [1, 3, 5, 10, 20];
 
   const URGE_LABEL = { quiet: '安静', normal: '正常', clingy: '黏人', chatty: '话痨', unbound: '不拦着' };
   function urgeLabel(urge) {
@@ -951,15 +965,10 @@ app.whenReady().then(async () => {
 
   function menuTemplate() {
     const now = Cfg.load();
-    const fps = Number(now.fps);
-    const sway = Number(now.sway);
-    const spin = Number(now.spinTurns);
     const vol = Number.isFinite(Number(now.voiceVolume)) ? Number(now.voiceVolume) : 0.6;
     const ka = keepAlive.status();
-    const keepMinutes = Math.max(1, Number(now.ttsKeepMinutes) || 5);
     const KA_TEXT = { idle: '还没探过', off: '没开', down: '服务没起来', starting: '正在拉起', warming: '正在热身', warm: '热着', up: '起来了但没热身' };
     const kaText = KA_TEXT[ka.state] || ka.state;
-    const [curW, curH] = win && !win.isDestroyed() ? win.getSize() : [0, 0];
     // 桥没在跑的时候，窥屏/主动开口这些项灰掉并写清原因——
     // 这套东西是给别人下载的，不能让人点了没反应还不知道为什么。
     const bs = bridgeState;
@@ -976,11 +985,9 @@ app.whenReady().then(async () => {
       ['chatty', '话痨'],
       ['unbound', '不拦着（不限句数）'],
     ];
+    // 这里只留「面板里没有的」桥侧动作：阶段气泡/回复钮那几个开关在设置面板里，
+    // 菜单再放一份就是两处维护两份状态，早晚对不上。
     const talkItems = [
-      { label: '阶段气泡（会话进度）', type: 'checkbox', checked: now.tickBubble !== false, click: (it) => applyConfig({ tickBubble: it.checked }) },
-      { label: '回复钮（说完话冒出来）', type: 'checkbox', checked: now.replyBtn !== false, click: (it) => applyConfig({ replyBtn: it.checked }) },
-      { label: '回复钮常驻', type: 'checkbox', checked: now.replyAlways === true, click: (it) => applyConfig({ replyAlways: it.checked }) },
-      { type: 'separator' },
       { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (live ? '' : ' · 桥没在跑'), enabled: live, submenu: live ? [
         { label: peek && peek.on ? '关掉窥屏' : '打开窥屏', click: () => bridgeReq('POST', '/peek', { on: !(peek && peek.on) }).then(() => { bridgeState.at = 0; }) },
         { type: 'separator' },
@@ -1000,66 +1007,37 @@ app.whenReady().then(async () => {
         { label: '现在让她说一句', enabled: !!(urgeCfg && urgeCfg.enabled), click: () => bridgeReq('POST', '/mood', { urge: true }, 60000).then(() => { bridgeState.at = 0; }) },
       ] : [{ label: '桥没在跑，这个功能得装 dsh-pet-bridge', enabled: false }] },
     ];
+
+    // 菜单只放「做得出一件事」的东西：开关和数值一律在设置面板里，别两处维护两份状态。
+    // 留在菜单里的三类：面板没有的（桥侧窥屏/主动开口、复原服装、重载）、
+    // 手边要快调的（音量）、以及一次性的动作（隐藏、退出）。
     return [
-      { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return; win.isVisible() ? win.hide() : win.show(); } },
+      { label: panel && !panel.isDestroyed() && panel.isVisible() ? '收起设置面板' : '打开设置面板…', click: () => togglePanel() },
+      { label: '左键图标 = 开关面板 · 右键 = 这个菜单', enabled: false },
       { type: 'separator' },
-      { label: '互动', submenu: [
-        { label: '分区互动（点她按部位反应）', type: 'checkbox', checked: now.interactive !== false, click: (it) => applyConfig({ interactive: it.checked }) },
-        { label: '指针追踪（视线和身体跟着鼠标）', type: 'checkbox', checked: now.cursorTrack !== false, click: (it) => applyConfig({ cursorTrack: it.checked }) },
-        { label: '点触叫醒 DSH 会话', type: 'checkbox', checked: now.bridge !== false, click: (it) => applyConfig({ bridge: it.checked }) },
-        { label: '智能穿透（只在角色身上吃鼠标）', type: 'checkbox', checked: now.smartIgnore !== false, click: (it) => applyConfig({ smartIgnore: it.checked }) },
-      ] },
-      { label: '说话', submenu: talkItems },
-      { label: '外观', submenu: [
-        { label: '尺寸', submenu: [
-          { label: '小（420 × 740）', click: () => applySize(420, 740) },
-          { label: '中（560 × 990）', click: () => applySize(560, 990) },
-          { label: '大（671 × 1182）', click: () => applySize(671, 1182) },
-          { type: 'separator' },
-          { label: `滑杆微调…（现在 ${curW} × ${curH}）`, click: () => openPanel() },
-          { label: 'Ctrl + 滚轮（她身上）', enabled: false },
-        ] },
-        { label: '置顶显示', type: 'checkbox', checked: now.onTop !== false, click: (it) => applyConfig({ onTop: it.checked }) },
-        { label: `语音音量 · ${Math.round(vol * 100)}%`, submenu: [
+      { label: '语音', submenu: [
+        { label: `音量 · ${Math.round(vol * 100)}%`, submenu: [
           ...VOL_CHOICES.map((v) => ({
             label: Math.round(v * 100) + '%', type: 'radio', checked: Math.abs(vol - v) < 0.01, click: () => applyConfig({ voiceVolume: v }),
           })),
           { type: 'separator' },
           { label: '滑杆微调…（设置面板）', click: () => openPanel() },
         ] },
-      ] },
-      { label: '语音服务', submenu: [
-        { label: `${ka.enabled ? '保活开着' : '保活关着'} · ${kaText}`, click: () => keepAlive.tick().catch(() => {}) },
         { type: 'separator' },
-        { label: '开机保活（服务冷了就拉起来热身）', type: 'checkbox', checked: now.ttsKeepAlive !== false, click: (it) => applyConfig({ ttsKeepAlive: it.checked }) },
-        { label: `探活间隔 · ${keepMinutes} 分钟`, submenu: KEEP_CHOICES.map((v) => ({
-          label: v + ' 分钟', type: 'radio', checked: Number(keepMinutes) === v, click: () => applyConfig({ ttsKeepMinutes: v }),
-        })) },
-        { label: '现在就探一次', click: () => keepAlive.tick().catch(() => {}) },
-        { label: '现在就热身（要等几十秒）', click: () => keepAlive.warm().catch(() => {}) },
+        { label: `保活 · ${kaText}（点一下重新探）`, click: () => keepAlive.tick().catch(() => {}) },
+        { label: '现在就预热（要等几十秒）', click: () => keepAlive.warm().catch(() => {}) },
+        { label: '开关和间隔在设置面板里', enabled: false },
         { type: 'separator' },
-        { label: '语音桥：' + (voiceReady() ? '有' : '没装，没有声音'), enabled: false },
+        { label: '语音桥：' + (voiceReady() ? '有' : '没装，只有气泡没有声音'), enabled: false },
       ] },
-      { label: '复原服装（衣服回默认档）', click: () => push({ type: 'outfit-reset' }) },
-      { label: '舞台', submenu: [
-        { label: `帧率 · ${fps ? fps + ' fps' : '不限'}`, submenu: FPS_CHOICES.map((v) => ({
-          label: v ? v + ' fps' : '不限', type: 'radio', checked: fps === v, click: () => applyConfig({ fps: v }),
-        })) },
-        { label: `待机摆动 · ${sway} 倍`, submenu: SWAY_CHOICES.map((v) => ({
-          label: v + ' 倍', type: 'radio', checked: Math.abs(sway - v) < 0.01, click: () => applyConfig({ sway: v }),
-        })) },
-        { label: `绕圈发晕 · ${spin} 圈`, submenu: SPIN_CHOICES.map((v) => ({
-          label: v + ' 圈', type: 'radio', checked: spin === v, click: () => applyConfig({ spinTurns: v }),
-        })) },
-        { type: 'separator' },
-        { label: '重新载入舞台', click: () => loadStage() },
-      ] },
-      { label: '设置面板', submenu: [
-        { label: panel && !panel.isDestroyed() ? '抬到前面' : '打开设置…（尺寸 / 帧率 / 摆动 / 音量）', click: () => openPanel() },
-        { label: '回到屏幕正中', enabled: !!(panel && !panel.isDestroyed()), click: () => centerPanel() },
-        { label: '标题栏可以拖着走', enabled: false },
-      ] },
+      { label: live ? '搭话（DSH 桥）' : '搭话（DSH 桥没在跑）', submenu: talkItems },
       { type: 'separator' },
+      { label: '外观', submenu: [
+        { label: '复原服装（衣服回默认档）', click: () => push({ type: 'outfit-reset' }) },
+      ] },
+      { label: '重新载入舞台', click: () => loadStage() },
+      { type: 'separator' },
+      { label: win && win.isVisible() ? '藏起来（托盘里点左键叫回）' : '显示出来', click: () => { if (!win) return; win.isVisible() ? win.hide() : win.show(); } },
       { label: '退出', click: () => app.quit() },
     ];
   }
@@ -1080,8 +1058,9 @@ app.whenReady().then(async () => {
     console.log(JSON.stringify({ trayIcon: img.isEmpty() ? 'EMPTY:' + iconPath : img.getSize() }));
     tray = new Tray(img);
     tray.setToolTip('安娜 · 鲸鱼舞台');
-    tray.on('click', popupMenu);
-    tray.on('right-click', popupMenu);
+    // 左键开关设置面板，右键才是菜单——托盘的老规矩，别反着来
+    tray.on('click', () => trayLeftClick());
+    tray.on('right-click', () => popupMenu());
   }
 
   ipcMain.on('stage:menu', () => popupMenu());
