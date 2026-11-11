@@ -205,6 +205,13 @@
       tap(e.clientX, e.clientY);
     }, true);
 
+    // 右键她 → 弹菜单（隐藏 / 开关 / 尺寸 / 退出都在里面）
+    window.addEventListener('contextmenu', (e) => {
+      if (dragging || !overModel(e.clientX, e.clientY)) return;
+      e.preventDefault();
+      if (bridge && bridge.menu) bridge.menu();
+    }, true);
+
     // ---- 拖动 --------------------------------------------------------------
     window.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || !e.altKey) return;

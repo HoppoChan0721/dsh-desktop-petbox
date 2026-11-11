@@ -18,4 +18,6 @@ contextBridge.exposeInMainWorld('petStage', {
   tap(payload) { ipcRenderer.send('stage:tap', payload); },
   // 剪影标定出来的头顶位置（相对窗口的比例）：主进程拿它当绕圈判定的圆心
   head(h) { ipcRenderer.send('stage:head', h); },
+  // 右键她：弹托盘那套菜单（托盘图标被系统藏起来时也能改设置）
+  menu() { ipcRenderer.send('stage:menu'); },
 });

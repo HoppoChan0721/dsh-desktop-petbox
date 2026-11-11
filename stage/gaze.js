@@ -224,6 +224,12 @@ function createStageGaze(opts) {
       if (!track) send(null);
       return track;
     },
+    // 一节要转几圈：托盘/面板里能改，改完立即生效
+    setSpinTurns(n) {
+      const v = Math.round(Number(n));
+      if (Number.isFinite(v) && v >= 2 && v <= 20) spin.turnsPerStage = v;
+      return spin.turnsPerStage;
+    },
     // 剪影标定完由页面报上来：{ x, top, span }，都是相对窗口的比例
     setHead(h) {
       if (!h || !Number.isFinite(h.x) || !Number.isFinite(h.top) || !Number.isFinite(h.span)) return false;

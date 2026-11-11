@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>鲸鱼舞台 · 设置</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font: 13px/1.5 system-ui, "Microsoft YaHei";
+      color: #d7ecf7;
+      background: linear-gradient(165deg, #13212c 0%, #0c1721 100%);
+      border: 1px solid rgba(120, 190, 235, .28);
+      border-radius: 14px;
+      padding: 14px 16px 16px;
+      user-select: none;
+    }
+    h1 { font-size: 14px; font-weight: 600; letter-spacing: .5px; color: #9fd8f5; display: flex; justify-content: space-between; align-items: center; }
+    #x { width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: #7fa9bd; font-size: 15px; cursor: pointer; }
+    #x:hover { background: rgba(120, 190, 235, .14); color: #d7ecf7; }
+    section { margin-top: 14px; }
+    h2 { font-size: 12px; font-weight: 600; color: #6fa8c4; letter-spacing: .8px; margin-bottom: 8px; }
+    .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .row label { flex: 0 0 88px; color: #a9c8d8; }
+    .row .val { flex: 0 0 96px; text-align: right; color: #7fd6ff; font-variant-numeric: tabular-nums; }
+    input[type=range] { -webkit-appearance: none; flex: 1; height: 6px; border-radius: 3px; background: #2f4b5c; outline: none; }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+      background: #7fd6ff; box-shadow: 0 0 0 3px rgba(127, 214, 255, .22); cursor: pointer;
+    }
+    select { flex: 1; background: #182734; color: #d7ecf7; border: 1px solid #2f4b5c; border-radius: 7px; padding: 4px 6px; font: inherit; }
+    .check { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; cursor: pointer; }
+    .check input { accent-color: #4aa8ff; width: 14px; height: 14px; }
+    .hint { color: #6f8b9b; font-size: 12px; }
+    .good { color: #7fe0b0; }
+    .bad { color: #ff9a9a; }
+    footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    button.ghost {
+      border: 1px solid rgba(120, 190, 235, .35); background: transparent; color: #a9c8d8;
+      border-radius: 8px; padding: 6px 14px; font: inherit; cursor: pointer;
+    }
+    button.ghost:hover { background: rgba(120, 190, 235, .12); color: #d7ecf7; }
+    #status { flex: 1; align-self: center; font-size: 12px; color: #6f8b9b; }
+  </style>
+</head>
+<body>
+  <h1>鲸鱼舞台 · 设置 <button id="x" title="关闭">×</button></h1>
+
+  <section>
+    <h2>尺寸</h2>
+    <div class="row">
+      <label>大小</label>
+      <input id="size" type="range" min="420" max="1400" step="10" value="1182">
+      <span class="val" id="sizeVal">671 × 1182</span>
+    </div>
+    <div class="hint">按高度调，宽度跟着当前比例走，脚底钉住往上长。Ctrl + 滚轮也能微调。</div>
+  </section>
+
+  <section>
+    <h2>舞台</h2>
+    <div class="row">
+      <label>帧率</label>
+      <select id="fps">
+        <option value="30">30 fps · 省电</option>
+        <option value="60">60 fps · 默认</option>
+        <option value="90">90 fps · 顺滑</option>
+        <option value="0">不限</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>待机摆动</label>
+      <input id="sway" type="range" min="0.6" max="3" step="0.1" value="1.6">
+      <span class="val" id="swayVal">1.6 ×</span>
+    </div>
+    <div class="row">
+      <label>绕圈发晕</label>
+      <select id="spin">
+        <option value="2">2 圈</option>
+        <option value="3">3 圈</option>
+        <option value="4">4 圈 · 默认</option>
+        <option value="6">6 圈</option>
+        <option value="8">8 圈</option>
+      </select>
+    </div>
+    <div class="hint">改帧率或摆动会重新载入舞台，位置不变。</div>
+  </section>
+
+  <section>
+    <h2>开关</h2>
+    <label class="check"><input id="interactive" type="checkbox"> 分区互动（点她按部位反应）</label>
+    <label class="check"><input id="cursorTrack" type="checkbox"> 指针追踪（视线和身体跟着鼠标）</label>
+    <label class="check"><input id="onTop" type="checkbox"> 置顶显示</label>
+  </section>
+
+  <footer>
+    <span id="status"></span>
+    <button class="ghost" id="close">关闭</button>
+  </footer>
+
+  <script src="panel.js"></script>
+</body>
+</html>

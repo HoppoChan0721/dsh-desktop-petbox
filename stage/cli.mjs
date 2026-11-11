@@ -66,7 +66,12 @@ else if (cmd === 'pointer') {
   else if (rest[0] === 'hide') await call('/gaze', { suspend: flags.ms || 8000 });
   else if (rest[0] === 'circle') await call('/gaze', { circle: rest[1] || 2, r: flags.r });
   else await call('/gaze');
-} else {
-  console.error('用法：state | say <文本> | wait | hide | motion <名字> | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>]');
+} else if (cmd === 'config') {
+  if (rest.length) await call('/config', { json: rest.join(' ') });
+  else await call('/config');
+} else if (cmd === 'panel') await call('/panel');
+else if (cmd === 'menu') await call('/menu');
+else {
+  console.error('用法：state | say <文本> | wait | hide | motion <名字> [--hold] | motion stop | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>] | config [json] | panel | menu');
   process.exit(2);
 }

@@ -3,7 +3,7 @@
 //
 // 跑法：node_modules\electron\dist\electron.exe stage\main.js --model="模型目录" [--core="core 文件"] [--cdp=9340] [--port=61945]
 //   --core 不给就依次找：环境变量 WHALE_CUBISM_CORE、鲸语 1.4 部署里的 vendor、模型目录
-const { app, BrowserWindow, protocol, net, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, protocol, net, screen, ipcMain, Menu, Tray, nativeImage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -11,6 +11,18 @@ const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const drag = require('./drag');
 const gaze = require('./gaze');
+const Cfg = require('./config');
+
+// 单实例：托盘图标点第二遍、开机自启和手动启动撞在一起时，别再开第二只
+let activeWin = null;
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (activeWin && !activeWin.isDestroyed()) { activeWin.show(); activeWin.focus(); }
+  });
+}
 
 const arg = (name, dflt = '') => {
   const hit = process.argv.find((a) => a.startsWith('--' + name + '='));
@@ -85,6 +97,7 @@ app.whenReady().then(async () => {
   });
 
   const saved = loadBounds();
+  let cfg = Cfg.load();
   const win = new BrowserWindow({
     width: saved ? saved.width : 531,
     height: saved ? saved.height : 950,
@@ -95,6 +108,8 @@ app.whenReady().then(async () => {
     backgroundColor: '#00000000',
     hasShadow: false,
     resizable: true,
+    alwaysOnTop: cfg.onTop !== false,
+    skipTaskbar: true,
     webPreferences: {
       preload: path.join(STAGE_DIR, 'preload.js'),
       contextIsolation: true,
@@ -102,6 +117,8 @@ app.whenReady().then(async () => {
       backgroundThrottling: false,
     },
   });
+  if (cfg.onTop !== false) win.setAlwaysOnTop(true, 'screen-saver');
+  activeWin = win;
 
   // 指针策略全在 gaze.js 里：主进程每 33ms 读一次全局光标，归一化后送进页面。
   // 页面拿到的永远是真实位置，不依赖鼠标事件——桌宠大部分时间是穿透的，页面根本收不到 mousemove。
@@ -115,6 +132,9 @@ app.whenReady().then(async () => {
     onSpin: (stage) => spinReact(stage),
   });
   win.on('closed', () => tracker.stop());
+  // 配置里存着的开关，启动就应用，不用等菜单点一遍
+  tracker.setTrack(cfg.cursorTrack !== false);
+  tracker.setSpinTurns(cfg.spinTurns);
 
   // 页面标定完剪影会把头顶位置报上来，绕圈判定就用真实的头当圆心
   ipcMain.on('stage:head', (_e, h) => { tracker.setHead(h); });
@@ -182,9 +202,20 @@ app.whenReady().then(async () => {
 
   const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
   console.log(JSON.stringify({ modelDir: MODEL_DIR, modelFile: modelFile ? '(found)' : 'MISSING', core: CORE_FILE ? '(found)' : 'MISSING' }));
-  // --sway=1.6 待机摆动幅度倍数：头发/裙摆的物理全靠它，太小看着死。不填就用引擎默认。
-  const swayArg = arg('sway', process.env.WHALE_SWAY || '');
-  await win.loadURL('pet://stage/index.html?model=' + encodeURIComponent(modelFile) + (swayArg ? '&sway=' + encodeURIComponent(swayArg) : ''));
+  // 舞台页的启动参数：帧率上限、待机摆动倍数都从配置来，托盘/面板改完就重载一遍。
+  // 优先级：命令行参数 > 配置 > 默认。
+  const stageUrl = () => {
+    const q = new URLSearchParams({ model: modelFile });
+    const fpsArg = arg('fps', '');
+    const fps = fpsArg !== '' ? Number(fpsArg) : Number(cfg.fps);
+    if (Number.isFinite(fps) && fps >= 0) q.set('fps', String(Math.round(fps)));
+    const swayArg = arg('sway', process.env.WHALE_SWAY || '');
+    const sway = swayArg !== '' ? Number(swayArg) : Number(cfg.sway);
+    if (Number.isFinite(sway) && sway > 0) q.set('sway', String(sway));
+    return 'pet://stage/index.html?' + q.toString();
+  };
+  const loadStage = () => win.loadURL(stageUrl()).catch(() => {});
+  await loadStage();
 
   // ---- 控制口 ---------------------------------------------------------------
   // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
@@ -358,9 +389,184 @@ app.whenReady().then(async () => {
       const x = q.get('x') !== null ? Number(q.get('x')) : b.x;
       const y = q.get('y') !== null ? Number(q.get('y')) : b.y;
       win.setBounds({ x: Math.round(x), y: Math.round(y), width: w, height: h });
+      push({ type: 'zones-reset' });
       return { bounds: win.getBounds() };
     },
+    // 托盘/面板改开关以后，命令行也读得到当前配置
+    '/panel': () => {
+      openPanel();
+      return { opened: true };
+    },
+    // 菜单结构自检：不做任何事，只把当前菜单拍平成文字，方便远程确认项和勾选状态
+    '/menu': () => {
+      const flat = [];
+      const walk = (items, depth) => {
+        for (const it of items) {
+          if (it.type === 'separator') continue;
+          flat.push('  '.repeat(depth) + (it.checked === true ? '[x] ' : it.checked === false ? '[ ] ' : '') + (it.label || ''));
+          if (it.submenu) walk(it.submenu, depth + 1);
+        }
+      };
+      walk(menuTemplate(), 0);
+      return { menu: flat, tray: !!tray, panel: !!(panel && !panel.isDestroyed()) };
+    },
+    '/config': (q) => {
+      if (q.get('json') !== null) {
+        const patch = JSON.parse(q.get('json'));
+        return applyConfig(patch);
+      }
+      return { cfg: Cfg.load() };
+    },
   };
+
+  // ---- 尺寸 / 托盘 / 右键菜单 / 设置面板 ------------------------------------
+  // 面板和菜单都只是「遥控器」：真正做事的是 applySize、applyConfig 这两个函数，
+  // 控制口的路由也用它们，所以三条入口改出来的结果一定一致。
+  const SIZE_MIN_H = 420;
+  const SIZE_MAX_H = 1400;
+  let panel = null;
+  let tray = null;
+
+  function applySize(w, h) {
+    if (!win || win.isDestroyed()) return null;
+    const [ox, oy] = win.getPosition();
+    const [ow, oh] = win.getSize();
+    const d = screen.getDisplayNearestPoint({ x: ox + Math.round(ow / 2), y: oy + Math.round(oh / 2) }).workArea;
+    // 上限跟着这块屏的工作区走：150% 缩放的 1080p 上工作区只有 ~900 DIP 高，撑出去系统会自己改尺寸，然后拖动就闪
+    const W = Math.max(240, Math.min(1600, Math.min(Math.round(Number(w) || 380), Math.round(d.width * 0.96))));
+    const H = Math.max(360, Math.min(2000, Math.min(Math.round(Number(h) || 680), Math.round(d.height * 0.96))));
+    win.setBounds({ x: Math.round(ox + ow / 2 - W / 2), y: Math.round(oy + oh - H), width: W, height: H });
+    saveBounds();
+    // 尺寸一变剪影就得重标定，否则点哪儿都按旧比例漂
+    push({ type: 'zones-reset' });
+    return { width: W, height: H };
+  }
+
+  function sizeInfo() {
+    const [w, h] = win.getSize();
+    const b = win.getBounds();
+    const d = screen.getDisplayNearestPoint({ x: b.x + Math.round(w / 2), y: b.y + Math.round(h / 2) }).workArea;
+    return { w, h, min: SIZE_MIN_H, max: Math.min(SIZE_MAX_H, Math.round(d.height * 0.96)), aspect: w / Math.max(1, h) };
+  }
+
+  // 配置改了就地生效；帧率/摆动要重载舞台页才吃到
+  function applyConfig(patch) {
+    const p = patch || {};
+    const before = Cfg.load();
+    cfg = Cfg.save(p);
+    if ('interactive' in p) push({ type: 'interactive', value: cfg.interactive !== false });
+    if ('cursorTrack' in p) tracker.setTrack(cfg.cursorTrack !== false);
+    if ('onTop' in p && win && !win.isDestroyed()) win.setAlwaysOnTop(cfg.onTop !== false, 'screen-saver');
+    if ('spinTurns' in p) tracker.setSpinTurns(cfg.spinTurns);
+    let reloaded = false;
+    if (('fps' in p || 'sway' in p) && (Number(before.fps) !== Number(cfg.fps) || Number(before.sway) !== Number(cfg.sway))) {
+      loadStage();
+      reloaded = true;
+    }
+    return { cfg, reloaded };
+  }
+
+  function openPanel() {
+    if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
+    const area = screen.getPrimaryDisplay().workArea;
+    const PW = 400;
+    const PH = 600;
+    panel = new BrowserWindow({
+      width: PW,
+      height: PH,
+      x: area.x + Math.round((area.width - PW) / 2),
+      y: area.y + Math.round((area.height - PH) / 2),
+      frame: false,
+      transparent: true,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      skipTaskbar: true,
+      show: false,
+      backgroundColor: '#00000000',
+      webPreferences: { preload: path.join(STAGE_DIR, 'panel-preload.js'), contextIsolation: true, sandbox: false },
+    });
+    panel.setAlwaysOnTop(true, 'screen-saver');
+    panel.loadFile(path.join(STAGE_DIR, 'panel.html')).catch(() => {});
+    panel.once('ready-to-show', () => { if (panel && !panel.isDestroyed()) panel.show(); });
+    panel.on('closed', () => { panel = null; });
+    return panel;
+  }
+
+  const FPS_CHOICES = [30, 60, 90, 0];
+  const SWAY_CHOICES = [1, 1.6, 2.4];
+  const SPIN_CHOICES = [2, 3, 4, 6, 8];
+
+  function menuTemplate() {
+    const now = Cfg.load();
+    const fps = Number(now.fps);
+    const sway = Number(now.sway);
+    const spin = Number(now.spinTurns);
+    const [curW, curH] = win && !win.isDestroyed() ? win.getSize() : [0, 0];
+    return [
+      { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return; win.isVisible() ? win.hide() : win.show(); } },
+      { type: 'separator' },
+      { label: '互动', submenu: [
+        { label: '分区互动（点她按部位反应）', type: 'checkbox', checked: now.interactive !== false, click: (it) => applyConfig({ interactive: it.checked }) },
+        { label: '指针追踪（视线和身体跟着鼠标）', type: 'checkbox', checked: now.cursorTrack !== false, click: (it) => applyConfig({ cursorTrack: it.checked }) },
+      ] },
+      { label: '外观', submenu: [
+        { label: '尺寸', submenu: [
+          { label: '小（420 × 740）', click: () => applySize(420, 740) },
+          { label: '中（560 × 990）', click: () => applySize(560, 990) },
+          { label: '大（671 × 1182）', click: () => applySize(671, 1182) },
+          { type: 'separator' },
+          { label: `滑杆微调…（现在 ${curW} × ${curH}）`, click: () => openPanel() },
+          { label: 'Ctrl + 滚轮（她身上）', enabled: false },
+        ] },
+        { label: '置顶显示', type: 'checkbox', checked: now.onTop !== false, click: (it) => applyConfig({ onTop: it.checked }) },
+      ] },
+      { label: '舞台', submenu: [
+        { label: `帧率 · ${fps ? fps + ' fps' : '不限'}`, submenu: FPS_CHOICES.map((v) => ({
+          label: v ? v + ' fps' : '不限', type: 'radio', checked: fps === v, click: () => applyConfig({ fps: v }),
+        })) },
+        { label: `待机摆动 · ${sway} 倍`, submenu: SWAY_CHOICES.map((v) => ({
+          label: v + ' 倍', type: 'radio', checked: Math.abs(sway - v) < 0.01, click: () => applyConfig({ sway: v }),
+        })) },
+        { label: `绕圈发晕 · ${spin} 圈`, submenu: SPIN_CHOICES.map((v) => ({
+          label: v + ' 圈', type: 'radio', checked: spin === v, click: () => applyConfig({ spinTurns: v }),
+        })) },
+        { type: 'separator' },
+        { label: '重新载入舞台', click: () => loadStage() },
+      ] },
+      { label: '设置…（尺寸 / 帧率 / 摆动）', click: () => openPanel() },
+      { type: 'separator' },
+      { label: '退出', click: () => app.quit() },
+    ];
+  }
+
+  function popupMenu() {
+    if (!win || win.isDestroyed()) return;
+    Menu.buildFromTemplate(menuTemplate()).popup({ window: win });
+  }
+
+  function createTray() {
+    const iconPath = path.join(STAGE_DIR, 'tray-32.png');
+    let img = nativeImage.createFromPath(iconPath);
+    // 图标加载不到只会得到空图、托盘一片空白，还不报错——留一行日志方便排查
+    console.log(JSON.stringify({ trayIcon: img.isEmpty() ? 'EMPTY:' + iconPath : img.getSize() }));
+    tray = new Tray(img);
+    tray.setToolTip('安娜 · 鲸鱼舞台');
+    tray.on('click', popupMenu);
+    tray.on('right-click', popupMenu);
+  }
+
+  ipcMain.on('stage:menu', () => popupMenu());
+  ipcMain.on('panel:close', () => { if (panel && !panel.isDestroyed()) panel.close(); });
+  ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT }));
+  ipcMain.handle('panel:size', (_e, p) => applySize(p && p.w, p && p.h));
+  ipcMain.handle('panel:save', (_e, patch) => applyConfig(patch));
+
+  createTray();
+  win.on('closed', () => {
+    try { if (tray) tray.destroy(); } catch (e) {}
+    try { if (panel && !panel.isDestroyed()) panel.close(); } catch (e) {}
+  });
 
   const server = http.createServer((req, res) => {
     let url;

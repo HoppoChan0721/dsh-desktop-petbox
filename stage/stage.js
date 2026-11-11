@@ -169,6 +169,7 @@
         else if (cmd.type === 'error') err(cmd.text);
         else if (cmd.type === 'wait') bubble.wait(cmd.ms);
         else if (cmd.type === 'bubble-hide') bubble.hide();
+        else if (cmd.type === 'zones-reset') interaction.resetProfile(150);   // 尺寸一变就重标剪影
         else if (cmd.type === 'pointer') { window.__lockPointer = !!cmd.lock; engine.pointer(cmd.value || null); }
         else if (cmd.type === 'stop') engine.stopMotion();
         else if (cmd.type === 'tap') engine.nod();

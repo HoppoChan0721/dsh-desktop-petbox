@@ -1,40 +1,41 @@
 # 交接文档 · 自建 Live2D 舞台
 
 > 写给**下一个会话的我**。读完这一份就能接着干，不用翻聊天记录。
-> 最后更新：2026-11-10 22:0x · 分支 `dev` · HEAD `2815e3c`
+> 最后更新：2026-11-11 18:4x · 分支 `dev` · **桌宠入口已切到 `stage/main.js`**
 
 ---
 
 ## 0. 一句话
 
-桌宠正在从「鲸语 1.4 + 四个补丁」迁到我们自己的舞台 `F:\DaFeiYu\projects\whale-pet-shell\stage\`。舞台已经能跑、能动、能摸、能说话出声，正按七步计划把外壳的成果搬进去。**接入进度 2/7。**
+桌宠已经**正式换成我们自己的舞台** `F:\DaFeiYu\projects\whale-pet-shell\stage\`（`package.json` 的 `main` 指向它，老外壳还在，`npm run start:legacy` 能起来当回退）。接入进度 **5/7 + 替身已完成**：气泡、语音、指针手感、托盘/右键菜单/设置面板、入口切换都好了；剩下第 3 步点触账本与反向桥、第 4 步情绪端口、第 6 步 DSH 桥。
 
 ## 1. 立刻要做的第一件事
 
-**第 3 步：点触记录与反向桥。**（指针手感那套 2026-11-10 晚已经补完，见 6.5 节）
+**第 3 步：点触记录与反向桥。**
 
 - 点她 → 追加 `F:\DaFeiYu\projects\whale-pet-shell\data\touch.jsonl` → 算亲密度 → POST 到 `bridgeUrl`（现役是 `http://127.0.0.1:61944/event`）→ 把 DSH 会话叫醒
 - 本地反应（表情 + 点头/摇头）已经有了，在第 3 步里保留
-- **先只做本地记录和 `/taps`，桥那头等主人点头再连**（主人当时正用着 DSH）
+- **先只做本地记录和 `/taps`，桥那头等主人点头再连**
 - 参考实现：外壳 `src\main.js` 的 `handleTouch` `recordTouch` `appendTouch` `forwardTouch` `affinityInfo`（约 690~760 行）
-
-做完第 3 步接着第 4~7 步，顺序和验收方式全在 `stage\PLAN.md`。
+- 接着第 4 步情绪端口 61943：`persona\mood.ps1` 现在还是往 61943 发，舞台没接之前那边是哑的
 
 ## 2. 先确认舞台在不在跑
 
 ```powershell
-# 在跑就该回一段 JSON，带 frames / motion / pointer
+# 在跑就该回一段 JSON，带 frames / motion / gaze
 curl http://127.0.0.1:61945/state
 ```
 
-不在跑就这样起（**Cubism Core 不进仓库**，脚本会自己从鲸语 1.4 的 vendor 找）：
+正常启动就是仓库根目录跑 `electron .`（入口已经是 stage/main.js）；开机自启走 `tools\pet-autostart.ps1`，它健康检查的端口也是 61945：
 
 ```powershell
 cd F:\DaFeiYu\projects\whale-pet-shell
 Start-Process -FilePath 'node_modules\electron\dist\electron.exe' `
-  -ArgumentList 'stage\main.js','--cdp=9340' `
+  -ArgumentList '.','--cdp=9340' `
   -WorkingDirectory 'F:\DaFeiYu\projects\whale-pet-shell'
 ```
+
+**要调试口才加 `--cdp=9340`**；自启脚本给的是 Chromium 原生的 `--remote-debugging-port=9333`，两个都能用。加单实例锁了：重复启动只会把已有那只叫到前面来。
 
 重启后要**关掉旧进程**，否则控制口占着：
 
@@ -60,7 +61,16 @@ node stage\cli.mjs pointer 0 -1 --hold        # 冻结指针位置（验证探�
 node stage\cli.mjs pointer reset
 ```
 
-控制口 `127.0.0.1:61945`：`/state` `/say` `/voice` `/voice-stop` `/wait` `/bubble?hide=1` `/motion` `/emotion` `/pointer` `/taps` `/zones` `/window`。
+控制口 `127.0.0.1:61945`：`/state` `/say` `/voice` `/voice-stop` `/wait` `/bubble?hide=1` `/motion` `/emotion` `/pointer` `/taps` `/zones` `/window` `/gaze` `/config` `/panel` `/menu`。
+
+托盘菜单 / 右键她 / 设置面板三处看到的是同一套东西（开关、尺寸、帧率、摆动、绕圈圈数）。命令行对应：
+
+```powershell
+node stage\cli.mjs panel                       # 打开设置面板
+node stage\cli.mjs config                      # 读当前配置（data\stage-config.json）
+node stage\cli.mjs config '{"cursorTrack":false}'   # 改配置，就地生效
+node stage\cli.mjs menu                        # 把菜单结构拍平成文字，确认勾选状态
+```
 
 鼠标那边：压在她身上吃鼠标、透明处穿透、**Alt + 左键拖动**、**Ctrl + 滚轮**缩放、悬停换蓝色软点光标、点身上不同部位有反应。
 
@@ -86,6 +96,10 @@ node stage\cli.mjs pointer reset
 | `stage\bubble.js` | 贴头顶的说话泡、逐字出水、等待三点 |
 | `stage\voice.js` | 放 wav、RMS 包络驱动口型 |
 | `stage\drag.js` | 跨屏高 DPI 拖动数学（从 `src\drag.js` 原样搬，别重写） |
+| `stage\gaze.js` | 指针策略：轮询、静止丢失追踪、离屏回正、绕圈三节判定（纯数学可单测） |
+| `stage\config.js` | 舞台配置：`data\stage-config.json` 的读写与默认值 |
+| `stage\panel.html` `panel.js` `panel-preload.js` | 设置面板：尺寸滑杆、帧率、摆动、圈数、三个开关 |
+| `stage\tray-32.png` `tray-256.png` | 托盘/面板图标（从 `assets\` 复制，stage 不 import src） |
 | `stage\cli.mjs` | 命令行 |
 | `stage\PLAN.md` | **接入计划 + 每步进展记录**（动手前必读） |
 | `stage\README.md` | 架构、跑法、命令、五条红线的完整版 |
@@ -97,7 +111,9 @@ node stage\cli.mjs pointer reset
 - Cubism 渲染构建用 `stage\vendor\cubism4.colors.min.js`（鲸语那份改过的，换成官方 stock 版会出鼻梁黑块）
 - TTS 桥 `F:\DaFeiYu\tools\pet-voice-prepare.mjs`，wav 目录 `F:\AI\VoiceService\gateway\downloads`
 - 窗口几何存在 `userData\stage-window.json`，现在的位置 `1828,92` 大小 `671×1182`
-- 端口：舞台控制口 **61945**；现役桌宠 61942/61943/9333；反向桥 61944
+- 配置存在 `data\stage-config.json`（互动/追踪/置顶/帧率/摆动/圈数）
+- 端口：舞台控制口 **61945**（现役就这一个）；老外壳那套 61942/61943/9333 只在 `npm run start:legacy` 时才会出现；反向桥 61944
+- `tools\pet-autostart.ps1` / `aux-services.ps1` / `pet-stop.ps1` 的健康端口都已经是 **61945**
 
 ## 6.5 指针手感（2026-11-10 晚新增，`stage\gaze.js`）
 
@@ -121,15 +137,15 @@ node stage\cli.mjs gaze circle 2            # 演示钩子：走真实判定和�
 node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`npm test` 已带）
 ```
 
-要现场演示「转两圈就晕」：启动前 `$env:WHALE_SPIN_TURNS='2'`，正常是 6 圈。
+要现场演示「转两圈就晕」：`node stage\cli.mjs config '{"spinTurns":2}'`，正常 4 圈。
 
 ## 7. 未结项 / 等主人拍板
 
-- 第 3 步要不要真连反向桥（连了会唤醒 DSH 会话，主人当时在用）
+- 第 3 步要不要真连反向桥（连了会唤醒 DSH 会话）
+- 第 4 步情绪端口 61943 还没接，`persona\mood.ps1` 现在是往空气里发
 - 语音：气泡和音频起点仍有约 50~100ms 差（页面 fetch+解码耗时），要不要提前预热
 - 换装表情（`裙子切换` `鞋子` `胸衣` `体型1/2`）还没验证过在舞台上的持久性——外壳那边有「换装是状态不是动作、演完不能穿回去」的处理
-- 第 5 步托盘/面板的**具体取舍**（哪些开关放托盘、哪些放面板）要主人定口味
-- 现役桌宠什么时候让位（第 7 步）
+- 老外壳（`src\`）什么时候删/归档：现在留着当回退，`npm run start:legacy`
 
 ## 8. 协作约定
 
@@ -143,7 +159,9 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 ## 9. 变更记录
 
 ```
-<下一次提交>  指针手感细节：绕头转圈三节 / 静止丢失追踪 / 瞬移防护（stage\gaze.js）
+<下一次提交>  第 5 步托盘/右键菜单/设置面板 + 第 7 步入口切到 stage（config.js / panel.*）
+5494d94  绕圈判据放宽、眼睛回正、锁 60 帧、待机摆动 ×1.6
+9c34506  指针手感细节：绕头转圈三节 / 静止丢失追踪 / 瞬移防护（stage\gaze.js）
 2815e3c  接入第 2 步：语音链路，wav 包络驱动口型
 49bb6e1  接入第 1 步：气泡与文字链路，附接入计划
 a8fec35  脚不再被截、表情自动归位、悬停换光标、窗口尺寸记忆
