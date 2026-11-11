@@ -80,7 +80,20 @@ else if (cmd === 'reply') {
   else if (rest.length) await call('/reply', { text: rest.join(' ') });
   else await call('/reply');
 } else if (cmd === 'status') await call('/status');
-else if (cmd === 'volume') await call('/volume', { value: rest[0] !== undefined ? rest[0] : flags.value });
+else if (cmd === 'outfit') await call('/outfit/reset');
+else if (cmd === 'smart') await call('/smart', { on: rest[0] === 'off' ? 0 : (rest[0] === 'on' ? 1 : undefined) });
+else if (cmd === 'bridge') await call('/bridge');
+else if (cmd === 'peek') {
+  if (rest[0] === 'on') await call('/peek', { on: 1 });
+  else if (rest[0] === 'off') await call('/peek', { on: 0 });
+  else if (rest[0] === 'now') await call('/peek', { now: 1 });
+  else if (rest[0]) await call('/peek', { persona: rest[0] });
+  else await call('/peek');
+} else if (cmd === 'urge') {
+  if (rest[0] === 'now') await call('/urge', { now: 1 });
+  else if (rest[0]) await call('/urge', { intensity: rest[0] });
+  else await call('/urge');
+} else if (cmd === 'volume') await call('/volume', { value: rest[0] !== undefined ? rest[0] : flags.value });
 else if (cmd === 'config') {
   if (rest.length) await call('/config', { json: rest.join(' ') });
   else await call('/config');

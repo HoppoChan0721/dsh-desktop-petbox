@@ -44,7 +44,6 @@ Get-CimInstance Win32_Process -Filter "Name='electron.exe'" |
 **注意**：现役桌宠跑的是 `src\main.js`（61942/61943/9333），上面这条 `Where-Object` 只匹配 `stage\main.js`，不会误杀。
 
 ## 3. 现在舞台能干什么 + 怎么验
-
 ```powershell
 node stage\cli.mjs state                      # 状态
 node stage\cli.mjs say "主人回来啦"            # 气泡 + 口型
@@ -110,7 +109,31 @@ node stage\cli.mjs status                        # 端口/开关/亲密度/lastT
 - 即时生效，**不重载页面**：配置一改主进程就推一条 `{type:'volume'}` 进页面
 - 播放中途改音量用 `setTargetAtTime` 平滑 20ms，直接赋值会有一声「咔」
 
-托盘菜单 / 右键她 / 设置面板三处看到的是同一套东西（开关、尺寸、帧率、摆动、绕圈圈数、语音音量）。命令行对应：
+表情是引擎自己叠的，不靠模型那套（2026-11-11 晚，**重要**）：
+
+- 这个 vendor 构建里 `model.expression(name)` 只把表情设成 `currentExpression`，**每帧没人把参数值写进 coreModel**
+  （`ExpressionManager.update` 根本没被调）。结果是表情看着完全没反应：爱心眼不红、眯眼不眯、换装也穿不上。
+  之前一直以为「表情能用」，是因为只看了 `state().emotion` 那个标签，没看画面。
+- 现在 `engine.emotion()` 自己解析 exp3（`loadExpression`），每帧在**最后一层**按 blend 叠上去（`applyExpression`）：
+  Add / Multiply / Overwrite 三种，淡入 0.15 秒、末尾 0.2 秒淡出。表情参数会被 `register()` 登记，跟着 `reassert()` 一起留住。
+- 验法：`emotion 爱心眼` 之后立刻读 `key4` 应该从 0 涨到 1；截图能看见眼睛变色。
+  **只读 `state().emotion` 不算验过**，那只是个字符串。
+
+复原服装（`engine.resetOutfit()` / `/outfit/reset` / 菜单「复原服装」）：
+
+- 换装（裙子切换、鞋子、胸衣、体型1/2、尾巴切换）是**状态不是动作**，穿上就下不来
+- 做法：把 `Clothes1..8` 摁回各自默认档，同时清掉当前表情（换装是走表情通道写的，不撤表情下一帧又写回去）
+- 构造时就 `register` 了 `Clothes1..8`，所以不用等某个换装表情被点过才生效；它们在 `this.hold` 里，驱动层不会写回默认值
+
+菜单里补回来的那几项（2026-11-11 晚，给别人下载用的）：
+
+- 互动 ▸ 点触叫醒 DSH 会话（`bridge`）、智能穿透（`smartIgnore`）——这两个原来只有配置，没有入口
+- 说话 ▸ 阶段气泡 / 回复钮 / 回复钮常驻 / 窥屏（开关 + 四档性子 + 立刻瞄一眼）/ 主动开口浓度（安静~不拦着）+ 现在让她说一句
+- **桥那几项是「问出来的」，不是本地存的**：弹菜单前先 GET 一次 `http://127.0.0.1:61944/health` 和 `/mood`，
+  桥没装或没跑就把项灰掉并写明「桥没在跑，这个功能得装 dsh-pet-bridge」，点了没反应还一头雾水是最糟的
+- 桥的开关全部转发给桥自己（`POST /peek`、`POST /mood`），舞台不留副本，避免两边状态打架
+
+托盘菜单 / 右键她 / 设置面板三处看到的是同一套东西（开关、尺寸、帧率、摆动、绕圈圈数、语音音量、复原服装、桥侧开关）。命令行对应：
 
 ```powershell
 node stage\cli.mjs panel                       # 打开设置面板

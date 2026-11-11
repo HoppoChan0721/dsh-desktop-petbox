@@ -54,6 +54,8 @@ async function save(patch, note) {
   $('interactive').checked = cfg.interactive !== false;
   $('cursorTrack').checked = cfg.cursorTrack !== false;
   $('onTop').checked = cfg.onTop !== false;
+  $('smartIgnore').checked = cfg.smartIgnore !== false;
+  $('bridge').checked = cfg.bridge !== false;
   $('tickBubble').checked = cfg.tickBubble !== false;
   $('replyBtn').checked = cfg.replyBtn !== false;
   $('replyAlways').checked = cfg.replyAlways === true;
@@ -84,6 +86,8 @@ $('volume').addEventListener('change', () => {
 $('interactive').addEventListener('change', () => save({ interactive: $('interactive').checked }, '分区互动已切换'));
 $('cursorTrack').addEventListener('change', () => save({ cursorTrack: $('cursorTrack').checked }, '指针追踪已切换'));
 $('onTop').addEventListener('change', () => save({ onTop: $('onTop').checked }, '置顶已切换'));
+$('smartIgnore').addEventListener('change', () => save({ smartIgnore: $('smartIgnore').checked }, '智能穿透已切换'));
+$('bridge').addEventListener('change', () => save({ bridge: $('bridge').checked }, '点触桥已切换'));
 $('tickBubble').addEventListener('change', () => save({ tickBubble: $('tickBubble').checked }, '阶段气泡已切换'));
 $('replyBtn').addEventListener('change', () => save({ replyBtn: $('replyBtn').checked }, '回复钮已切换'));
 $('replyAlways').addEventListener('change', () => save({ replyAlways: $('replyAlways').checked }, '回复钮常驻已切换'));

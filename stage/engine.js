@@ -144,6 +144,8 @@
       this.impulse = null;
       this.emotionTimer = null;
       this.emotionName = '';
+      this.expr = null;         // { name, params:[{id,value,blend}], at, until, loaded }
+      this.exprCache = new Map();
 
       this.blinkNext = 2.0;
       this.blinkFrom = -1;
@@ -153,6 +155,9 @@
       this.hold = new Set(['Clothes1', 'Clothes2', 'Clothes3', 'Clothes4', 'Clothes5', 'Clothes6', 'Clothes7', 'Clothes8']);
 
       this.register(SEMANTIC);
+      // 换装参数先登记上（模型里没有的会被 register 忽略）：这样「复原服装」不用等
+      // 某个换装表情被点过才生效，也不会被驱动层写回默认值——它们在 this.hold 里。
+      this.register(['Clothes1', 'Clothes2', 'Clothes3', 'Clothes4', 'Clothes5', 'Clothes6', 'Clothes7', 'Clothes8']);
       // key1..key13 是表情专用通道，交给模型自己的表情管理器，驱动层绝对不许碰。
       // 碰过一次：每帧写回默认值 0，等于每帧把表情擦掉，脸红看不出来。
 
@@ -288,27 +293,93 @@
 
     shake() { return this.react('AngleX', 8, 460, 1.5); }
 
+    // 一键复原服装：换装是「状态」不是动作——裙子切换、鞋子、胸衣这些表情只有「变成」没有「变回」，
+    // 穿上之后自己下不来，只能把八个 Clothes 参数摁回各自默认档。
+    // 必须同时改 this.current，不然下一帧 commit 会拿旧值平滑回去（看着像没反应）。
+    resetOutfit() {
+      const done = [];
+      for (const [id, p] of this.info) {
+        if (!/^Clothes\d+$/.test(id)) continue;
+        const d = Number.isFinite(p.default) ? p.default : 0;
+        this.current.set(id, d);
+        try { this.core.setParameterValueById(id, d); } catch (e) { this.writeErrors++; }
+        done.push(id);
+      }
+      // 换装靠表情通道写进来的，表情不撤下一帧又会被写回去
+      try { this.emotion('', 0); } catch (e) {}
+      return done;
+    }
+
     // 表情不会自己回去：模型挂上就一直挂着。所以演完记得主动 reset，
     // 不然点她一次，脸红能挂到天荒地老。
+    //
+    // ⚠️ 2026-11-11 实测：这个 vendor 构建里 `model.expression(name)` 只把表情设成 currentExpression，
+    // 每帧都**没有**人把表达式的参数值写进 coreModel（ExpressionManager.update 没被调）。
+    // 结果就是表情看着完全没反应——爱心眼不红、眯眼不眯、换装也穿不上。
+    // 所以这里自己把 exp3 的参数解析出来，每帧按 blend 叠上去（applyExpression）。
     emotion(name, ms) {
-      const mgr = this.internal && this.internal.motionManager && this.internal.motionManager.expressionManager;
-      if (!mgr) return false;
       clearTimeout(this.emotionTimer);
-      try {
-        if (!name) {
-          mgr.resetExpression();
-          this.emotionName = '';
-          return true;
-        }
-        this.model.expression(name);
-        this.emotionName = name;
-        const span = num(ms, 0) > 0 ? num(ms, 0) : TUNE.expressionMs;
-        this.emotionTimer = setTimeout(() => {
-          try { mgr.resetExpression(); } catch (e) {}
-          this.emotionName = '';
-        }, span);
+      if (!name) {
+        this.emotionName = '';
+        this.expr = null;
         return true;
-      } catch (e) { return false; }
+      }
+      const span = num(ms, 0) > 0 ? num(ms, 0) : TUNE.expressionMs;
+      this.emotionName = name;
+      this.expr = { name, params: [], at: this.clock, until: this.clock + span / 1000 };
+      // 先把上一份表情撤掉，别让两个表情叠在一起
+      this.loadExpression(name).then((params) => {
+        // 加载完之前可能已经切到别的表情了，别把旧的盖上去
+        if (!params || !this.expr || this.expr.name !== name) return;
+        this.expr.params = params;
+        this.expr.loaded = true;
+      }).catch(() => {});
+      this.emotionTimer = setTimeout(() => {
+        if (this.expr && this.expr.name === name) this.expr = null;
+        if (this.emotionName === name) this.emotionName = '';
+      }, span);
+      return true;
+    }
+
+    // exp3 里的参数表：{Id, Value, Blend}。Blend 有三种：Add / Multiply / Overwrite
+    async loadExpression(name) {
+      const defs = (this.internal && this.internal.settings && this.internal.settings.expressions) || [];
+      const def = defs.find((d) => (d.Name || d.name) === name);
+      const file = def && (def.File || def.file);
+      if (!file) return null;
+      if (!this.exprCache) this.exprCache = new Map();
+      if (this.exprCache.has(file)) return this.exprCache.get(file);
+      const url = new URL(file, this.baseUrl || location.href).href;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const json = await res.json();
+      const params = [];
+      for (const p of (json.Parameters || [])) {
+        if (!p || !p.Id) continue;
+        params.push({ id: p.Id, value: num(p.Value, 0), blend: String(p.Blend || 'Add') });
+      }
+      this.register(params.map((p) => p.id));
+      this.exprCache.set(file, params);
+      return params;
+    }
+
+    // 表情叠在最后一层：待机/指针/动作都写完，再由它盖上去，
+    // 这样「眯眼」「脸红」不会被驱动层每帧擦掉。
+    applyExpression({ set }, target) {
+      const ex = this.expr;
+      if (!ex || !ex.params || !ex.params.length) return;
+      const life = this.clock - ex.at;
+      const left = ex.until - this.clock;
+      const w = Math.min(1, life / 0.15) * Math.min(1, Math.max(0, left / 0.2));
+      if (w <= 0) return;
+      for (const p of ex.params) {
+        if (!this.info.has(p.id)) continue;
+        const cur = num(target.get(p.id), this.info.get(p.id).default);
+        let v = cur + p.value * w;                       // Add
+        if (p.blend === 'Multiply') v = cur * (1 + (p.value - 1) * w);
+        else if (p.blend === 'Overwrite') v = cur + (p.value - cur) * w;
+        set(p.id, v);
+      }
     }
 
     // ---- 每帧 ---------------------------------------------------------------
@@ -345,6 +416,7 @@
       this.applyMouth(ctx);
       this.applyMotion(ctx, target);
       this.applyBlink(ctx, target);
+      this.applyExpression(ctx, target);
       return target;
     }
 

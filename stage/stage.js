@@ -182,6 +182,7 @@
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();
         else if (cmd.type === 'volume') voice.setVolume(cmd.value);
+        else if (cmd.type === 'outfit-reset') { const ids = engine.resetOutfit(); bubble.tick('衣服复原了', 2200); window.__lastOutfitReset = ids; }
         else if (cmd.type === 'error') err(cmd.text);
         else if (cmd.type === 'wait') bubble.wait(cmd.ms);
         else if (cmd.type === 'bubble-hide') bubble.hide();
@@ -190,6 +191,7 @@
         else if (cmd.type === 'stop') engine.stopMotion();
         else if (cmd.type === 'tap') engine.nod();
         else if (cmd.type === 'interactive') interaction.setInteractive(cmd.value !== false);
+        else if (cmd.type === 'smart') interaction.setSmart(cmd.value !== false);
         else if (cmd.type === 'mood') {
           engine.setMood(cmd.plan || null);
           if (cmd.plan && cmd.plan.gesture === 'nod') engine.nod();

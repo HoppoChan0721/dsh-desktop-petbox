@@ -224,6 +224,55 @@ app.whenReady().then(async () => {
     } catch (e) {}
   }
 
+  // ---- DSH 侧桥的迷你客户端 ------------------------------------------------
+  // 窥屏、主动开口这些开关都住在桥里（61944），舞台只是遥控器。
+  // 为什么菜单要能点：这套东西是给人下载的，别人不一定会敲命令行；
+  // 桥没在跑的时候不能装作有这个功能，菜单项要灰掉并说清楚原因。
+  const bridgeBase = () => {
+    try {
+      const u = new URL(String(cfg.bridgeUrl || '').trim() || 'http://127.0.0.1:61944/event');
+      return u.origin;
+    } catch (e) { return 'http://127.0.0.1:61944'; }
+  };
+  let bridgeState = { at: 0, ok: false, health: null, mood: null, error: '' };
+
+  function bridgeReq(method, path, body, timeoutMs) {
+    return new Promise((resolve) => {
+      let u;
+      try { u = new URL(bridgeBase() + path); } catch (e) { resolve({ ok: false, error: '地址不对' }); return; }
+      const payload = body === undefined ? '' : JSON.stringify(body);
+      const req = http.request({
+        hostname: u.hostname,
+        port: u.port || 80,
+        path: u.pathname + (u.search || ''),
+        method,
+        headers: payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {},
+        timeout: timeoutMs || 2500,
+      }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { raw += c; });
+        res.on('end', () => {
+          try { resolve(JSON.parse(raw || '{}')); } catch (e) { resolve({ ok: false, error: '返回不是 JSON' }); }
+        });
+      });
+      req.on('error', (e) => resolve({ ok: false, error: e.code === 'ECONNREFUSED' ? '桥没在跑' : e.message }));
+      req.on('timeout', () => { try { req.destroy(); } catch (e) {} resolve({ ok: false, error: '桥超时' }); });
+      if (payload) req.write(payload);
+      req.end();
+    });
+  }
+
+  // 缓 8 秒：菜单点一次只查一次，别每次打开都打三个请求
+  async function refreshBridge(force) {
+    if (!force && Date.now() - bridgeState.at < 8000) return bridgeState;
+    const health = await bridgeReq('GET', '/health');
+    const ok = !!(health && health.ok !== false && (health.port || health.peek || health.petSessionId));
+    const mood = ok ? await bridgeReq('GET', '/mood') : null;
+    bridgeState = { at: Date.now(), ok, health, mood, error: ok ? '' : (health && health.error) || '桥没在跑' };
+    return bridgeState;
+  }
+
   const taps = [];
   ipcMain.on('stage:tap', (_e, payload) => {
     const r = book.record(payload || {});
@@ -258,7 +307,8 @@ app.whenReady().then(async () => {
   // 页面每次载入（含改帧率/摆动后的重载）都要重新把「回复钮开没开」「音量多大」告诉它
   const pushReplyConfig = () => push({ type: 'reply-set', on: cfg.replyBtn !== false, always: !!cfg.replyAlways });
   const pushVolume = () => push({ type: 'volume', value: Number(cfg.voiceVolume) });
-  win.webContents.on('did-finish-load', () => { pushReplyConfig(); pushVolume(); });
+  const pushSmart = () => push({ type: 'smart', value: cfg.smartIgnore !== false });
+  win.webContents.on('did-finish-load', () => { pushReplyConfig(); pushVolume(); pushSmart(); });
 
   // ---- 控制口 ---------------------------------------------------------------
   // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
@@ -568,7 +618,9 @@ app.whenReady().then(async () => {
       return { opened: true };
     },
     // 菜单结构自检：不做任何事，只把当前菜单拍平成文字，方便远程确认项和勾选状态
-    '/menu': () => {
+    '/menu': async () => {
+      // 先问一次桥，否则桥那几项的勾选状态会是空的（菜单自己弹之前也会问）
+      try { await refreshBridge(); } catch (e) {}
       const flat = [];
       const walk = (items, depth) => {
         for (const it of items) {
@@ -631,6 +683,57 @@ app.whenReady().then(async () => {
       if (!plan) throw new Error('缺 plan');
       return runPlan(plan);
     },
+    // 复原服装：换装是状态不是动作，穿上就下不来，得有个按钮让她换回来
+    '/outfit/reset': () => {
+      push({ type: 'outfit-reset' });
+      return { pushed: true };
+    },
+    // 智能穿透开关（关掉 = 整块窗口都吃鼠标，连透明处也吃）
+    '/smart': (q) => {
+      if (q.get('on') !== null) applyConfig({ smartIgnore: q.get('on') !== '0' && q.get('on') !== 'false' });
+      return { smartIgnore: cfg.smartIgnore !== false };
+    },
+    // 桥的状态快照：菜单、面板、命令行都读这一份，别各自打请求
+    '/bridge': async () => {
+      const st = await refreshBridge(true);
+      return {
+        ok: st.ok,
+        error: st.error || '',
+        base: bridgeBase(),
+        peek: st.health ? st.health.peek : null,
+        urge: st.mood ? st.mood.urge : null,
+        moodSummary: st.mood && st.mood.summary ? st.mood.summary : null,
+      };
+    },
+    // 窥屏开关 / 档位 / 立刻瞄一眼：转发给桥，舞台不自己存
+    '/peek': async (q) => {
+      const body = {};
+      if (q.get('on') !== null) body.on = q.get('on') !== '0' && q.get('on') !== 'false';
+      if (q.get('persona') !== null) body.persona = q.get('persona');
+      if (q.get('now') !== null) body.now = q.get('now') !== '0';
+      if (!Object.keys(body).length) {
+        const st = await refreshBridge(true);
+        return { ok: st.ok, peek: st.health ? st.health.peek : null, error: st.error || '' };
+      }
+      const r = await bridgeReq('POST', '/peek', body, 60000);
+      bridgeState.at = 0;
+      return { bridge: r };
+    },
+    // 主动开口的浓度档：quiet / normal / clingy / chatty / unbound
+    '/urge': async (q) => {
+      if (q.get('intensity') !== null || (q.body && q.body.intensity)) {
+        const r = await bridgeReq('POST', '/mood', { intensity: q.get('intensity') || (q.body && q.body.intensity) });
+        bridgeState.at = 0;
+        return { bridge: r };
+      }
+      if (q.get('now') !== null) {
+        const r = await bridgeReq('POST', '/mood', { urge: true }, 60000);
+        bridgeState.at = 0;
+        return { bridge: r };
+      }
+      const st = await refreshBridge(true);
+      return { ok: st.ok, urge: st.mood ? st.mood.urge : null, error: st.error || '' };
+    },
   };
 
   // ---- 尺寸 / 托盘 / 右键菜单 / 设置面板 ------------------------------------
@@ -674,6 +777,7 @@ app.whenReady().then(async () => {
     if ('spinTurns' in p) tracker.setSpinTurns(cfg.spinTurns);
     if ('replyBtn' in p || 'replyAlways' in p) pushReplyConfig();
     if ('voiceVolume' in p) pushVolume();
+    if ('smartIgnore' in p) pushSmart();
     let reloaded = false;
     if (('fps' in p || 'sway' in p) && (Number(before.fps) !== Number(cfg.fps) || Number(before.sway) !== Number(cfg.sway))) {
       loadStage();
@@ -714,6 +818,13 @@ app.whenReady().then(async () => {
   const SPIN_CHOICES = [2, 3, 4, 6, 8];
   const VOL_CHOICES = [0.2, 0.4, 0.6, 0.8, 1];
 
+  const URGE_LABEL = { quiet: '安静', normal: '正常', clingy: '黏人', chatty: '话痨', unbound: '不拦着' };
+  function urgeLabel(urge) {
+    if (!urge) return '未知';
+    if (urge.enabled === false) return '关着';
+    return URGE_LABEL[urge.intensity] || urge.intensity || '正常';
+  }
+
   function menuTemplate() {
     const now = Cfg.load();
     const fps = Number(now.fps);
@@ -721,17 +832,56 @@ app.whenReady().then(async () => {
     const spin = Number(now.spinTurns);
     const vol = Number.isFinite(Number(now.voiceVolume)) ? Number(now.voiceVolume) : 0.6;
     const [curW, curH] = win && !win.isDestroyed() ? win.getSize() : [0, 0];
+    // 桥没在跑的时候，窥屏/主动开口这些项灰掉并写清原因——
+    // 这套东西是给别人下载的，不能让人点了没反应还不知道为什么。
+    const bs = bridgeState;
+    const live = !!bs.ok;
+    const peek = bs.health && bs.health.peek;
+    const urgeCfg = bs.mood && bs.mood.urge;
+    const personas = (peek && Array.isArray(peek.personas) ? peek.personas : []).map((p) => ({
+      key: p.key, label: p.label, note: p.note,
+    }));
+    const urgeLevels = [
+      ['quiet', '安静（一天四五句）'],
+      ['normal', '正常'],
+      ['clingy', '黏人'],
+      ['chatty', '话痨'],
+      ['unbound', '不拦着（不限句数）'],
+    ];
+    const talkItems = [
+      { label: '阶段气泡（会话进度）', type: 'checkbox', checked: now.tickBubble !== false, click: (it) => applyConfig({ tickBubble: it.checked }) },
+      { label: '回复钮（说完话冒出来）', type: 'checkbox', checked: now.replyBtn !== false, click: (it) => applyConfig({ replyBtn: it.checked }) },
+      { label: '回复钮常驻', type: 'checkbox', checked: now.replyAlways === true, click: (it) => applyConfig({ replyAlways: it.checked }) },
+      { type: 'separator' },
+      { label: '窥屏（隔一阵自己瞄屏幕再搭话）' + (live ? '' : ' · 桥没在跑'), enabled: live, submenu: live ? [
+        { label: peek && peek.on ? '关掉窥屏' : '打开窥屏', click: () => bridgeReq('POST', '/peek', { on: !(peek && peek.on) }).then(() => { bridgeState.at = 0; }) },
+        { type: 'separator' },
+        ...personas.map((p) => ({
+          label: `${p.label}（${p.note}）`, type: 'radio', checked: peek && peek.persona === p.key,
+          click: () => bridgeReq('POST', '/peek', { persona: p.key }).then(() => { bridgeState.at = 0; }),
+        })),
+        { type: 'separator' },
+        { label: '现在瞄一眼', click: () => bridgeReq('POST', '/peek', { now: true }, 60000).then(() => { bridgeState.at = 0; }) },
+      ] : [{ label: '桥没在跑，这个功能得装 dsh-pet-bridge', enabled: false }] },
+      { label: `主动开口 · ${urgeLabel(urgeCfg)}` + (live ? '' : ' · 桥没在跑'), enabled: live, submenu: live ? [
+        ...urgeLevels.map(([k, label]) => ({
+          label, type: 'radio', checked: !!(urgeCfg && urgeCfg.intensity === k),
+          click: () => bridgeReq('POST', '/mood', { intensity: k }).then(() => { bridgeState.at = 0; }),
+        })),
+        { type: 'separator' },
+        { label: '现在让她说一句', enabled: !!(urgeCfg && urgeCfg.enabled), click: () => bridgeReq('POST', '/mood', { urge: true }, 60000).then(() => { bridgeState.at = 0; }) },
+      ] : [{ label: '桥没在跑，这个功能得装 dsh-pet-bridge', enabled: false }] },
+    ];
     return [
       { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return; win.isVisible() ? win.hide() : win.show(); } },
       { type: 'separator' },
       { label: '互动', submenu: [
         { label: '分区互动（点她按部位反应）', type: 'checkbox', checked: now.interactive !== false, click: (it) => applyConfig({ interactive: it.checked }) },
         { label: '指针追踪（视线和身体跟着鼠标）', type: 'checkbox', checked: now.cursorTrack !== false, click: (it) => applyConfig({ cursorTrack: it.checked }) },
-        { type: 'separator' },
-        { label: '阶段气泡（会话进度）', type: 'checkbox', checked: now.tickBubble !== false, click: (it) => applyConfig({ tickBubble: it.checked }) },
-        { label: '回复钮（说完话冒出来）', type: 'checkbox', checked: now.replyBtn !== false, click: (it) => applyConfig({ replyBtn: it.checked }) },
-        { label: '回复钮常驻', type: 'checkbox', checked: now.replyAlways === true, click: (it) => applyConfig({ replyAlways: it.checked }) },
+        { label: '点触叫醒 DSH 会话', type: 'checkbox', checked: now.bridge !== false, click: (it) => applyConfig({ bridge: it.checked }) },
+        { label: '智能穿透（只在角色身上吃鼠标）', type: 'checkbox', checked: now.smartIgnore !== false, click: (it) => applyConfig({ smartIgnore: it.checked }) },
       ] },
+      { label: '说话', submenu: talkItems },
       { label: '外观', submenu: [
         { label: '尺寸', submenu: [
           { label: '小（420 × 740）', click: () => applySize(420, 740) },
@@ -750,6 +900,7 @@ app.whenReady().then(async () => {
           { label: '滑杆微调…（设置面板）', click: () => openPanel() },
         ] },
       ] },
+      { label: '复原服装（衣服回默认档）', click: () => push({ type: 'outfit-reset' }) },
       { label: '舞台', submenu: [
         { label: `帧率 · ${fps ? fps + ' fps' : '不限'}`, submenu: FPS_CHOICES.map((v) => ({
           label: v ? v + ' fps' : '不限', type: 'radio', checked: fps === v, click: () => applyConfig({ fps: v }),
@@ -763,13 +914,17 @@ app.whenReady().then(async () => {
         { type: 'separator' },
         { label: '重新载入舞台', click: () => loadStage() },
       ] },
-      { label: '设置…（尺寸 / 帧率 / 摆动）', click: () => openPanel() },
+      { label: '设置…（尺寸 / 帧率 / 摆动 / 音量）', click: () => openPanel() },
       { type: 'separator' },
       { label: '退出', click: () => app.quit() },
     ];
   }
 
-  function popupMenu() {
+  // 弹菜单前先问一次桥：窥屏/主动开口的勾选状态得是当下的，不能是十分钟前的缓存。
+  // 桥没装或没跑也很快——连接被拒是毫秒级，不会让菜单卡住。
+  async function popupMenu() {
+    if (!win || win.isDestroyed()) return;
+    try { await refreshBridge(); } catch (e) {}
     if (!win || win.isDestroyed()) return;
     Menu.buildFromTemplate(menuTemplate()).popup({ window: win });
   }

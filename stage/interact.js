@@ -45,6 +45,7 @@
     let ignored = null;
     let dragging = false;
     let interactive = true;
+    let smart = true;
     let profile = null;
     let lastHit = { x: -9999, y: -9999, at: 0, over: false };
 
@@ -95,12 +96,16 @@
       if (!interactive) { sendIgnore(true); return; }
       if (dragging) { sendIgnore(false); return; }
       if (forceEat) { sendIgnore(false); return; }
+      // 关掉智能穿透 = 整块窗口都吃鼠标（连透明处也吃）。
+      // 给「就想让她挡在那儿、别点穿到底下」的人留的开关。
+      if (!smart) { sendIgnore(false); return; }
       sendIgnore(!over);
     }
 
     window.addEventListener('mousemove', (e) => {
       if (dragging) { sendIgnore(false); return; }
       if (forceEat) { sendIgnore(false); return; }
+      if (!smart) { applyCursor(false); return; }
       const now = performance.now();
       const same = Math.abs(e.clientX - lastHit.x) < 3 && Math.abs(e.clientY - lastHit.y) < 3;
       if (same && now - lastHit.at < 120) { applyCursor(lastHit.over); return; }
@@ -319,6 +324,16 @@
         document.documentElement.style.cursor = 'default';
         applyCursor(false);
       },
+      // 智能穿透开关：false = 整块窗口都吃鼠标（透明处也吃），点不到底下
+      setSmart(on) {
+        smart = on !== false;
+        overNow = null;
+        lastHit = { x: -9999, y: -9999, at: 0, over: false };
+        if (!smart) { document.documentElement.style.cursor = 'default'; sendIgnore(false); }
+        else applyCursor(false);
+        return smart;
+      },
+      get smart() { return smart; },
       alphaAt,
       headAnchor,
       reportHead,
