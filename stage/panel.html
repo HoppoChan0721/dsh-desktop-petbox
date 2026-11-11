@@ -14,8 +14,15 @@
       padding: 14px 16px 16px;
       user-select: none;
     }
-    h1 { font-size: 14px; font-weight: 600; letter-spacing: .5px; color: #9fd8f5; display: flex; justify-content: space-between; align-items: center; }
-    #x { width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: #7fa9bd; font-size: 15px; cursor: pointer; }
+    /* 标题栏就是拖动条：无边框窗口靠 -webkit-app-region 让系统接管拖拽，
+       比自己算 mousemove 稳（不会一抖一抖）。里面的按钮必须标回 no-drag，不然点不着。 */
+    h1 {
+      font-size: 14px; font-weight: 600; letter-spacing: .5px; color: #9fd8f5;
+      display: flex; justify-content: space-between; align-items: center;
+      margin: -14px -16px 0; padding: 14px 16px 8px;
+      -webkit-app-region: drag; cursor: move;
+    }
+    #x { width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: #7fa9bd; font-size: 15px; cursor: pointer; -webkit-app-region: no-drag; }
     #x:hover { background: rgba(120, 190, 235, .14); color: #d7ecf7; }
     section { margin-top: 14px; }
     h2 { font-size: 12px; font-weight: 600; color: #6fa8c4; letter-spacing: .8px; margin-bottom: 8px; }

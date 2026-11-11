@@ -56,6 +56,33 @@ function loadBounds() {
   return null;
 }
 
+// 设置面板的位置单独记：她身上那个舞台窗有自己的一份，混一起会互相拽
+function panelPosPath() { return path.join(app.getPath('userData'), 'panel-window.json'); }
+function loadPanelPos() {
+  try {
+    const b = JSON.parse(fs.readFileSync(panelPosPath(), 'utf8'));
+    if (b && Number.isFinite(b.x) && Number.isFinite(b.y)) return { x: b.x, y: b.y };
+  } catch (e) {}
+  return null;
+}
+function savePanelPos(p) {
+  try {
+    fs.mkdirSync(path.dirname(panelPosPath()), { recursive: true });
+    fs.writeFileSync(panelPosPath(), JSON.stringify({ x: Math.round(p.x), y: Math.round(p.y) }) + '\n');
+  } catch (e) {}
+}
+// 存的位置可能来自另一块已拔掉的屏：至少留 80px 落在某块屏里，否则当没存过。
+// 不这么判的话，拔了副屏再开面板 = 面板开在看不见的地方，人还以为它没打开。
+function posOnScreen(pos, w, h) {
+  if (!pos) return false;
+  return screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    const ox = Math.min(a.x + a.width, pos.x + w) - Math.max(a.x, pos.x);
+    const oy = Math.min(a.y + a.height, pos.y + h) - Math.max(a.y, pos.y);
+    return ox >= 80 && oy >= 80;
+  });
+}
+
 // 语音是可选集成：给了 TTS 桥脚本才有声音，没给就纯文字气泡，绝不因为缺 TTS 报错。
 // 桥的协议（沿用外壳那份）：环境变量 SAY_TEXT 传文本，stdout 打一行 JSON {job_id, duration}，
 // wav 落在 VOICE_DIR 里叫做 <job_id>.wav。
@@ -646,8 +673,29 @@ app.whenReady().then(async () => {
       return { bounds: win.getBounds() };
     },
     // 托盘/面板改开关以后，命令行也读得到当前配置
-    '/panel': () => {
+    // 面板：不带参数就开/抬到前面；?reset=1 回正中；?where=1 报当前窗口坐标（调试用）；
+    // ?at=120,300 摆过去（脚本/自检用，跟手拖一样会落盘）
+    '/panel': (q) => {
+      if (q.get('close') !== null) {
+        if (panel && !panel.isDestroyed()) panel.close();
+        return { closed: true };
+      }
       openPanel();
+      if (q.get('reset') !== null) return { centered: centerPanel() };
+      if (q.get('at') !== null) {
+        const [x, y] = String(q.get('at')).split(',').map((n) => Number(n));
+        if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('at 要写成 x,y');
+        if (panel && !panel.isDestroyed()) { panel.setPosition(Math.round(x), Math.round(y)); savePanelPos({ x, y }); }
+      }
+      if (q.get('where') !== null) {
+        const b = panel && !panel.isDestroyed() ? panel.getBounds() : null;
+        return {
+          opened: true,
+          bounds: b,
+          saved: loadPanelPos(),
+          displays: screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, workArea: d.workArea, scale: d.scaleFactor })),
+        };
+      }
       return { opened: true };
     },
     // 菜单结构自检：不做任何事，只把当前菜单拍平成文字，方便远程确认项和勾选状态
@@ -822,16 +870,36 @@ app.whenReady().then(async () => {
     return { cfg, reloaded };
   }
 
+  const PANEL_W = 400;
+  const PANEL_H = 764;
+
+  // 面板回到屏幕正中（拖丢了、换屏了、或者就是看它碍事）
+  function centerPanel() {
+    if (!panel || panel.isDestroyed()) return null;
+    const [w, h] = panel.getSize();
+    const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    const x = d.x + Math.round((d.width - w) / 2);
+    const y = d.y + Math.round((d.height - h) / 2);
+    panel.setPosition(x, y);
+    savePanelPos({ x, y });
+    return panel.getBounds();
+  }
+
   function openPanel() {
     if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
-    const area = screen.getPrimaryDisplay().workArea;
-    const PW = 400;
-    const PH = 764;
+    // 头一次开（或上次那块屏已经不在了）就居中——居中在哪块屏？跟着鼠标那块，
+    // 主副屏都接的人不会希望面板跑到另一头去。
+    const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    const PW = PANEL_W;
+    const PH = PANEL_H;
+    const saved = loadPanelPos();
+    const useSaved = posOnScreen(saved, PW, PH);
     panel = new BrowserWindow({
       width: PW,
       height: PH,
-      x: area.x + Math.round((area.width - PW) / 2),
-      y: area.y + Math.round((area.height - PH) / 2),
+      // 上次拖到哪儿就开在哪儿；第一次开（或那块屏没了）才居中
+      x: useSaved ? saved.x : area.x + Math.round((area.width - PW) / 2),
+      y: useSaved ? saved.y : area.y + Math.round((area.height - PH) / 2),
       frame: false,
       transparent: true,
       resizable: false,
@@ -843,10 +911,24 @@ app.whenReady().then(async () => {
       webPreferences: { preload: path.join(STAGE_DIR, 'panel-preload.js'), contextIsolation: true, sandbox: false },
     });
     panel.setAlwaysOnTop(true, 'screen-saver');
+    // 兜底居中的时候顺手把位置落盘：不然文件里一直留着那个够不着的坐标
+    if (!useSaved) { const b = panel.getBounds(); savePanelPos({ x: b.x, y: b.y }); }
     panel.loadFile(path.join(STAGE_DIR, 'panel.html')).catch(() => {});
     panel.once('ready-to-show', () => { if (panel && !panel.isDestroyed()) panel.show(); });
-    panel.on('closed', () => { panel = null; });
-    return panel;
+    // 拖动会连发一串 moved，攒 400ms 再落盘，别每帧写一次盘。
+    // 定时器里要用「这个窗口」而不是全局 panel：旧窗口的定时器要是晚到一步，
+    // 全局 panel 已经指向新窗口了，就会把新窗口的坐标当成旧窗口的存下去。
+    const self = panel;
+    let saveTimer = 0;
+    self.on('moved', () => {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveTimer = 0;
+        if (self && !self.isDestroyed()) { const b = self.getBounds(); savePanelPos({ x: b.x, y: b.y }); }
+      }, 400);
+    });
+    self.on('closed', () => { if (saveTimer) clearTimeout(saveTimer); if (panel === self || !panel || panel.isDestroyed()) panel = null; });
+    return self;
   }
 
   const FPS_CHOICES = [30, 60, 90, 0];
@@ -967,7 +1049,11 @@ app.whenReady().then(async () => {
         { type: 'separator' },
         { label: '重新载入舞台', click: () => loadStage() },
       ] },
-      { label: '设置…（尺寸 / 帧率 / 摆动 / 音量）', click: () => openPanel() },
+      { label: '设置面板', submenu: [
+        { label: panel && !panel.isDestroyed() ? '抬到前面' : '打开设置…（尺寸 / 帧率 / 摆动 / 音量）', click: () => openPanel() },
+        { label: '回到屏幕正中', enabled: !!(panel && !panel.isDestroyed()), click: () => centerPanel() },
+        { label: '标题栏可以拖着走', enabled: false },
+      ] },
       { type: 'separator' },
       { label: '退出', click: () => app.quit() },
     ];

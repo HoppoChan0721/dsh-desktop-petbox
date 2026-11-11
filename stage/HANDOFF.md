@@ -168,6 +168,17 @@ node stage\cli.mjs config '{"cursorTrack":false}'   # 改配置，就地生效
 node stage\cli.mjs menu                        # 把菜单结构拍平成文字，确认勾选状态
 ```
 
+设置面板能拖着走（2026-11-11 晚，主人点名要）：
+
+- 拖标题栏。实现是 CSS `-webkit-app-region: drag`，交给系统做拖拽，比自己算 mousemove 稳、不抖；
+  标题里的关闭按钮标了 `no-drag`，不然点不着
+- 位置记在 `%APPDATA%\whale-pet-shell\panel-window.json`，跟舞台窗那份（`stage-window.json`）分开存，互不拽
+- 存下来的坐标如果落在所有屏幕之外（拔了副屏、换分辨率），会退回「跟着鼠标那块屏居中」，并把新坐标写回文件
+- 找不回来的时候：菜单 ▸ 设置面板 ▸ 回到屏幕正中，或者 `curl 127.0.0.1:61945/panel?reset=1`
+- 调试口：`/panel?where=1` 回当前 bounds + 各屏 workArea；`/panel?at=120,300` 摆过去；`/panel?close=1` 关掉
+- 踩过的坑：`moved` 事件攒 400ms 再落盘的定时器里**别用全局 `panel`**——旧窗口的定时器晚到一步时，
+  全局变量已经指向新窗口，会把新窗口的坐标当成旧窗口的存下去。要用创建时抓住的那个窗口引用
+
 鼠标那边：压在她身上吃鼠标、透明处穿透、**Alt + 左键拖动**、**Ctrl + 滚轮**缩放、悬停换蓝色软点光标、点身上不同部位有反应。
 
 页面里的调试钩子：`__lockPointer`（冻结外部指针）、`__freeze`（冻结驱动）、`__stageInspect([id])`（读参数）、`__petEngine.state()`、`__stageZones()`、`__stageVoice.playing`。
