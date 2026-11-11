@@ -138,9 +138,14 @@
     }
 
     // 只扫一次不够：窗口尺寸、缩放、换装都会让剪影变。标定失败就退化成「整块都算身上」。
+    // 同一次拖动会连着调好几次，必须**只留一个定时器**：以前每次都新起一个，拖动时
+    // 十几个扫描排队执行（每个都要同步 readPixels 整张画布），看起来就是卡 + 闪。
+    let scanTimer = null;
     function resetProfile(delay) {
       profile = null;
-      setTimeout(() => {
+      clearTimeout(scanTimer);
+      scanTimer = setTimeout(() => {
+        scanTimer = null;
         profile = scanProfile();
         reportHead();
       }, delay === undefined ? 600 : delay);

@@ -66,6 +66,9 @@
   // 名字取自模型自己的参数表。哪些真的存在，构造时逐个问 core，不存在的直接记进 missing。
   const SEMANTIC = [
     'AngleX', 'AngleY', 'AngleZ', 'PositionX', 'PositionY', 'PositionZ', 'LeanInput',
+    // 身体角：模型的裙摆/蕾丝/缎带物理（PhysicsSetting122~124 等）就是吃这三个量的。
+    // 待机摆动只写头角时，头发会动但裙子纹丝不动，看着就没「活的」感。
+    'ParamBodyAngleX', 'ParamBodyAngleY', 'ParamBodyAngleZ',
     'ParamEyeBallX', 'ParamEyeBallY', 'ParamEyeLOpen', 'ParamEyeROpen',
     'ParamMouthForm', 'ParamMouthOpenY', 'JawOpen', 'ParamBreath',
     'EyeSmile', 'MouthSmile_L', 'MouthSmile_R',
@@ -92,9 +95,12 @@
     swayZ: 0.6,
     swayPosX: 0.5,
     swayPosZ: 0.35,
+    // 身体角摆动：裙子/蕾丝/缎带的物理吃这三个量，不给它，只有头发在动
+    swayBodyX: 1.5,
+    swayBodyZ: 1.1,
     // 待机摆动放大倍数：头发/裙摆的物理全靠这点输入在动，摆太小整只看着「死」。
     // 1.0 = 最初那套很小的摆手感；1.6 = 现在默认（比鲸语那套节律摇摆 8/7 还收敛）。
-    // 想现场比一比：启动加 --sway=1 或 --sway=2.4。
+    // 想现场比一比：启动加 --sway=1 或 --sway=2.4，或者托盘「舞台 ▸ 待机摆动」。
     swayScale: 1.6,
     tauIdle: 0.16,  // 待机归位：慢慢缓过去，不要「啪」地弹回
     tauActing: 0.055, // 演动作 / 跟指针：跟手
@@ -362,6 +368,9 @@
       set('AngleZ', TUNE.swayZ * k * Math.sin(phase * 0.48));
       set('PositionX', TUNE.swayPosX * k * Math.sin(phase * 0.55 - 0.2));
       set('PositionZ', TUNE.swayPosZ * k * Math.sin(phase * 0.48 - 0.25));
+      // 身体角：裙摆、蕾丝、缎带的物理链就是吃它。频率比头慢一点，看起来像重心在挪
+      set('ParamBodyAngleX', TUNE.swayBodyX * k * Math.sin(phase * 0.42 + 0.9));
+      set('ParamBodyAngleZ', TUNE.swayBodyZ * k * Math.sin(phase * 0.36 - 0.4));
       const idle = this.idleMotion;
       if (idle && idle.curves.length) {
         const t = idle.duration > 0 ? phase % idle.duration : 0;
@@ -478,6 +487,7 @@
         missing: this.missing.slice(0, 40),
         idleCurves: this.idleMotion ? this.idleMotion.curves.length : 0,
         writeErrors: this.writeErrors,
+        sway: this.swayScale,
       };
     }
   }

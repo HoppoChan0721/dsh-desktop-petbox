@@ -383,6 +383,12 @@ app.whenReady().then(async () => {
       const z = await win.webContents.executeJavaScript('window.__stageZones ? window.__stageZones() : null');
       return { zones: z };
     },
+    // 读几个参数当前值：排查「某条驱动到底有没有生效」用（比如摆动的身体角）
+    '/params': async (q) => {
+      const ids = (q.get('ids') || 'AngleX,ParamBodyAngleX,ParamBodyAngleZ,ParamAngleX').split(',').map((s) => s.trim()).filter(Boolean);
+      const v = await win.webContents.executeJavaScript('window.__stageInspect ? window.__stageInspect(' + JSON.stringify(ids) + ') : null');
+      return { params: v };
+    },
     '/window': (q) => {
       const b = win.getBounds();
       const [w, h] = drag.clampSize(Number(q.get('w')) || b.width, Number(q.get('h')) || b.height);

@@ -18,11 +18,14 @@
     antialias: AA,
     resolution: RES,
     autoDensity: true,
-    resizeTo: window,
+    // 不用 resizeTo: window：它每收到一次 resize 就重建缓冲区，拖滑杆时一秒能来几十次，
+    // 透明窗上看起来就是疯狂闪。自己按 ~25fps 节流改尺寸，停手再补最后一次。
+    resizeTo: undefined,
     // 自己的页面，穿透判定要读 canvas 的 alpha，开了就不用绕
     preserveDrawingBuffer: true,
   });
   document.getElementById('stage').appendChild(app.view);
+  app.renderer.resize(Math.max(2, window.innerWidth), Math.max(2, window.innerHeight));
   window.__stageApp = app;
 
   // 锁 60 帧：鲸语那边同一个补丁（`pixi.ticker.maxFPS = 60`）不是省性能，是手感——
@@ -190,17 +193,46 @@
     // 帧率：舞台锁 60。看 /state 里的 stats.fps 就知道有没有跑对。
     // 注意 FPS 是「屏幕刷新率」不是「模型每秒更新几次」：模型走 Ticker.shared 的节流，
     // 实际更新频率看 /state 里 frames 的增量（锁 60 时约 50~60 次/秒）。
-    window.__stageStats = () => ({ rawRafFps: Math.round(PIXI.Ticker.shared.FPS), maxFps: PIXI.Ticker.shared.maxFPS });
+    window.__stageStats = () => ({ rawRafFps: Math.round(PIXI.Ticker.shared.FPS), maxFps: PIXI.Ticker.shared.maxFPS, size: { w: app.screen.width, h: app.screen.height } });
     document.title = '鲸鱼舞台 · ' + (groups.motions || []).join('/');
 
-    window.addEventListener('resize', () => { try { fit(model); } catch (e) {} });
-    // PIXI 的 resizeTo: window 是它自己接的，window 的 resize 事件比它早一步。
-    // 挂到 renderer 的 resize 上，等它量完再算，才不会用到旧尺寸。
-    if (app.renderer && typeof app.renderer.on === 'function') {
-      app.renderer.on('resize', () => {
-        try { fit(model); } catch (e) {}
-        try { if (window.__stageInteraction) window.__stageInteraction.resetProfile(120); } catch (e) {}
-      });
-    }
+    // ---- 窗口尺寸：节流 + 停手补最后一帧 ------------------------------------
+    // 拖尺寸滑杆时 resize 事件一秒来几十次。每来一次就 resize 缓冲区 + 重算 fit + 重扫剪影，
+    // 透明窗上看起来就是闪；而且重扫是同步读整张画布（几十万像素），越拖越卡。
+    // 所以：尺寸按 ~25fps 跟上，剪影只在停手 200ms 后扫一次，头的位置也那时候才报。
+    let resizeDue = 0;
+    let resizeTimer = null;
+    let lastW = app.screen.width;
+    let lastH = app.screen.height;
+    const applyResize = () => {
+      const W = Math.max(2, window.innerWidth);
+      const H = Math.max(2, window.innerHeight);
+      if (W === lastW && H === lastH) return false;
+      lastW = W;
+      lastH = H;
+      try { app.renderer.resize(W, H); } catch (e) { return false; }
+      try { fit(model); } catch (e) {}
+      return true;
+    };
+    window.addEventListener('resize', () => {
+      const now = performance.now();
+      // 距离上一帧太近就等等，最后一次由下面的定时器兜住（不然松手那一刻会停在中间尺寸）
+      if (now - resizeDue < 40) {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          resizeDue = performance.now();
+          if (applyResize()) {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => { try { interaction.resetProfile(60); } catch (e) {} }, 200);
+          }
+        }, 40);
+        return;
+      }
+      resizeDue = now;
+      const changed = applyResize();
+      clearTimeout(resizeTimer);
+      // 停手之后再重标剪影（同步扫像素，拖动期间绝不做）
+      resizeTimer = setTimeout(() => { try { interaction.resetProfile(60); } catch (e) {} }, changed ? 200 : 60);
+    });
   })().catch((e) => err('模型加载失败：' + ((e && e.message) || e)));
 })();
