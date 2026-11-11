@@ -90,14 +90,14 @@
     breathAmp: 0.24,
     breathBase: 0.42,
     breathHz: 1.45,
-    swayX: 1.15,
-    swayY: 0.7,
-    swayZ: 0.6,
-    swayPosX: 0.5,
-    swayPosZ: 0.35,
+    swayX: 3.2,
+    swayY: 1.6,
+    swayZ: 2.2,
+    swayPosX: 1.2,
+    swayPosZ: 0.8,
     // 身体角摆动：裙子/蕾丝/缎带的物理吃这三个量，不给它，只有头发在动
-    swayBodyX: 1.5,
-    swayBodyZ: 1.1,
+    swayBodyX: 4.0,
+    swayBodyZ: 3.0,
     // 待机摆动放大倍数：头发/裙摆的物理全靠这点输入在动，摆太小整只看着「死」。
     // 1.0 = 最初那套很小的摆手感；1.6 = 现在默认（比鲸语那套节律摇摆 8/7 还收敛）。
     // 想现场比一比：启动加 --sway=1 或 --sway=2.4，或者托盘「舞台 ▸ 待机摆动」。
@@ -363,14 +363,16 @@
       const phase = this.clock;
       const k = this.swayScale;
       set('ParamBreath', TUNE.breathBase + TUNE.breathAmp * Math.sin(phase * TUNE.breathHz));
-      set('AngleX', TUNE.swayX * k * Math.sin(phase * 0.55));
-      set('AngleY', TUNE.swayY * k * Math.sin(phase * 0.72 + 0.4));
-      set('AngleZ', TUNE.swayZ * k * Math.sin(phase * 0.48));
-      set('PositionX', TUNE.swayPosX * k * Math.sin(phase * 0.55 - 0.2));
-      set('PositionZ', TUNE.swayPosZ * k * Math.sin(phase * 0.48 - 0.25));
-      // 身体角：裙摆、蕾丝、缎带的物理链就是吃它。频率比头慢一点，看起来像重心在挪
-      set('ParamBodyAngleX', TUNE.swayBodyX * k * Math.sin(phase * 0.42 + 0.9));
-      set('ParamBodyAngleZ', TUNE.swayBodyZ * k * Math.sin(phase * 0.36 - 0.4));
+      // 摆动频率都提到 4~7 秒一个来回：以前是 11~17 秒一轮，慢到看不出「在晃」，
+      // 再加上幅度只有 1~3 度，主人试了两次都说「没生效」。
+      set('AngleX', TUNE.swayX * k * Math.sin(phase * 1.1));
+      set('AngleY', TUNE.swayY * k * Math.sin(phase * 1.3 + 0.4));
+      set('AngleZ', TUNE.swayZ * k * Math.sin(phase * 0.9));
+      set('PositionX', TUNE.swayPosX * k * Math.sin(phase * 1.1 - 0.2));
+      set('PositionZ', TUNE.swayPosZ * k * Math.sin(phase * 0.9 - 0.25));
+      // 身体角：裙摆、蕾丝、缎带的物理链就是吃它。频率比头略慢，看起来像重心在挪
+      set('ParamBodyAngleX', TUNE.swayBodyX * k * Math.sin(phase * 1.05 + 0.9));
+      set('ParamBodyAngleZ', TUNE.swayBodyZ * k * Math.sin(phase * 0.85 - 0.4));
       const idle = this.idleMotion;
       if (idle && idle.curves.length) {
         const t = idle.duration > 0 ? phase % idle.duration : 0;
