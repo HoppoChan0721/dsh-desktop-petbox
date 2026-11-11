@@ -196,8 +196,14 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
   标题里的关闭按钮标了 `no-drag`，不然点不着
 - 位置记在 `%APPDATA%\whale-pet-shell\panel-window.json`，跟舞台窗那份（`stage-window.json`）分开存，互不拽
 - 存下来的坐标如果落在所有屏幕之外（拔了副屏、换分辨率），会退回「跟着鼠标那块屏居中」，并把新坐标写回文件
-- 找不回来的时候：菜单 ▸ 设置面板 ▸ 回到屏幕正中，或者 `curl 127.0.0.1:61945/panel?reset=1`
-- 调试口：`/panel?where=1` 回当前 bounds + 各屏 workArea；`/panel?at=120,300` 摆过去；`/panel?close=1` 关掉
+- 找不回来的时候：菜单 ▸ 打开设置面板，或者 `curl 127.0.0.1:61945/panel?reset=1`
+- **点面板外面自动收起**（2026-11-11 晚，主人要的）：靠 `panel.on('blur')` —— 失焦就 `close()`，
+  也就是点桌面、点别的窗口、点托盘菜单都会收。开关在面板「点面板外面自动收起」（`panelAutoClose`，默认开）
+- 踩过的坑：blur 和托盘左键的顺序是「先 blur 关掉、后 click 到」，
+  不记一笔就会当成「没开过」又开一个新的，看着像点了关不掉。现在记 `panelBlurClosedAt`，
+  600ms 内的 toggle 直接当「关闭」处理
+- 调试口：`/panel?where=1` 回当前 bounds + 各屏 workArea；`/panel?at=120,300` 摆过去；`/panel?close=1` 关掉；
+  `/panel?toggle=1` 跟托盘左键同一个函数；`/status` 里的 `panel` 字段能看 `open/visible/focused/autoClose`
 - 踩过的坑：`moved` 事件攒 400ms 再落盘的定时器里**别用全局 `panel`**——旧窗口的定时器晚到一步时，
   全局变量已经指向新窗口，会把新窗口的坐标当成旧窗口的存下去。要用创建时抓住的那个窗口引用
 
@@ -294,7 +300,8 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 ## 9. 变更记录
 
 ```
-<下一次提交>  菜单瘦身 + 托盘左键改开关面板（配置项一律回面板，音量归到「语音」下）
+<下一次提交>  设置面板点外面自动收起（blur 关闭 + 托盘左键的先后顺序防抖）
+d7e30bc  菜单瘦身 + 托盘左键改开关面板（配置项一律回面板，音量归到「语音」下）
 f90cde5  台词里的舞台说明方括号不再显示/念出来（stage\text.js + 桥 cues.js，裸动词也认）
 fe64c4d  设置面板可以拖了：标题栏拖动、位置记住、拖丢了能一键回正中
 8ca8db9  设置面板加长到 764，语音那节塞进去也不挤
