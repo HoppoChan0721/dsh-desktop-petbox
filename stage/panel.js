@@ -81,6 +81,7 @@ function paintKeepAlive(ka) {
   $('replyBtn').checked = cfg.replyBtn !== false;
   $('replyAlways').checked = cfg.replyAlways === true;
   $('panelAutoClose').checked = cfg.panelAutoClose === true;
+  $('sessionWatch').checked = cfg.sessionWatch !== false;
   $('ttsKeepAlive').checked = cfg.ttsKeepAlive !== false;
   $('ttsKeepMinutes').value = String(Math.max(1, Number(cfg.ttsKeepMinutes) || 5));
   if (s.voice === false) {
@@ -124,6 +125,7 @@ $('tickBubble').addEventListener('change', () => save({ tickBubble: $('tickBubbl
 $('replyBtn').addEventListener('change', () => save({ replyBtn: $('replyBtn').checked }, '回复钮已切换'));
 $('replyAlways').addEventListener('change', () => save({ replyAlways: $('replyAlways').checked }, '回复钮常驻已切换'));
 $('panelAutoClose').addEventListener('change', () => save({ panelAutoClose: $('panelAutoClose').checked }, $('panelAutoClose').checked ? '点外面自动收起' : '面板会一直开着'));
+$('sessionWatch').addEventListener('change', () => save({ sessionWatch: $('sessionWatch').checked }, $('sessionWatch').checked ? '会话联动已开' : '会话联动已关'));
 $('ttsKeepAlive').addEventListener('change', () => save({ ttsKeepAlive: $('ttsKeepAlive').checked }, '语音保活已切换'));
 $('ttsKeepMinutes').addEventListener('change', () => save({ ttsKeepMinutes: Number($('ttsKeepMinutes').value) }, '探活间隔已改'));
 

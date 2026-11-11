@@ -504,6 +504,64 @@ app.whenReady().then(async () => {
     return { applied: r.applied, skipped: r.skipped, title: r.title };
   }
 
+  // ---- 会话联动：所有 DSH 会话的进度都往她身上冒小泡 -------------------------
+  // 以前是外壳在跑 integ\dsh-watch.mjs：它读 DSH 的会话事件流，把「在生成 / 跑工具 / 读文件 /
+  // 子代理在跑 / 报错 / 答完了」翻成人话，再从上半身冒一颗 2~4 秒的小泡。搬到舞台时这条没接，
+  // 于是只剩 DSH 桥自己那条（只盯桌宠会话）。
+  // 现在接回来了：谁的会话在动都能冒泡，不只桌宠自己那个。
+  const WATCHER = path.join(STAGE_DIR, '..', 'integ', 'dsh-watch.mjs');
+  const SESSIONS_DIR = arg('sessions', process.env.WHALE_SESSIONS_DIR || String(cfg.sessionsDir || 'F:\\DaFeiYu\\sessions'));
+  let watcherChild = null;
+  let watcherNote = '';
+
+  function watcherState() {
+    return {
+      enabled: cfg.sessionWatch !== false,
+      running: !!(watcherChild && !watcherChild.killed),
+      pid: watcherChild ? watcherChild.pid : null,
+      sessionsDir: SESSIONS_DIR,
+      note: watcherNote || (cfg.sessionWatch === false ? '关着' : null),
+    };
+  }
+
+  function startWatcher() {
+    if (watcherChild) return watcherState();
+    if (cfg.sessionWatch === false) { watcherNote = '关着'; return watcherState(); }
+    try { if (!fs.existsSync(WATCHER)) { watcherNote = '缺 integ/dsh-watch.mjs'; return watcherState(); } } catch (e) { watcherNote = '看不到 watcher 文件'; return watcherState(); }
+    try { if (!SESSIONS_DIR || !fs.existsSync(SESSIONS_DIR)) { watcherNote = '会话目录找不到：' + SESSIONS_DIR; return watcherState(); } } catch (e) { watcherNote = '会话目录读不了'; return watcherState(); }
+    const ports = listenPorts();
+    try {
+      const child = spawn('node', [WATCHER], {
+        windowsHide: true,
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          DSH_SESSIONS_DIR: SESSIONS_DIR,
+          WHALE_PET_DATA: Cfg.DATA_DIR,
+          // 表情走 /api/execute，气泡走 /tick；这两条老地址就是别名口留着的理由
+          WHALE_PET_STAGE: 'http://127.0.0.1:' + (ports[1] || ports[0]),
+          WHALE_PET_SHELL: 'http://127.0.0.1:' + (ports[2] || ports[0]),
+          WHALE_PET_MOOD: String(cfg.moodJson || Cfg.MOOD_JSON),
+        },
+      });
+      watcherChild = child;
+      watcherNote = '';
+      child.on('exit', () => { watcherChild = null; });
+      child.on('error', (e) => { watcherNote = '起不来：' + ((e && e.message) || e); watcherChild = null; });
+    } catch (e) {
+      watcherNote = '起不来：' + ((e && e.message) || e);
+    }
+    return watcherState();
+  }
+
+  function stopWatcher() {
+    if (!watcherChild) return watcherState();
+    try { spawn('taskkill', ['/PID', String(watcherChild.pid), '/T', '/F'], { windowsHide: true }); } catch (e) {}
+    watcherChild = null;
+    watcherNote = '已停';
+    return watcherState();
+  }
+
   const routes = {
     '/state': async () => {
       const s = await win.webContents.executeJavaScript('window.__petEngine ? window.__petEngine.state() : null');
@@ -606,6 +664,9 @@ app.whenReady().then(async () => {
           throw new Error('没有 emotion 参数，也读不到 mood.json：' + ((e && e.message) || e));
         }
       }
+      // 会话联动的 watcher 会往这里砸英文情绪（happy / shy …），舞台只认七种中文心情。
+      // 认不出来就安静跳过，别抛错——一抛错它每 700ms 撞一次，日志会被刷满。
+      if (!Mood.names().includes(name)) return { pushed: false, skipped: '舞台不认这个心情：' + name, source };
       const p = Mood.plan(name, k === null ? undefined : Number(k));
       push({ type: 'mood', plan: p });
       if (p.expression) push({ type: 'emotion', name: p.expression, ms: p.expressionMs });
@@ -619,6 +680,13 @@ app.whenReady().then(async () => {
       if (q.get('now') !== null) return await keepAlive.tick();
       if (q.get('warm') !== null) return await keepAlive.warm();
       return keepAlive.status();
+    },
+    // 会话联动：所有 DSH 会话在干什么 → 阶段气泡。
+    // 不带参数 = 看状态；?on=1|0 开关（落盘）；?restart=1 重启一次
+    '/watch': (q) => {
+      if (q.get('on') !== null) applyConfig({ sessionWatch: q.get('on') !== '0' && q.get('on') !== 'false' });
+      if (q.get('restart') !== null) { stopWatcher(); return startWatcher(); }
+      return watcherState();
     },
     // 语音音量：0~1，改了立刻生效（走 GainNode，不重载页面）
     '/volume': (q) => {
@@ -745,6 +813,7 @@ app.whenReady().then(async () => {
       volume: Number(cfg.voiceVolume),
       keepalive: keepAlive.status(),
       panel: panelInfo(),
+      watch: watcherState(),
       affinity: book.info(),
       lastTick,
       lastReply,
@@ -770,7 +839,12 @@ app.whenReady().then(async () => {
       if (q.get('text') !== null) return sendReply(q.get('text'));
       return { btn: cfg.replyBtn !== false, always: !!cfg.replyAlways, url: String(replyUrl()) };
     },
-    // 桥在「只有动作没台词」时往这里砸 plan：POST /api/execute {"plan":{...}}
+    // 打断当前动作：会话联动的 watcher 在状态真变了的时候会先打一枪再重投
+    '/api/stop': () => {
+      push({ type: 'stop' });
+      return { stopped: true };
+    },
+  // 桥在「只有动作没台词」时往这里砸 plan：POST /api/execute {"plan":{...}}
     '/api/execute': (q) => {
       let plan = q.body && q.body.plan;
       if (!plan && q.get('plan')) plan = JSON.parse(q.get('plan'));
@@ -873,6 +947,9 @@ app.whenReady().then(async () => {
     if ('voiceVolume' in p) pushVolume();
     if ('ttsKeepAlive' in p) keepAlive.setEnabled(p.ttsKeepAlive !== false);
     if ('ttsKeepMinutes' in p) keepAlive.setIntervalMs(Math.max(1, Number(p.ttsKeepMinutes) || 5) * 60000);
+    if ('sessionWatch' in p) {
+      if (cfg.sessionWatch === false) stopWatcher(); else startWatcher();
+    }
     if ('smartIgnore' in p) pushSmart();
     let reloaded = false;
     if (('fps' in p || 'sway' in p) && (Number(before.fps) !== Number(cfg.fps) || Number(before.sway) !== Number(cfg.sway))) {
@@ -883,7 +960,7 @@ app.whenReady().then(async () => {
   }
 
   const PANEL_W = 400;
-  const PANEL_H = 796;
+  const PANEL_H = 824;
 
   // 面板回到屏幕正中（拖丢了、换屏了、或者就是看它碍事）
   function centerPanel() {
@@ -1192,7 +1269,12 @@ app.whenReady().then(async () => {
   const aliasList = String(arg('alias-ports', process.env.WHALE_STAGE_ALIAS_PORTS || '61942,61943'))
     .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0 && n !== PORT);
   const servers = [listen(PORT, 'control'), ...aliasList.map((p) => listen(p, 'alias'))];
-  app.on('will-quit', () => { for (const s of servers) { try { s.close(); } catch (e) {} } });
+  // 会话联动要等别名口起来再拉：watcher 按老地址（61942/61943）往那儿砸气泡和表情
+  setTimeout(() => { try { startWatcher(); } catch (e) {} }, 1500);
+  app.on('will-quit', () => {
+    try { stopWatcher(); } catch (e) {}
+    for (const s of servers) { try { s.close(); } catch (e) {} }
+  });
 });
 
 app.on('window-all-closed', () => app.quit());

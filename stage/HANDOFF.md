@@ -159,6 +159,21 @@ TTS 保活（2026-11-11 晚，`stage\keepalive.js`，`ttsKeepAlive` 默认开）
   桥没装或没跑就把项灰掉并写明「桥没在跑，这个功能得装 dsh-pet-bridge」，点了没反应还一头雾水是最糟的
 - 桥的开关全部转发给桥自己（`POST /peek`、`POST /mood`），舞台不留副本，避免两边状态打架
 
+会话联动（2026-11-11 晚，主人说「以前所有会话都能让她冒泡」）：
+
+- **搬到舞台时漏了这条**：外壳会 `spawn` `integ\dsh-watch.mjs`，它读 DSH 的会话事件流，把
+  「在生成 / 跑工具 / 读文件 / 写文件 / 跑命令 / 联网 / 子代理在跑 / 卡住 / 报错 / 答完了」翻成人话，
+  从上半身冒一颗 2~4 秒的小泡；顺带按状态换表情。舞台版一直没接，所以只剩 DSH 桥那条（只盯桌宠会话）
+- 现在接回来了：`startWatcher()`（`stage\main.js`），默认开（`sessionWatch`），配置项 `sessionsDir`
+  默认 `F:\DaFeiYu\sessions`。目录不存在就**安静不启用**，不报错——别人的机器上不一定有这套
+- 环境变量照外壳那套：`DSH_SESSIONS_DIR`、`WHALE_PET_DATA`、`WHALE_PET_STAGE`（→61942，`/api/execute` + `/api/stop`）、
+  `WHALE_PET_SHELL`（→61943，`/tick` + `/mood`）
+- 配套补的：`/api/stop`（watcher 状态真变了会先打一枪再重投）、`/mood` 认不出英文情绪时安静跳过
+  （它砸的是 happy / shy 这种，舞台只有七种中文心情，抛错会被 700ms 一轮的日志刷满）
+- 入口：面板「会话联动（任何会话在跑都冒小泡）」、`/watch`（`?on=0/1`、`?restart=1`）、`cli watch [on|off|restart]`
+- 验证：改完自己的会话跑了两条命令，`/status` 的 `lastTick` 直接是「敲一行 Start-Sleep -Sec」，
+  截图里上半身外侧同时挂着两颗泡；`data\watch.log` 里也有 `气泡「…」` 和 `状态 → shell · ＜＞`
+
 托盘左键 = 开关设置面板，右键 = 菜单（2026-11-11 晚主人定的，之前左键也弹菜单，菜单/面板一挂就不走）：
 
 - 托盘左键：面板开着就收起、关着就打开；她藏起来了就先把她叫回来
@@ -306,8 +321,9 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 ## 9. 变更记录
 
 ```
-<下一次提交>  设置面板点外面自动收起（blur 关闭 + 托盘左键的先后顺序防抖）
-d7e30bc  菜单瘦身 + 托盘左键改开关面板（配置项一律回面板，音量归到「语音」下）
+<下一次提交>  会话联动接回舞台：任何 DSH 会话的进度都冒阶段小泡（integ\dsh-watch.mjs + /api/stop + /mood 容错）
+fb0c4a5  托盘右键菜单改走 tray.popUpContextMenu（点外面会自己收）；面板自动收起默认关
+70f2bf1  设置面板点外面自动收起（失焦关闭 + 托盘左键 600ms 防抖）
 f90cde5  台词里的舞台说明方括号不再显示/念出来（stage\text.js + 桥 cues.js，裸动词也认）
 fe64c4d  设置面板可以拖了：标题栏拖动、位置记住、拖丢了能一键回正中
 8ca8db9  设置面板加长到 764，语音那节塞进去也不挤

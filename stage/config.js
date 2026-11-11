@@ -30,6 +30,8 @@ const DEFAULTS = {
   replyBtn: true,        // 回复钮：说完话冒出来一个小钮，点开能直接打字
   replyAlways: false,    // 常驻：钮一直挂在头顶右侧
   panelAutoClose: false, // 设置面板失焦就收起；默认关——主人要的是「菜单」能自己关，面板要能一直摆着
+  sessionWatch: true,    // 会话联动：任何 DSH 会话在跑都能让她冒阶段小泡（要 sessionsDir 存在）
+  sessionsDir: 'F:\\DaFeiYu\\sessions',   // DSH 会话事件流目录；没有就自动不启用，不报错
   voiceVolume: 0.6,      // 语音音量 0~1；只影响听感，口型大小照旧
   ttsKeepAlive: true,    // 语音服务保活：定时探活，服务冷着就拉起来并热身，别让第一句等 27 秒
   ttsKeepMinutes: 5,     // 探活间隔（分钟）；探活本身很便宜，热身只在服务刚起来那次做
