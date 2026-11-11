@@ -132,7 +132,10 @@
 
     const interaction = window.createStageInteraction({ app, model, engine });
     const bubble = window.createStageBubble({ app, interaction });
-    const voice = window.createStageVoice({ engine, volume: Number(qs.get('volume')) });
+    // 音量：先看 URL（主进程开局就会带上），缺了就让 voice 自己用默认值 0.6。
+    // 千万别写 Number(qs.get('volume'))——qs.get 给 null 时 Number(null) 是 0，直接全静音。
+    const volRaw = qs.get('volume');
+    const voice = window.createStageVoice({ engine, volume: volRaw === null ? null : Number(volRaw) });
     const reply = window.createStageReply ? window.createStageReply({ app, interaction }) : null;
 
     window.__stageModel = model;

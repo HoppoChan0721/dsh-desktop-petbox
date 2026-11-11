@@ -90,6 +90,22 @@
   </section>
 
   <section>
+    <h2>语音</h2>
+    <label class="check"><input id="ttsKeepAlive" type="checkbox"> 服务保活（冷了就拉起来热身，别让第一句等 27 秒）</label>
+    <div class="row">
+      <label>探活间隔</label>
+      <select id="ttsKeepMinutes">
+        <option value="1">1 分钟</option>
+        <option value="3">3 分钟</option>
+        <option value="5">5 分钟 · 默认</option>
+        <option value="10">10 分钟</option>
+        <option value="20">20 分钟</option>
+      </select>
+    </div>
+    <div class="hint" id="ttsState">正在看语音服务…</div>
+  </section>
+
+  <section>
     <h2>开关</h2>
     <label class="check"><input id="interactive" type="checkbox"> 分区互动（点她按部位反应）</label>
     <label class="check"><input id="cursorTrack" type="checkbox"> 指针追踪（视线和身体跟着鼠标）</label>

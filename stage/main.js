@@ -12,6 +12,7 @@ const { pathToFileURL } = require('node:url');
 const drag = require('./drag');
 const gaze = require('./gaze');
 const Cfg = require('./config');
+const KeepAlive = require('./keepalive');
 const Touch = require('./touch');
 const Mood = require('./mood');
 const Plan = require('./plan');
@@ -300,6 +301,11 @@ app.whenReady().then(async () => {
     const swayArg = arg('sway', process.env.WHALE_SWAY || '');
     const sway = swayArg !== '' ? Number(swayArg) : Number(cfg.sway);
     if (Number.isFinite(sway) && sway > 0) q.set('sway', String(sway));
+    // 音量必须从一开始就在 URL 里：页面拿不到就是 0，等于全静音。
+    // 后面虽然 push 补一次，但那次可能赶在页面注册监听之前就丢了。
+    const volArg = arg('volume', '');
+    const vol = volArg !== '' ? Number(volArg) : Number(cfg.voiceVolume);
+    if (Number.isFinite(vol)) q.set('volume', String(Math.min(1, Math.max(0, vol))));
     return 'pet://stage/index.html?' + q.toString();
   };
   const loadStage = () => win.loadURL(stageUrl()).catch(() => {});
@@ -378,6 +384,22 @@ app.whenReady().then(async () => {
       } catch (e) { reject(e); }
     });
   });
+
+  // ---- 语音保活 ---------------------------------------------------------------
+  // 服务闲下来只有两种状态：没起、或者起了但模型没进显存，第一句都得等 27 秒。
+  // 定时探活，冷了拉起来顺手热一次；她自己说过话就不用热（模型本来就热）。
+  const keepAlive = KeepAlive.createKeepAlive({
+    enabled: cfg.ttsKeepAlive !== false,
+    intervalMs: Math.max(1, Number(cfg.ttsKeepMinutes) || 5) * 60000,
+    healthUrl: arg('tts-health', process.env.WHALE_TTS_HEALTH || String(cfg.ttsHealthUrl || '')),
+    startScript: arg('tts-start', process.env.WHALE_TTS_START || String(cfg.ttsStartScript || '')),
+    prepareVoice,
+    // 热身那句 wav 是垃圾，合成完立刻删，别让 downloads 里堆满「嗯」
+    dropWav: (id) => { try { fs.unlinkSync(path.join(VOICE_DIR, id + '.wav')); } catch (e) {} },
+    log: (m) => console.log('[keepalive] ' + m),
+  });
+  // 启动两秒半后先探一次，之后按配置的间隔
+  keepAlive.start({ intervalMs: Math.max(1, Number(cfg.ttsKeepMinutes) || 5) * 60000 });
 
   // ---- 第 6 步：阶段气泡 / 回复她 / plan 执行 ---------------------------------
   // 这三样是 DSH 侧桥（dsh-pet-bridge）在用的口子，原来在外壳里，现在搬到舞台，协议不变。
@@ -488,6 +510,7 @@ app.whenReady().then(async () => {
       // 语音要等合成：先冒等待泡，好了气泡和声音一起出场，字按音频时长摊平
       push({ type: 'wait' });
       prepareVoice(text).then((job) => {
+        keepAlive.noteSay();   // 刚合过成就说明模型是热的，别再白热一次
         const ms = Math.round((Number(job.duration) || 0) * 1000);
         push({ type: 'say', text, ms: ms + 700, reveal: Math.round(ms * 0.92), voice: true });
         push({ type: 'voice', url: 'pet://stage/voice/' + encodeURIComponent(job.job_id) + '.wav' });
@@ -558,9 +581,19 @@ app.whenReady().then(async () => {
     },
     // 心情表自检：有哪些、各自会变成什么样
     '/moods': () => ({ moods: Mood.names().map((n) => Mood.plan(n, Mood.DEFAULT_INTENSITY)) }),
+    '/keepalive': async (q) => {
+      if (q.get('on') !== null) applyConfig({ ttsKeepAlive: q.get('on') !== '0' && q.get('on') !== 'false' });
+      if (q.get('minutes') !== null) applyConfig({ ttsKeepMinutes: Math.max(1, Math.min(240, Number(q.get('minutes')) || 5)) });
+      if (q.get('now') !== null) return await keepAlive.tick();
+      if (q.get('warm') !== null) return await keepAlive.warm();
+      return keepAlive.status();
+    },
     // 语音音量：0~1，改了立刻生效（走 GainNode，不重载页面）
     '/volume': (q) => {
-      const raw = q.get('value') !== null ? q.get('value') : (q.get('v') !== null ? q.get('v') : null);
+      // 三种写法都收：?value=0.6、?v=0.6、POST {"volume":0.6}
+      const raw = q.get('value') !== null ? q.get('value')
+        : q.get('v') !== null ? q.get('v')
+          : q.get('volume') !== null ? q.get('volume') : null;
       if (raw === null) return { volume: Number(cfg.voiceVolume) };
       const v = Math.min(1, Math.max(0, Number(raw)));
       if (!Number.isFinite(v)) throw new Error('value 要是 0~1 的数');
@@ -651,6 +684,7 @@ app.whenReady().then(async () => {
       reply: { btn: cfg.replyBtn !== false, always: !!cfg.replyAlways, url: String(replyUrl()) },
       voice: voiceReady(),
       volume: Number(cfg.voiceVolume),
+      keepalive: keepAlive.status(),
       affinity: book.info(),
       lastTick,
       lastReply,
@@ -777,6 +811,8 @@ app.whenReady().then(async () => {
     if ('spinTurns' in p) tracker.setSpinTurns(cfg.spinTurns);
     if ('replyBtn' in p || 'replyAlways' in p) pushReplyConfig();
     if ('voiceVolume' in p) pushVolume();
+    if ('ttsKeepAlive' in p) keepAlive.setEnabled(p.ttsKeepAlive !== false);
+    if ('ttsKeepMinutes' in p) keepAlive.setIntervalMs(Math.max(1, Number(p.ttsKeepMinutes) || 5) * 60000);
     if ('smartIgnore' in p) pushSmart();
     let reloaded = false;
     if (('fps' in p || 'sway' in p) && (Number(before.fps) !== Number(cfg.fps) || Number(before.sway) !== Number(cfg.sway))) {
@@ -790,7 +826,7 @@ app.whenReady().then(async () => {
     if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
     const area = screen.getPrimaryDisplay().workArea;
     const PW = 400;
-    const PH = 600;
+    const PH = 740;
     panel = new BrowserWindow({
       width: PW,
       height: PH,
@@ -817,6 +853,7 @@ app.whenReady().then(async () => {
   const SWAY_CHOICES = [1, 1.6, 2.4];
   const SPIN_CHOICES = [2, 3, 4, 6, 8];
   const VOL_CHOICES = [0.2, 0.4, 0.6, 0.8, 1];
+  const KEEP_CHOICES = [1, 3, 5, 10, 20];
 
   const URGE_LABEL = { quiet: '安静', normal: '正常', clingy: '黏人', chatty: '话痨', unbound: '不拦着' };
   function urgeLabel(urge) {
@@ -831,6 +868,10 @@ app.whenReady().then(async () => {
     const sway = Number(now.sway);
     const spin = Number(now.spinTurns);
     const vol = Number.isFinite(Number(now.voiceVolume)) ? Number(now.voiceVolume) : 0.6;
+    const ka = keepAlive.status();
+    const keepMinutes = Math.max(1, Number(now.ttsKeepMinutes) || 5);
+    const KA_TEXT = { idle: '还没探过', off: '没开', down: '服务没起来', starting: '正在拉起', warming: '正在热身', warm: '热着', up: '起来了但没热身' };
+    const kaText = KA_TEXT[ka.state] || ka.state;
     const [curW, curH] = win && !win.isDestroyed() ? win.getSize() : [0, 0];
     // 桥没在跑的时候，窥屏/主动开口这些项灰掉并写清原因——
     // 这套东西是给别人下载的，不能让人点了没反应还不知道为什么。
@@ -900,6 +941,18 @@ app.whenReady().then(async () => {
           { label: '滑杆微调…（设置面板）', click: () => openPanel() },
         ] },
       ] },
+      { label: '语音服务', submenu: [
+        { label: `${ka.enabled ? '保活开着' : '保活关着'} · ${kaText}`, click: () => keepAlive.tick().catch(() => {}) },
+        { type: 'separator' },
+        { label: '开机保活（服务冷了就拉起来热身）', type: 'checkbox', checked: now.ttsKeepAlive !== false, click: (it) => applyConfig({ ttsKeepAlive: it.checked }) },
+        { label: `探活间隔 · ${keepMinutes} 分钟`, submenu: KEEP_CHOICES.map((v) => ({
+          label: v + ' 分钟', type: 'radio', checked: Number(keepMinutes) === v, click: () => applyConfig({ ttsKeepMinutes: v }),
+        })) },
+        { label: '现在就探一次', click: () => keepAlive.tick().catch(() => {}) },
+        { label: '现在就热身（要等几十秒）', click: () => keepAlive.warm().catch(() => {}) },
+        { type: 'separator' },
+        { label: '语音桥：' + (voiceReady() ? '有' : '没装，没有声音'), enabled: false },
+      ] },
       { label: '复原服装（衣服回默认档）', click: () => push({ type: 'outfit-reset' }) },
       { label: '舞台', submenu: [
         { label: `帧率 · ${fps ? fps + ' fps' : '不限'}`, submenu: FPS_CHOICES.map((v) => ({
@@ -943,7 +996,7 @@ app.whenReady().then(async () => {
   ipcMain.on('stage:menu', () => popupMenu());
   ipcMain.on('stage:reply', (_e, text) => { sendReply(text).catch(() => {}); });
   ipcMain.on('panel:close', () => { if (panel && !panel.isDestroyed()) panel.close(); });
-  ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT }));
+  ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT, keepalive: keepAlive.status(), voice: voiceReady() }));
   ipcMain.handle('panel:size', (_e, p) => applySize(p && p.w, p && p.h));
   ipcMain.handle('panel:save', (_e, patch) => applyConfig(patch));
 

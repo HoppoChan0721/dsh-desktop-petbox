@@ -32,6 +32,27 @@ async function save(patch, note) {
   }
 }
 
+// 保活状态说人话：外行看「热着 / 没起来」就够了，别甩状态码
+const KA_TEXT = {
+  idle: ['还没探过', ''],
+  off: ['保活关着', ''],
+  down: ['语音服务没起来', 'bad'],
+  starting: ['正在拉起语音服务…', ''],
+  warming: ['正在热身（第一句最慢就是这样）', ''],
+  warm: ['热着，说话不用等', 'good'],
+  up: ['服务在，还没热身', ''],
+};
+function paintKeepAlive(ka) {
+  const el = $('ttsState');
+  if (!ka) { el.textContent = ''; return; }
+  const [text, kind] = KA_TEXT[ka.state] || [ka.state, ''];
+  let line = text;
+  if (ka.state === 'warm' && ka.lastWarmMs) line += '（上次热身 ' + (ka.lastWarmMs / 1000).toFixed(1) + ' 秒）';
+  if (ka.lastError) line += ' · ' + ka.lastError;
+  el.textContent = line;
+  el.className = 'hint' + (kind ? ' ' + kind : '');
+}
+
 (async () => {
   const s = await window.stagePanel.state();
   if (!s) { say('读不到舞台状态', 'bad'); return; }
@@ -59,6 +80,16 @@ async function save(patch, note) {
   $('tickBubble').checked = cfg.tickBubble !== false;
   $('replyBtn').checked = cfg.replyBtn !== false;
   $('replyAlways').checked = cfg.replyAlways === true;
+  $('ttsKeepAlive').checked = cfg.ttsKeepAlive !== false;
+  $('ttsKeepMinutes').value = String(Math.max(1, Number(cfg.ttsKeepMinutes) || 5));
+  if (s.voice === false) {
+    $('ttsState').textContent = '没有语音桥脚本，说话只有气泡没有声音';
+    $('ttsState').className = 'hint bad';
+    $('ttsKeepAlive').disabled = true;
+    $('ttsKeepMinutes').disabled = true;
+  } else {
+    paintKeepAlive(s.keepalive);
+  }
   if (s.note) say(s.note);
 })().catch((e) => say('读状态失败：' + e.message, 'bad'));
 
@@ -91,6 +122,8 @@ $('bridge').addEventListener('change', () => save({ bridge: $('bridge').checked 
 $('tickBubble').addEventListener('change', () => save({ tickBubble: $('tickBubble').checked }, '阶段气泡已切换'));
 $('replyBtn').addEventListener('change', () => save({ replyBtn: $('replyBtn').checked }, '回复钮已切换'));
 $('replyAlways').addEventListener('change', () => save({ replyAlways: $('replyAlways').checked }, '回复钮常驻已切换'));
+$('ttsKeepAlive').addEventListener('change', () => save({ ttsKeepAlive: $('ttsKeepAlive').checked }, '语音保活已切换'));
+$('ttsKeepMinutes').addEventListener('change', () => save({ ttsKeepMinutes: Number($('ttsKeepMinutes').value) }, '探活间隔已改'));
 
 $('close').onclick = () => window.stagePanel.close();
 $('x').onclick = () => window.stagePanel.close();

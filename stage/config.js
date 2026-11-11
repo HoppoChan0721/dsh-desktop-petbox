@@ -30,6 +30,10 @@ const DEFAULTS = {
   replyBtn: true,        // 回复钮：说完话冒出来一个小钮，点开能直接打字
   replyAlways: false,    // 常驻：钮一直挂在头顶右侧
   voiceVolume: 0.6,      // 语音音量 0~1；只影响听感，口型大小照旧
+  ttsKeepAlive: true,    // 语音服务保活：定时探活，服务冷着就拉起来并热身，别让第一句等 27 秒
+  ttsKeepMinutes: 5,     // 探活间隔（分钟）；探活本身很便宜，热身只在服务刚起来那次做
+  ttsHealthUrl: 'http://127.0.0.1:9880/health',                    // 网关自己的 /health
+  ttsStartScript: 'F:\\AI\\VoiceService\\gateway\\start.ps1',      // 不在跑就拿它拉起来；路径不存在就只报状态
 };
 
 function load() {

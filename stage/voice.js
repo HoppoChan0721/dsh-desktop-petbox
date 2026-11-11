@@ -24,7 +24,9 @@
     let lastUrl = '';
     // 音量走一个 GainNode，不碰包络：口型大小跟音量无关，
     // 调小只是「她说话轻了」，嘴型还是照着原本的响度张，看着才不别扭。
-    let level = volume === undefined || volume === null ? 0.6 : clamp01(volume);
+    // 没传 / 传了个非数 → 用默认 0.6；传 0 才是真的静音（别把「没配」当成「静音」）。
+    const seed = volume === undefined || volume === null ? NaN : Number(volume);
+    let level = Number.isFinite(seed) ? clamp01(seed) : 0.6;
 
     function ensureCtx() {
       if (!ctx) ctx = new Ctx();
@@ -122,6 +124,10 @@
       stop,
       setVolume,
       get volume() { return level; },
+      // 真·挂在音频图上的增益。查「没声音」的时候先看这个：
+      // volume 是配置值，gain 是实际生效的那个数（AudioContext 没起来时它会停在上一个值）。
+      get gain() { return gain ? Number(gain.gain.value.toFixed(3)) : null; },
+      get ctxState() { return ctx ? ctx.state : 'none'; },
       get playing() { return !!source; },
       get url() { return lastUrl; },
       get since() { return startedAt ? performance.now() - startedAt : 0; },

@@ -56,7 +56,7 @@ node stage\cli.mjs pointer 0 -1 --hold        # 冻结指针位置（验证探�
 node stage\cli.mjs pointer reset
 ```
 
-控制口 `127.0.0.1:61945`：`/state` `/say` `/voice` `/voice-stop` `/wait` `/bubble?hide=1` `/motion` `/emotion` `/pointer` `/taps` `/touches` `/affinity` `/zones` `/window` `/gaze` `/config` `/panel` `/menu`。
+控制口 `127.0.0.1:61945`：`/state` `/say` `/voice` `/voice-stop` `/volume` `/keepalive` `/wait` `/bubble?hide=1` `/motion` `/emotion` `/pointer` `/taps` `/touches` `/affinity` `/zones` `/window` `/gaze` `/config` `/panel` `/menu`。
 
 点触那条链（2026-11-11 晚接完）：
 
@@ -111,6 +111,29 @@ node stage\cli.mjs status                        # 端口/开关/亲密度/lastT
 - 三条入口：托盘/右键菜单（20/40/60/80/100% + 滑杆微调）、设置面板滑杆（拖着即时生效、松手落盘）、`node stage\cli.mjs volume 0.6`
 - 即时生效，**不重载页面**：配置一改主进程就推一条 `{type:'volume'}` 进页面
 - 播放中途改音量用 `setTargetAtTime` 平滑 20ms，直接赋值会有一声「咔」
+
+**没声音那次是怎么踩的（2026-11-11 晚，别再踩）**：
+
+- `stage.js` 原来写 `volume: Number(qs.get('volume'))`。URL 里没这个参数时 `qs.get(null)` 是 `null`，
+  `Number(null)` 是 **0**，于是页面一开局音量就是 0 —— 全静音，而且口型照张、气泡照冒，看着像「播了但没声」
+- 现在三处都补了：主进程 `stageUrl()` 把音量写进 URL；页面 `volRaw === null` 就传 null 交给默认值；
+  `voice.js` 只有真给了数才用，非数一律 0.6（**传 0 才是真静音**）
+- 查「没声音」先看这两个数：`window.__stageVoice.gain`（实际挂在音频图上的增益）、`ctxState`（要 `running`）。
+  只有 `volume` 是配置值，不能当证据
+
+TTS 保活（2026-11-11 晚，`stage\keepalive.js`，`ttsKeepAlive` 默认开）：
+
+- 本地 CosyVoice 冷启动第一句要 27 秒，原因是网关没起、或者起了但模型还没进显存
+- 定时（默认 5 分钟）`GET http://127.0.0.1:9880/health` 探活：不通就跑 `gateway\start.ps1` 拉起，
+  起来之后再用一句「嗯」合成一次把模型顶进显存，**这句 wav 合成完立刻删**
+- 她自己说过话（`noteSay`）就不重复热身；热身失败也不反复撞（桥脚本没装这种，每分钟撞一次是白撞）
+- 拉起脚本顶不住（常见：`runtime\process.json` 里还记着旧 PID，脚本自己会 `throw`）就走第二条路：
+  让 TTS 桥脚本自己起服务（`voice-say.ps1` 本来就会），只是要等 20 秒左右
+- **spawn 的坑**：`detached: true` + `stdio: 'pipe'` 在 Windows 上拿不到任何输出、子进程还 exit 0 空串，
+  看着像「脚本什么都没干」。别 detached，保持管道，把 stderr 尾巴留在 `/keepalive` 的 `startLog` 里
+- 入口：面板「语音」那节（开关 + 探活间隔 + 实时状态说人话）、菜单「语音服务」、`node stage\cli.mjs keepalive [now|warm|on|off|分钟]`
+- 实测：服务停掉后 `keepalive?now=1` → 拉起脚本 3 秒通、热身 19.7 秒；已经热着时再热身 5.4 秒；
+  之后一句话从请求到出声 7.5 秒（含 powershell + python 那圈开销）
 
 表情是引擎自己叠的，不靠模型那套（2026-11-11 晚，**重要**）：
 
@@ -236,7 +259,11 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 ## 9. 变更记录
 
 ```
-<下一次提交>  第 6 步 DSH 桥：阶段气泡 / 回复钮 / plan 执行 / 别名端口（reply.js + plan.js + 20 条单测）
+<下一次提交>  语音修好静音（音量没进 URL 被当成 0）+ TTS 保活（keepalive.js + 13 条单测）
+3abfe26  阶段气泡换成外壳那版圆泡动画（上半身外侧随机冒、上浮摆动、弹出缩放）
+deb0b62  表情原本完全没生效，改成引擎自渲染 exp3；补复原服装/智能穿透/窥屏/主动开口入口
+9aa03b9  语音音量可调（GainNode 不碰口型包络），托盘/面板/命令行三处入口
+e3f7321  第 6 步 DSH 桥：阶段气泡 / 回复钮 / plan 执行 / 别名端口（reply.js + plan.js + 20 条单测）
 702e4e5  第 4 步心情端口：七种心情 → 表情/动作/待机摆动偏置（stage\mood.js + 41 条单测）
 763366c  第 3 步点触账本：流水/亲密度/语境语气/反向桥（stage\touch.js + 61 条单测）
 7742f24  摆动幅度/频率提到看得见的量级，头角+身体角一起摆
