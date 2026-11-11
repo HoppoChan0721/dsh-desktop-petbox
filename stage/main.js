@@ -255,9 +255,10 @@ app.whenReady().then(async () => {
   };
   const loadStage = () => win.loadURL(stageUrl()).catch(() => {});
   await loadStage();
-  // 页面每次载入（含改帧率/摆动后的重载）都要重新把「回复钮开没开」告诉它
+  // 页面每次载入（含改帧率/摆动后的重载）都要重新把「回复钮开没开」「音量多大」告诉它
   const pushReplyConfig = () => push({ type: 'reply-set', on: cfg.replyBtn !== false, always: !!cfg.replyAlways });
-  win.webContents.on('did-finish-load', pushReplyConfig);
+  const pushVolume = () => push({ type: 'volume', value: Number(cfg.voiceVolume) });
+  win.webContents.on('did-finish-load', () => { pushReplyConfig(); pushVolume(); });
 
   // ---- 控制口 ---------------------------------------------------------------
   // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
@@ -507,6 +508,15 @@ app.whenReady().then(async () => {
     },
     // 心情表自检：有哪些、各自会变成什么样
     '/moods': () => ({ moods: Mood.names().map((n) => Mood.plan(n, Mood.DEFAULT_INTENSITY)) }),
+    // 语音音量：0~1，改了立刻生效（走 GainNode，不重载页面）
+    '/volume': (q) => {
+      const raw = q.get('value') !== null ? q.get('value') : (q.get('v') !== null ? q.get('v') : null);
+      if (raw === null) return { volume: Number(cfg.voiceVolume) };
+      const v = Math.min(1, Math.max(0, Number(raw)));
+      if (!Number.isFinite(v)) throw new Error('value 要是 0~1 的数');
+      applyConfig({ voiceVolume: v });
+      return { volume: Number(cfg.voiceVolume) };
+    },
     '/pointer': (q) => {
       if (q.get('reset') !== null) {
         push({ type: 'pointer', value: null, lock: false });
@@ -588,6 +598,7 @@ app.whenReady().then(async () => {
       tick: cfg.tickBubble !== false,
       reply: { btn: cfg.replyBtn !== false, always: !!cfg.replyAlways, url: String(replyUrl()) },
       voice: voiceReady(),
+      volume: Number(cfg.voiceVolume),
       affinity: book.info(),
       lastTick,
       lastReply,
@@ -662,6 +673,7 @@ app.whenReady().then(async () => {
     if ('onTop' in p && win && !win.isDestroyed()) win.setAlwaysOnTop(cfg.onTop !== false, 'screen-saver');
     if ('spinTurns' in p) tracker.setSpinTurns(cfg.spinTurns);
     if ('replyBtn' in p || 'replyAlways' in p) pushReplyConfig();
+    if ('voiceVolume' in p) pushVolume();
     let reloaded = false;
     if (('fps' in p || 'sway' in p) && (Number(before.fps) !== Number(cfg.fps) || Number(before.sway) !== Number(cfg.sway))) {
       loadStage();
@@ -700,12 +712,14 @@ app.whenReady().then(async () => {
   const FPS_CHOICES = [30, 60, 90, 0];
   const SWAY_CHOICES = [1, 1.6, 2.4];
   const SPIN_CHOICES = [2, 3, 4, 6, 8];
+  const VOL_CHOICES = [0.2, 0.4, 0.6, 0.8, 1];
 
   function menuTemplate() {
     const now = Cfg.load();
     const fps = Number(now.fps);
     const sway = Number(now.sway);
     const spin = Number(now.spinTurns);
+    const vol = Number.isFinite(Number(now.voiceVolume)) ? Number(now.voiceVolume) : 0.6;
     const [curW, curH] = win && !win.isDestroyed() ? win.getSize() : [0, 0];
     return [
       { label: win && win.isVisible() ? '隐藏' : '显示', click: () => { if (!win) return; win.isVisible() ? win.hide() : win.show(); } },
@@ -728,6 +742,13 @@ app.whenReady().then(async () => {
           { label: 'Ctrl + 滚轮（她身上）', enabled: false },
         ] },
         { label: '置顶显示', type: 'checkbox', checked: now.onTop !== false, click: (it) => applyConfig({ onTop: it.checked }) },
+        { label: `语音音量 · ${Math.round(vol * 100)}%`, submenu: [
+          ...VOL_CHOICES.map((v) => ({
+            label: Math.round(v * 100) + '%', type: 'radio', checked: Math.abs(vol - v) < 0.01, click: () => applyConfig({ voiceVolume: v }),
+          })),
+          { type: 'separator' },
+          { label: '滑杆微调…（设置面板）', click: () => openPanel() },
+        ] },
       ] },
       { label: '舞台', submenu: [
         { label: `帧率 · ${fps ? fps + ' fps' : '不限'}`, submenu: FPS_CHOICES.map((v) => ({

@@ -132,7 +132,7 @@
 
     const interaction = window.createStageInteraction({ app, model, engine });
     const bubble = window.createStageBubble({ app, interaction });
-    const voice = window.createStageVoice({ engine });
+    const voice = window.createStageVoice({ engine, volume: Number(qs.get('volume')) });
     const reply = window.createStageReply ? window.createStageReply({ app, interaction }) : null;
 
     window.__stageModel = model;
@@ -181,6 +181,7 @@
         else if (cmd.type === 'voice') {
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();
+        else if (cmd.type === 'volume') voice.setVolume(cmd.value);
         else if (cmd.type === 'error') err(cmd.text);
         else if (cmd.type === 'wait') bubble.wait(cmd.ms);
         else if (cmd.type === 'bubble-hide') bubble.hide();

@@ -81,7 +81,12 @@
         <option value="8">8 圈</option>
       </select>
     </div>
-    <div class="hint">改帧率或摆动会重新载入舞台，位置不变。</div>
+    <div class="row">
+      <label>语音音量</label>
+      <input id="volume" type="range" min="0" max="1" step="0.05" value="0.6">
+      <span class="val" id="volumeVal">60%</span>
+    </div>
+    <div class="hint">改帧率或摆动会重新载入舞台，位置不变；音量是即时生效的。</div>
   </section>
 
   <section>

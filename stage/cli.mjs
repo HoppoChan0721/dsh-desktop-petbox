@@ -80,12 +80,13 @@ else if (cmd === 'reply') {
   else if (rest.length) await call('/reply', { text: rest.join(' ') });
   else await call('/reply');
 } else if (cmd === 'status') await call('/status');
+else if (cmd === 'volume') await call('/volume', { value: rest[0] !== undefined ? rest[0] : flags.value });
 else if (cmd === 'config') {
   if (rest.length) await call('/config', { json: rest.join(' ') });
   else await call('/config');
 } else if (cmd === 'panel') await call('/panel');
 else if (cmd === 'menu') await call('/menu');
 else {
-  console.error('用法：state | say <文本> | wait | hide | motion <名字> [--hold] | motion stop | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>] | touches [n] | affinity | mood [心情] [--intensity 0.8] | moods | tick <文本> [--ms 3000] | reply [文本|open|close] | status | config [json] | panel | menu');
+  console.error('用法：state | say <文本> | wait | hide | motion <名字> [--hold] | motion stop | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>] | touches [n] | affinity | mood [心情] [--intensity 0.8] | moods | tick <文本> [--ms 3000] | reply [文本|open|close] | volume [0~1] | status | config [json] | panel | menu');
   process.exit(2);
 }

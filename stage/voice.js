@@ -9,22 +9,45 @@
   'use strict';
 
   const ENV_RATE = 60; // 每秒取 60 格包络，跟渲染帧率一个量级就够
+  const clamp01 = (v) => Math.min(1, Math.max(0, Number(v) || 0));
 
-  function createVoice({ engine }) {
+  function createVoice({ engine, volume }) {
     const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return { play: async () => false, stop() {}, get playing() { return false; } };
+    if (!Ctx) return { play: async () => false, stop() {}, setVolume() {}, get volume() { return 0; }, get playing() { return false; } };
 
     let ctx = null;
+    let gain = null;
     let source = null;
     let rafId = 0;
     let env = null;
     let startedAt = 0;
     let lastUrl = '';
+    // 音量走一个 GainNode，不碰包络：口型大小跟音量无关，
+    // 调小只是「她说话轻了」，嘴型还是照着原本的响度张，看着才不别扭。
+    let level = volume === undefined || volume === null ? 0.6 : clamp01(volume);
 
     function ensureCtx() {
       if (!ctx) ctx = new Ctx();
       if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       return ctx;
+    }
+
+    function ensureGain(c) {
+      if (!gain) {
+        gain = c.createGain();
+        gain.gain.value = level;
+        gain.connect(c.destination);
+      }
+      return gain;
+    }
+
+    function setVolume(v) {
+      level = clamp01(v);
+      if (gain) {
+        // 小步平滑：直接赋值在播的时候会有一下「咔」
+        try { gain.gain.setTargetAtTime(level, ctx.currentTime, 0.02); } catch (e) { gain.gain.value = level; }
+      }
+      return level;
     }
 
     function finish() {
@@ -72,7 +95,7 @@
         env = buildEnvelope(audio);
         source = c.createBufferSource();
         source.buffer = audio;
-        source.connect(c.destination);
+        source.connect(ensureGain(c));
         const t0 = c.currentTime + 0.02;
         source.start(t0);
         startedAt = performance.now();
@@ -97,6 +120,8 @@
     return {
       play,
       stop,
+      setVolume,
+      get volume() { return level; },
       get playing() { return !!source; },
       get url() { return lastUrl; },
       get since() { return startedAt ? performance.now() - startedAt : 0; },

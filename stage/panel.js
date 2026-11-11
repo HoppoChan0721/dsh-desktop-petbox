@@ -47,6 +47,10 @@ async function save(patch, note) {
   swayEl.value = String(cfg.sway === undefined ? 1.6 : cfg.sway);
   swayVal.textContent = Number(swayEl.value).toFixed(1) + ' ×';
   $('spin').value = String(cfg.spinTurns || 4);
+  const volEl = $('volume');
+  const volVal = $('volumeVal');
+  volEl.value = String(cfg.voiceVolume === undefined ? 0.6 : cfg.voiceVolume);
+  volVal.textContent = Math.round(Number(volEl.value) * 100) + '%';
   $('interactive').checked = cfg.interactive !== false;
   $('cursorTrack').checked = cfg.cursorTrack !== false;
   $('onTop').checked = cfg.onTop !== false;
@@ -65,6 +69,17 @@ $('fps').addEventListener('change', () => save({ fps: Number($('fps').value) }, 
 swayEl.addEventListener('input', () => { swayVal.textContent = Number(swayEl.value).toFixed(1) + ' ×'; });
 swayEl.addEventListener('change', () => save({ sway: Number(swayEl.value) }, '摆动已改，重载中…'));
 $('spin').addEventListener('change', () => save({ spinTurns: Number($('spin').value) }, '绕圈圈数已改'));
+
+// 音量是即时生效的：拖着滑杆就发，松手才落盘——不然每动一格写一次盘
+$('volume').addEventListener('input', () => {
+  const v = Number($('volume').value);
+  $('volumeVal').textContent = Math.round(v * 100) + '%';
+  window.stagePanel.save({ voiceVolume: v }).catch(() => {});
+});
+$('volume').addEventListener('change', () => {
+  const v = Number($('volume').value);
+  save({ voiceVolume: v }, '音量 ' + Math.round(v * 100) + '%');
+});
 
 $('interactive').addEventListener('change', () => save({ interactive: $('interactive').checked }, '分区互动已切换'));
 $('cursorTrack').addEventListener('change', () => save({ cursorTrack: $('cursorTrack').checked }, '指针追踪已切换'));

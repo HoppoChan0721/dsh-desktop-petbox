@@ -29,6 +29,7 @@ const DEFAULTS = {
   tickBubble: true,      // 阶段气泡：DSH 会话跑长任务时从肩线冒小泡
   replyBtn: true,        // 回复钮：说完话冒出来一个小钮，点开能直接打字
   replyAlways: false,    // 常驻：钮一直挂在头顶右侧
+  voiceVolume: 0.6,      // 语音音量 0~1；只影响听感，口型大小照旧
 };
 
 function load() {

@@ -103,7 +103,14 @@ node stage\cli.mjs status                        # 端口/开关/亲密度/lastT
 - `POST /api/execute {"plan":{...}}` 只认 expression / motion / gesture 三类；pose 和 trajectory 是外壳那套参数级编排，**跳过并如实回报**在 `skipped` 里，别装作演了
 - 实测整条闭环：`reply "测试一下"` → 桥投进桌宠会话 → 她回话 → 桥回流 → 舞台气泡出现「测试通过，主人快赏安娜一个奖励的亲亲」，桥日志 `echoed to pet (18 chars, moves=2)`
 
-托盘菜单 / 右键她 / 设置面板三处看到的是同一套东西（开关、尺寸、帧率、摆动、绕圈圈数）。命令行对应：
+语音音量（2026-11-11 晚补，`voiceVolume` 0~1，默认 0.6）：
+
+- 走一个 `GainNode`，**改音量不碰包络**：口型大小跟响度无关，调小只是她说话轻了，嘴型照旧张
+- 三条入口：托盘/右键菜单（20/40/60/80/100% + 滑杆微调）、设置面板滑杆（拖着即时生效、松手落盘）、`node stage\cli.mjs volume 0.6`
+- 即时生效，**不重载页面**：配置一改主进程就推一条 `{type:'volume'}` 进页面
+- 播放中途改音量用 `setTargetAtTime` 平滑 20ms，直接赋值会有一声「咔」
+
+托盘菜单 / 右键她 / 设置面板三处看到的是同一套东西（开关、尺寸、帧率、摆动、绕圈圈数、语音音量）。命令行对应：
 
 ```powershell
 node stage\cli.mjs panel                       # 打开设置面板
