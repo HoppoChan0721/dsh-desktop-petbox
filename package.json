@@ -7,7 +7,7 @@
     "start": "electron .",
     "start:legacy": "electron src/main.js",
     "doctor": "electron scripts/doctor.js",
-    "test": "node scripts/test-pet.mjs && node scripts/test-gaze.mjs && node scripts/test-touch.mjs && node scripts/test-mood.mjs",
+    "test": "node scripts/test-pet.mjs && node scripts/test-gaze.mjs && node scripts/test-touch.mjs && node scripts/test-mood.mjs && node scripts/test-plan.mjs",
     "patch": "node patch/apply-jingyu.mjs",
     "patch:check": "node patch/apply-jingyu.mjs --check"
   },

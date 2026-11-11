@@ -7,13 +7,13 @@
 
 ## 0. 一句话
 
-桌宠已经**正式换成我们自己的舞台** `F:\DaFeiYu\projects\whale-pet-shell\stage\`（`package.json` 的 `main` 指向它，老外壳还在，`npm run start:legacy` 能起来当回退）。接入进度 **5/7 + 替身已完成**：气泡、语音、指针手感、托盘/右键菜单/设置面板、入口切换都好了；剩下第 3 步点触账本与反向桥、第 4 步情绪端口、第 6 步 DSH 桥。
+桌宠已经**正式换成我们自己的舞台** `F:\DaFeiYu\projects\whale-pet-shell\stage\`（`package.json` 的 `main` 指向它，老外壳还在，`npm run start:legacy` 能起来当回退）。接入进度 **7/7 全部接完**（2026-11-11 晚）：气泡、语音、指针手感、点触账本、心情端口、托盘/右键/面板、入口切换、DSH 桥（阶段气泡 + 回复钮 + plan 执行）。
 
 ## 1. 立刻要做的第一件事
 
-**第 6 步：DSH 桥（61942）。** 进度 7/7 里只剩它：会话跑长任务时桌宠冒阶段气泡、进度上报、回复钮。
+**没有未接的步了。** 剩下的是收尾和打磨：换装表情的持久性没验过、气泡和音频起点差 50~100ms、心情目前是「拉」的（`cli.mjs mood` 才同步一次）。
 
-第 3 步（点触账本）和第 4 步（心情端口）2026-11-11 晚已经接完，见第 3 节。
+要动 DSH 桥那头时记住：桥（`.dsh-pet-bridge`，61944）里写死 `petSayUrl=61943/say`、`petStageUrl=61942`，舞台现在**同时监听 61945 / 61942 / 61943**，所以桥不用改配置。
 
 ## 2. 先确认舞台在不在跑
 
@@ -85,6 +85,24 @@ node stage\cli.mjs moods                       # 七种心情各自会变成什�
 - 实测：`困` 强度 1 时 `AngleX` 摆幅是基线的 **0.65 倍**（跟表里的值一致），`害羞` 挂 `脸红`、`撒娇` 挂 `＞＜`
 - 心情文件读不到会明确报错，不会静默什么都不做
 
+DSH 桥那条链（第 6 步，2026-11-11 晚接完）：
+
+```powershell
+node stage\cli.mjs tick "整理笔记中" --ms 2600    # 阶段气泡：肩线冒小泡往上飘
+node stage\cli.mjs reply "主人在吗"               # 回她一句（POST 到桥的 /say）
+node stage\cli.mjs reply open | close            # 不点鼠标也能验输入卡
+node stage\cli.mjs status                        # 端口/开关/亲密度/lastTick/lastReply
+```
+
+- **三个口都收**：GET 查询串、POST JSON 体。老的 DSH 桥全是 POST JSON，命令行习惯 GET，两种都认
+- **三个端口都听**：61945（主）、61942、61943（别名）。桥里写死的是后两个，所以桥一行配置都不用改
+- 阶段气泡跟正文气泡分开：正文是「她在说话」，阶段泡是「进度/状态」，小泡从肩线往外飘，2~4 秒淡掉，同时最多 4 颗
+- 回复钮默认跟随气泡（她说完话亮起来，气泡走了再留 2.4 秒），也能设常驻；点开是个输入卡，回车发、Esc 收
+- 回复钮和输入卡不在剪影里，所以 `interact.js` 加了「额外热区」（`addHitTest`），否则鼠标压上去会判穿透、钮点不着
+- 输入卡开着时强制整窗吃鼠标（`setForceEat`），不然点文本框那一瞬间窗口穿透了就没反应
+- `POST /api/execute {"plan":{...}}` 只认 expression / motion / gesture 三类；pose 和 trajectory 是外壳那套参数级编排，**跳过并如实回报**在 `skipped` 里，别装作演了
+- 实测整条闭环：`reply "测试一下"` → 桥投进桌宠会话 → 她回话 → 桥回流 → 舞台气泡出现「测试通过，主人快赏安娜一个奖励的亲亲」，桥日志 `echoed to pet (18 chars, moves=2)`
+
 托盘菜单 / 右键她 / 设置面板三处看到的是同一套东西（开关、尺寸、帧率、摆动、绕圈圈数）。命令行对应：
 
 ```powershell
@@ -121,6 +139,8 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
 | `stage\gaze.js` | 指针策略：轮询、静止丢失追踪、离屏回正、绕圈三节判定（纯数学可单测） |
 | `stage\touch.js` | 点触账本：`touch.jsonl` 流水、`touch-stats.json` 亲密度、分区语气池 + 语境/连击判定（纯函数可单测） |
 | `stage\mood.js` | 心情翻译：七种心情 → 表情 / 小动作 / 待机摆动偏置（纯函数可单测） |
+| `stage\reply.js` | 回复钮 + 输入卡：直接打字回她，走桥的 `/say`；同时给交互层提供额外热区 |
+| `stage\plan.js` | 桥砸过来的 plan → 舞台指令（expression / motion / gesture，其余如实跳过；纯函数可单测） |
 | `stage\config.js` | 舞台配置：`data\stage-config.json` 的读写与默认值 |
 | `stage\panel.html` `panel.js` `panel-preload.js` | 设置面板：尺寸滑杆、帧率、摆动、圈数、三个开关 |
 | `stage\tray-32.png` `tray-256.png` | 托盘/面板图标（从 `assets\` 复制，stage 不 import src） |
@@ -136,7 +156,7 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
 - TTS 桥 `F:\DaFeiYu\tools\pet-voice-prepare.mjs`，wav 目录 `F:\AI\VoiceService\gateway\downloads`
 - 窗口几何存在 `userData\stage-window.json`，现在的位置 `1828,92` 大小 `671×1182`
 - 配置存在 `data\stage-config.json`（互动/追踪/置顶/帧率/摆动/圈数）
-- 端口：舞台控制口 **61945**（现役就这一个）；老外壳那套 61942/61943/9333 只在 `npm run start:legacy` 时才会出现；反向桥 61944
+- 端口：舞台控制口 **61945**，另加两个别名口 **61942 / 61943**（给 DSH 桥用，`--alias-ports=61942,61943` 可改）；反向桥 61944 是 DSH 侧插件在听
 - `tools\pet-autostart.ps1` / `aux-services.ps1` / `pet-stop.ps1` 的健康端口都已经是 **61945**
 
 ## 6.5 指针手感（2026-11-10 晚新增，`stage\gaze.js`）
@@ -165,11 +185,11 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 
 ## 7. 未结项 / 等主人拍板
 
-- 第 3 步要不要真连反向桥（已连，`bridge` 开关能关）
 - 心情目前是「拉」的：`cli.mjs mood` 或 `/mood` 才同步一次，`mood.ps1` 改完不会自己推送；要自动跟就得让 `mood.ps1` 之后补一条 POST，或者舞台定时轮询 mood.json
 - 语音：气泡和音频起点仍有约 50~100ms 差（页面 fetch+解码耗时），要不要提前预热
 - 换装表情（`裙子切换` `鞋子` `胸衣` `体型1/2`）还没验证过在舞台上的持久性——外壳那边有「换装是状态不是动作、演完不能穿回去」的处理
-- 老外壳（`src\`）什么时候删/归档：现在留着当回退，`npm run start:legacy`
+- 老外壳（`src\`）什么时候删/归档：现在留着当回退，`npm run start:legacy`；它的 61942/61943 现在跟舞台撞口，两边同时开会有一个端口起不来（舞台会把占口那件事写日志，不影响其它口）
+- 待优化（主人说后面再说）：摆动幅度手感（1.0 / 1.6 / 2.4 三档挑一档）
 
 ## 8. 协作约定
 
@@ -183,6 +203,7 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 ## 9. 变更记录
 
 ```
+<下一次提交>  第 6 步 DSH 桥：阶段气泡 / 回复钮 / plan 执行 / 别名端口（reply.js + plan.js + 20 条单测）
 702e4e5  第 4 步心情端口：七种心情 → 表情/动作/待机摆动偏置（stage\mood.js + 41 条单测）
 763366c  第 3 步点触账本：流水/亲密度/语境语气/反向桥（stage\touch.js + 61 条单测）
 7742f24  摆动幅度/频率提到看得见的量级，头角+身体角一起摆

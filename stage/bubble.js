@@ -29,6 +29,12 @@
       '#bubble .dot:nth-child(2){animation-delay:.15s}',
       '#bubble .dot:nth-child(3){animation-delay:.3s}',
       '@keyframes stageDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}',
+      // 阶段气泡：小圆泡，从肩线冒出来往上飘。跟正文气泡分开，
+      // 正文是「她在说话」，这个是「进度/状态」，不该抢同一块地方。
+      '.tick{position:absolute;z-index:9998;box-sizing:border-box;padding:4px 9px;border-radius:14px;',
+      'max-width:62%;background:rgba(255,255,255,.9);color:#33534e;box-shadow:0 3px 10px rgba(0,0,0,.14);',
+      'font-family:system-ui,"Microsoft YaHei";line-height:1.35;white-space:nowrap;overflow:hidden;',
+      'text-overflow:ellipsis;pointer-events:none;will-change:transform,opacity}',
     ].join('');
     document.head.appendChild(style);
   }
@@ -122,6 +128,69 @@
       typeTimer = setTimeout(tick, 16);
     }
 
+    // ---- 阶段气泡 -----------------------------------------------------------
+    // 一颗泡 = 自己飘上去 + 淡出，2~4 秒。同时最多 4 颗，多了直接顶掉最老的。
+    // 位置按剪影算：肩膀那条线（头顶往下 22% 的跨度），偏出去那侧，
+    // 这样正脸不会被几颗泡糊住。
+    const MAX_TICKS = 4;
+    const ticks = [];
+
+    function tick(text, ms) {
+      const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 40);
+      if (!t) return null;
+      const life = Math.max(2000, Math.min(4000, Number(ms) || 3000));
+      const W = app.screen.width || 531;
+      const H = app.screen.height || 950;
+      let a = null;
+      try { a = interaction && interaction.headAnchor ? interaction.headAnchor() : null; } catch (e) { a = null; }
+      const cx = a ? a.x : W / 2;
+      const cy = a ? Math.min(H - 40, a.y + H * 0.22) : H * 0.3;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const offX = side * (W * 0.1 + Math.random() * W * 0.12);
+
+      const el = document.createElement('div');
+      el.className = 'tick';
+      el.textContent = t;
+      el.style.fontSize = Math.max(11, Math.min(16, Math.round(W * 0.024))) + 'px';
+      layer.appendChild(el);
+      const left = Math.round(Math.max(4, Math.min(W - 40, cx + offX)));
+      const top = Math.round(Math.max(4, Math.min(H - 30, cy)));
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+
+      const rise = 46 + Math.random() * 54;
+      const drift = side * (10 + Math.random() * 18);
+      const frames = [];
+      const steps = 18;
+      for (let i = 0; i <= steps; i++) {
+        const p = i / steps;
+        const o = p < 0.08 ? p / 0.08 : (p < 0.62 ? 1 : Math.max(0, (1 - p) / 0.38));
+        const x = drift * p + Math.sin(p * Math.PI * 2.2) * 5;
+        const y = -rise * (0.35 * p + 0.65 * p * p);
+        frames.push({ opacity: +o.toFixed(3), transform: 'translate3d(' + x.toFixed(1) + 'px,' + y.toFixed(1) + 'px,0)' });
+      }
+      let anim = null;
+      const drop = () => {
+        try { el.remove(); } catch (e) {}
+        const i = ticks.indexOf(el);
+        if (i >= 0) ticks.splice(i, 1);
+      };
+      try {
+        anim = el.animate(frames, { duration: life, easing: 'linear', fill: 'forwards' });
+        anim.onfinish = drop;
+        anim.oncancel = drop;
+      } catch (e) {
+        // 老内核没有 WAAPI 就退化成定时消失，别让一颗泡卡在屏幕上
+        setTimeout(drop, life);
+      }
+      ticks.push(el);
+      while (ticks.length > MAX_TICKS) {
+        const old = ticks.shift();
+        if (old) { try { old.remove(); } catch (e) {} }
+      }
+      return { text: t, ms: life, count: ticks.length };
+    }
+
     return {
       say(text, ms, reveal) {
         const t = compact(text).slice(0, 300);
@@ -141,8 +210,10 @@
       },
       hide,
       place,
+      tick,
       get visible() { return visible; },
       get text() { return el.textContent || ''; },
+      get ticks() { return ticks.length; },
     };
   }
 

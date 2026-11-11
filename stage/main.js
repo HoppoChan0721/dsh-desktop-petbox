@@ -14,6 +14,7 @@ const gaze = require('./gaze');
 const Cfg = require('./config');
 const Touch = require('./touch');
 const Mood = require('./mood');
+const Plan = require('./plan');
 
 // 单实例：托盘图标点第二遍、开机自启和手动启动撞在一起时，别再开第二只
 let activeWin = null;
@@ -254,6 +255,9 @@ app.whenReady().then(async () => {
   };
   const loadStage = () => win.loadURL(stageUrl()).catch(() => {});
   await loadStage();
+  // 页面每次载入（含改帧率/摆动后的重载）都要重新把「回复钮开没开」告诉它
+  const pushReplyConfig = () => push({ type: 'reply-set', on: cfg.replyBtn !== false, always: !!cfg.replyAlways });
+  win.webContents.on('did-finish-load', pushReplyConfig);
 
   // ---- 控制口 ---------------------------------------------------------------
   // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
@@ -323,6 +327,81 @@ app.whenReady().then(async () => {
       } catch (e) { reject(e); }
     });
   });
+
+  // ---- 第 6 步：阶段气泡 / 回复她 / plan 执行 ---------------------------------
+  // 这三样是 DSH 侧桥（dsh-pet-bridge）在用的口子，原来在外壳里，现在搬到舞台，协议不变。
+  let lastTick = null;
+  let lastReply = null;
+
+  function petTick(text, ms) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!t) return null;
+    const dur = Math.max(2000, Math.min(4000, Number(ms) || 3000));
+    lastTick = { text: t, ms: dur, at: new Date().toISOString() };
+    if (cfg.tickBubble === false) return { ...lastTick, off: true };
+    push({ type: 'tick', text: t, ms: dur });
+    return lastTick;
+  }
+
+  // 回复往桥上砸，跟点触走同一个地址（bridgeUrl 换个 path 到 /say）
+  const REPLY_URL_FALLBACK = 'http://127.0.0.1:61944/say';
+  function replyUrl() {
+    try {
+      const u = new URL(String(cfg.bridgeUrl || '').trim() || REPLY_URL_FALLBACK);
+      u.pathname = '/say';
+      u.search = '';
+      u.hash = '';
+      return u;
+    } catch (e) { return new URL(REPLY_URL_FALLBACK); }
+  }
+
+  function sendReply(text) {
+    return new Promise((resolve) => {
+      const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!t) { resolve({ ok: false, error: '空的' }); return; }
+      let u;
+      try { u = replyUrl(); } catch (e) { resolve({ ok: false, error: 'bridgeUrl 配得不对：' + e.message }); return; }
+      const body = JSON.stringify({ text: t });
+      const req = http.request({
+        hostname: u.hostname,
+        port: u.port || 80,
+        path: u.pathname,
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        timeout: 12000,
+      }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { raw += c; });
+        res.on('end', () => {
+          lastReply = { text: t, at: new Date().toISOString(), status: res.statusCode };
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            push({ type: 'tick', text: '已送到她那儿', ms: 2400 });
+            resolve({ sent: true, text: t, status: res.statusCode });
+          } else {
+            push({ type: 'tick', text: '没送出去', ms: 2400 });
+            resolve({ sent: false, text: t, status: res.statusCode, body: raw.slice(0, 200) });
+          }
+        });
+      });
+      req.on('error', (e) => {
+        lastReply = { text: t, at: new Date().toISOString(), error: e.message };
+        push({ type: 'tick', text: '桥没开', ms: 2400 });
+        resolve({ sent: false, error: e.message });
+      });
+      req.on('timeout', () => { try { req.destroy(); } catch (e) {} });
+      req.end(body);
+    });
+  }
+
+  // 桥在「只有动作没台词」时砸过来的 plan。能认的只有 expression / motion / gesture，
+  // pose 和 trajectory 是外壳那套参数级编排，这里用不到，跳过并如实回报。
+  function runPlan(plan) {
+    const r = Plan.toCommands(plan);
+    if (!r.commands.length && !r.skipped.length) throw new Error('plan 里没有可执行动作');
+    for (const cmd of r.commands) push(cmd);
+    return { applied: r.applied, skipped: r.skipped, title: r.title };
+  }
 
   const routes = {
     '/state': async () => {
@@ -498,6 +577,49 @@ app.whenReady().then(async () => {
       }
       return { cfg: Cfg.load() };
     },
+    // ---- 第 6 步：给 DSH 侧用的那几条 ------------------------------------------
+    // 桥（dsh-pet-bridge，61944）现在的配置是 petSayUrl=61943/say、petStageUrl=61942，
+    // 所以控制口额外监听这两个端口，桥不用改一行配置就能连上新舞台。
+    '/status': () => ({
+      port: PORT,
+      ports: listenPorts(),
+      interactive: cfg.interactive !== false,
+      bridge: cfg.bridge !== false,
+      tick: cfg.tickBubble !== false,
+      reply: { btn: cfg.replyBtn !== false, always: !!cfg.replyAlways, url: String(replyUrl()) },
+      voice: voiceReady(),
+      affinity: book.info(),
+      lastTick,
+      lastReply,
+    }),
+    // 阶段气泡：POST /tick {"text":"看 main.js","ms":3000}
+    // {"on":false} 当开关用（面板之外留个远程口）
+    '/tick': (q) => {
+      const body = q.body || {};
+      if (typeof body.on === 'boolean') return { on: applyConfig({ tickBubble: body.on }).cfg.tickBubble !== false };
+      const r = petTick(q.get('text') || '', q.get('ms'));
+      if (!r) throw new Error('缺 text');
+      return r;
+    },
+    // 回复她：POST /reply {"text":"主人写的话"}；{"open":true} 只把输入卡打开（调试用）
+    '/reply': async (q) => {
+      const body = q.body || {};
+      if (q.get('open') !== null) {
+        const open = q.get('open') !== '0' && q.get('open') !== 'false';
+        if (open && win && !win.isDestroyed()) { win.show(); win.focus(); }
+        push({ type: 'reply-open', open });
+        return { open };
+      }
+      if (q.get('text') !== null) return sendReply(q.get('text'));
+      return { btn: cfg.replyBtn !== false, always: !!cfg.replyAlways, url: String(replyUrl()) };
+    },
+    // 桥在「只有动作没台词」时往这里砸 plan：POST /api/execute {"plan":{...}}
+    '/api/execute': (q) => {
+      let plan = q.body && q.body.plan;
+      if (!plan && q.get('plan')) plan = JSON.parse(q.get('plan'));
+      if (!plan) throw new Error('缺 plan');
+      return runPlan(plan);
+    },
   };
 
   // ---- 尺寸 / 托盘 / 右键菜单 / 设置面板 ------------------------------------
@@ -539,6 +661,7 @@ app.whenReady().then(async () => {
     if ('cursorTrack' in p) tracker.setTrack(cfg.cursorTrack !== false);
     if ('onTop' in p && win && !win.isDestroyed()) win.setAlwaysOnTop(cfg.onTop !== false, 'screen-saver');
     if ('spinTurns' in p) tracker.setSpinTurns(cfg.spinTurns);
+    if ('replyBtn' in p || 'replyAlways' in p) pushReplyConfig();
     let reloaded = false;
     if (('fps' in p || 'sway' in p) && (Number(before.fps) !== Number(cfg.fps) || Number(before.sway) !== Number(cfg.sway))) {
       loadStage();
@@ -590,6 +713,10 @@ app.whenReady().then(async () => {
       { label: '互动', submenu: [
         { label: '分区互动（点她按部位反应）', type: 'checkbox', checked: now.interactive !== false, click: (it) => applyConfig({ interactive: it.checked }) },
         { label: '指针追踪（视线和身体跟着鼠标）', type: 'checkbox', checked: now.cursorTrack !== false, click: (it) => applyConfig({ cursorTrack: it.checked }) },
+        { type: 'separator' },
+        { label: '阶段气泡（会话进度）', type: 'checkbox', checked: now.tickBubble !== false, click: (it) => applyConfig({ tickBubble: it.checked }) },
+        { label: '回复钮（说完话冒出来）', type: 'checkbox', checked: now.replyBtn !== false, click: (it) => applyConfig({ replyBtn: it.checked }) },
+        { label: '回复钮常驻', type: 'checkbox', checked: now.replyAlways === true, click: (it) => applyConfig({ replyAlways: it.checked }) },
       ] },
       { label: '外观', submenu: [
         { label: '尺寸', submenu: [
@@ -638,6 +765,7 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.on('stage:menu', () => popupMenu());
+  ipcMain.on('stage:reply', (_e, text) => { sendReply(text).catch(() => {}); });
   ipcMain.on('panel:close', () => { if (panel && !panel.isDestroyed()) panel.close(); });
   ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT }));
   ipcMain.handle('panel:size', (_e, p) => applySize(p && p.w, p && p.h));
@@ -649,19 +777,72 @@ app.whenReady().then(async () => {
     try { if (panel && !panel.isDestroyed()) panel.close(); } catch (e) {}
   });
 
-  const server = http.createServer((req, res) => {
-    let url;
-    try { url = new URL(req.url, 'http://127.0.0.1'); } catch (e) { return json(res, 400, { error: 'bad url' }); }
-    const handler = routes[url.pathname];
-    if (!handler) return json(res, 404, { error: 'unknown route', routes: Object.keys(routes) });
-    Promise.resolve()
-      .then(() => handler(url.searchParams, req))
-      .then((body) => json(res, 200, { ok: true, ...body }))
-      .catch((e) => json(res, 500, { ok: false, error: (e && e.message) || String(e) }));
-  });
-  server.on('error', (e) => console.log(JSON.stringify({ controlPort: PORT, error: (e && e.message) || String(e) })));
-  server.listen(PORT, '127.0.0.1', () => console.log(JSON.stringify({ controlPort: PORT, listening: true })));
-  app.on('will-quit', () => { try { server.close(); } catch (e) {} });
+  // 控制口：GET 走查询串，POST 走 JSON 体。两种都支持，因为老的 DSH 桥全是 POST JSON，
+  // 命令行和手工排查习惯用 GET。参数合并规则：体里有这个键就用体的，否则看查询串。
+  function makeQuery(sp, body) {
+    return {
+      body: body || {},
+      get(key) {
+        const b = body || {};
+        if (Object.prototype.hasOwnProperty.call(b, key)) {
+          const v = b[key];
+          if (v === null || v === undefined) return null;
+          if (typeof v === 'object') return JSON.stringify(v);
+          return String(v);
+        }
+        return sp.get(key);
+      },
+    };
+  }
+
+  const portsListening = [];
+  function listenPorts() { return portsListening.slice(); }
+
+  function makeServer() {
+    return http.createServer((req, res) => {
+      let url;
+      try { url = new URL(req.url, 'http://127.0.0.1'); } catch (e) { return json(res, 400, { error: 'bad url' }); }
+      const handler = routes[url.pathname];
+      if (!handler) return json(res, 404, { error: 'unknown route', routes: Object.keys(routes) });
+      const run = (body) => {
+        Promise.resolve()
+          .then(() => handler(makeQuery(url.searchParams, body), req))
+          .then((out) => json(res, 200, { ok: true, ...out }))
+          .catch((e) => json(res, 500, { ok: false, error: (e && e.message) || String(e) }));
+      };
+      if (req.method === 'POST' || req.method === 'PUT') {
+        let raw = '';
+        req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
+        req.on('end', () => {
+          let body = {};
+          try { body = raw ? JSON.parse(raw) : {}; } catch (e) { body = {}; }
+          run(body);
+        });
+        return;
+      }
+      run({});
+    });
+  }
+
+  function listen(port, label) {
+    const srv = makeServer();
+    srv.on('error', (e) => {
+      // 端口被占不算失败：老外壳可能正占着 61942/61943，舞台照样跑
+      console.log(JSON.stringify({ port, label, error: (e && e.message) || String(e) }));
+    });
+    srv.listen(port, '127.0.0.1', () => {
+      portsListening.push(port);
+      console.log(JSON.stringify({ port, label, listening: true }));
+    });
+    return srv;
+  }
+
+  // 主口 61945；另外两个是给 DSH 桥的别名口（桥里写死 61942/61943），
+  // 这样不用改桥的配置就能连上新舞台。
+  const aliasList = String(arg('alias-ports', process.env.WHALE_STAGE_ALIAS_PORTS || '61942,61943'))
+    .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0 && n !== PORT);
+  const servers = [listen(PORT, 'control'), ...aliasList.map((p) => listen(p, 'alias'))];
+  app.on('will-quit', () => { for (const s of servers) { try { s.close(); } catch (e) {} } });
 });
 
 app.on('window-all-closed', () => app.quit());

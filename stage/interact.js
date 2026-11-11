@@ -68,6 +68,17 @@
       if (bridge && bridge.ignore) bridge.ignore(v);
     }
 
+    // 额外热区：回复钮、输入卡这类「不在模型剪影里的 UI」。
+    // 不加这个，鼠标压上去照样判穿透，钮点不着。
+    const hitTests = [];
+    let forceEat = false;
+    function extraHit(clientX, clientY) {
+      for (const fn of hitTests) {
+        try { if (fn(clientX, clientY)) return true; } catch (e) {}
+      }
+      return false;
+    }
+
     function overModel(clientX, clientY) {
       return alphaAt(clientX, clientY) > ALPHA_MIN;
     }
@@ -83,16 +94,18 @@
       }
       if (!interactive) { sendIgnore(true); return; }
       if (dragging) { sendIgnore(false); return; }
+      if (forceEat) { sendIgnore(false); return; }
       sendIgnore(!over);
     }
 
     window.addEventListener('mousemove', (e) => {
       if (dragging) { sendIgnore(false); return; }
+      if (forceEat) { sendIgnore(false); return; }
       const now = performance.now();
       const same = Math.abs(e.clientX - lastHit.x) < 3 && Math.abs(e.clientY - lastHit.y) < 3;
       if (same && now - lastHit.at < 120) { applyCursor(lastHit.over); return; }
       if (now - lastHit.at < 16) { applyCursor(lastHit.over); return; }
-      const over = overModel(e.clientX, e.clientY);
+      const over = overModel(e.clientX, e.clientY) || extraHit(e.clientX, e.clientY);
       lastHit = { x: e.clientX, y: e.clientY, at: now, over };
       applyCursor(over);
     }, true);
@@ -293,6 +306,13 @@
     return {
       tap,
       get ignored() { return ignored; },
+      addHitTest(fn) { if (typeof fn === 'function') hitTests.push(fn); },
+      // 输入卡开着的时候整窗吃鼠标：不然点文本框那一瞬间窗口穿透，卡就点了没反应
+      setForceEat(on) {
+        forceEat = !!on;
+        if (forceEat) sendIgnore(false);
+        else { lastHit = { x: -9999, y: -9999, at: 0, over: false }; }
+      },
       setInteractive(on) {
         interactive = !!on;
         overNow = null;

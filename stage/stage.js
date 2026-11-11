@@ -133,6 +133,7 @@
     const interaction = window.createStageInteraction({ app, model, engine });
     const bubble = window.createStageBubble({ app, interaction });
     const voice = window.createStageVoice({ engine });
+    const reply = window.createStageReply ? window.createStageReply({ app, interaction }) : null;
 
     window.__stageModel = model;
     window.__stageCore = internal.coreModel;
@@ -140,6 +141,7 @@
     window.__stageInteraction = interaction;
     window.__stageBubble = bubble;
     window.__stageVoice = voice;
+    window.__stageReply = reply;
     window.__stageInspect = (ids) => {
       const out = {};
       const core = internal.coreModel;
@@ -162,11 +164,21 @@
         else if (cmd.type === 'say') {
           // ms 给了就按它停留，reveal 给了就按它摊平逐字速度（有语音时 = 音频时长）
           bubble.say(cmd.text, cmd.ms, cmd.reveal);
+          if (reply) reply.flash(cmd.ms);
           if (!cmd.voice) {
             const chars = String(cmd.text || '').length;
             engine.talk(cmd.ms || Math.max(1200, Math.min(9000, chars * 180)));
           }
-        } else if (cmd.type === 'voice') {
+        } else if (cmd.type === 'tick') bubble.tick(cmd.text, cmd.ms);
+        else if (cmd.type === 'reply-set') { if (reply) reply.setEnabled(cmd.on !== false, !!cmd.always); }
+        else if (cmd.type === 'reply-open') {
+          if (reply) {
+            if (cmd.open) reply.open();
+            else reply.close();
+          }
+        } else if (cmd.type === 'nod') engine.nod();
+        else if (cmd.type === 'shake') engine.shake();
+        else if (cmd.type === 'voice') {
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();
         else if (cmd.type === 'error') err(cmd.text);

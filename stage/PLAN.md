@@ -80,6 +80,10 @@
 - 做：61942 接 DSH，阶段气泡、进度上报、回复钮
 - 依赖：DSH 侧插件
 - 验：会话里跑长任务，桌宠冒阶段气泡；点回复钮能发消息
+- 状态：**已完成**（2026-11-11 晚）。控制口同时监听 61945 / 61942 / 61943（桥里写死的是后两个，桥不用改配置），
+  收 GET 查询串和 POST JSON 两种；`/tick` 阶段气泡、`/reply` 回复钮与输入卡、`/api/execute` 执行桥砸过来的 plan
+  （只认 expression / motion / gesture，其余如实回报 skipped）；命令行 `tick` / `reply` / `status`。
+  实测整条闭环：`reply "测试一下"` → 桥投进桌宠会话 → 她回话 → 桥回流 → 舞台气泡出现回话
 
 ### 第 7 步 · 正式替身
 
@@ -172,4 +176,18 @@
   - `engine.setMood()` 接偏置：**淡入 0.8 秒、末尾 1.5 秒淡出**，直接切换会像卡帧。
   - `/mood` 不给参数就读 `persona/mood.json`（mood.ps1 的落盘），命令行 `mood` / `moods`。
   - 实测：`困` 强度 1 的 `AngleX` 摆幅 / 基线 = 0.65（表里就是 0.65）；`害羞` 挂 `脸红`；41 条单测。
-- 2026-11-11 · 下一步（只剩它）：第 6 步 DSH 桥 61942——阶段气泡、进度上报、回复钮。
+- 2026-11-11 19:1x · 第 6 步 DSH 桥接完，七步全通：
+  - 端口：主口 61945 + 别名 61942 / 61943（`--alias-ports` 可改）。桥里写死 `petSayUrl=61943/say`、`petStageUrl=61942`，
+    靠别名口连上，桥那边一行配置都没动。端口被占只记日志，不影响其它口。
+  - 请求：GET 查询串和 POST JSON 都收，参数合并规则「体里有就用体的」。桥全程 POST JSON。
+  - `/tick` 阶段气泡：新做的小泡，从肩线往外飘、2~4 秒淡掉，同时最多 4 颗；跟正文气泡分开，
+    正文是「她在说话」，这个是「进度」。`tickBubble` 开关在托盘/面板/`/tick {"on":false}` 三处都能拨。
+  - `/reply` 回复钮 + 输入卡：跟随气泡（说完话亮起来，气泡走了再留 2.4 秒）或常驻；回车发、Esc 收、中文输入法选词时回车不算发送。
+    **钮和卡不在剪影里**，所以给 `interact.js` 加了额外热区（`addHitTest`），否则鼠标压上去判穿透、点不着；
+    卡开着时强制整窗吃鼠标（`setForceEat`）。
+  - `/api/execute`：`stage/plan.js` 纯函数把 plan 翻成指令，只认 expression / motion / gesture；pose / trajectory
+    跳过并如实写进 `skipped`。`gesture` 映射：hand_on_chest→HandRaise、point→FingerShow、grass→GrassOn。
+  - 实测：tick 泡显示正确中文；plan → `脸红` + `FingerShow`；said → 回复钮亮；卡打开时 `ignored=false`；
+    提交后冒「已送到她那儿」；桥日志 `delivered zone=- target=pet` → `echoed to pet (18 chars, moves=2)`，
+    舞台气泡出现她的回话。`npm test` 71 + 33 + 61 + 41 + 20 全绿。
+- 2026-11-11 · 七步接完。剩收尾：换装表情持久性没验、语音起点差 50~100ms、心情要不要改成自动推。

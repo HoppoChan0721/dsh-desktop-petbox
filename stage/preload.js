@@ -20,4 +20,6 @@ contextBridge.exposeInMainWorld('petStage', {
   head(h) { ipcRenderer.send('stage:head', h); },
   // 右键她：弹托盘那套菜单（托盘图标被系统藏起来时也能改设置）
   menu() { ipcRenderer.send('stage:menu'); },
+  // 主人打字回她：走同一座桥（dsh-pet-bridge）投进 DSH 会话
+  reply(text) { ipcRenderer.send('stage:reply', String(text || '')); },
 });

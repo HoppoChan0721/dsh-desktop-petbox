@@ -73,12 +73,19 @@ else if (cmd === 'mood') {
   if (rest[0]) await call('/mood', { emotion: rest[0], intensity: flags.intensity });
   else await call('/mood');
 } else if (cmd === 'moods') await call('/moods');
+else if (cmd === 'tick') await call('/tick', { text: rest.join(' '), ms: flags.ms });
+else if (cmd === 'reply') {
+  if (rest[0] === 'open') await call('/reply', { open: 1 });
+  else if (rest[0] === 'close') await call('/reply', { open: 0 });
+  else if (rest.length) await call('/reply', { text: rest.join(' ') });
+  else await call('/reply');
+} else if (cmd === 'status') await call('/status');
 else if (cmd === 'config') {
   if (rest.length) await call('/config', { json: rest.join(' ') });
   else await call('/config');
 } else if (cmd === 'panel') await call('/panel');
 else if (cmd === 'menu') await call('/menu');
 else {
-  console.error('用法：state | say <文本> | wait | hide | motion <名字> [--hold] | motion stop | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>] | touches [n] | affinity | mood [心情] [--intensity 0.8] | moods | config [json] | panel | menu');
+  console.error('用法：state | say <文本> | wait | hide | motion <名字> [--hold] | motion stop | emotion <名字> | pointer <x> <y> [--hold] | pointer reset | gaze [on|off|hide|circle <圈数>] | touches [n] | affinity | mood [心情] [--intensity 0.8] | moods | tick <文本> [--ms 3000] | reply [文本|open|close] | status | config [json] | panel | menu');
   process.exit(2);
 }

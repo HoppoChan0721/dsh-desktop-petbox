@@ -50,6 +50,9 @@ async function save(patch, note) {
   $('interactive').checked = cfg.interactive !== false;
   $('cursorTrack').checked = cfg.cursorTrack !== false;
   $('onTop').checked = cfg.onTop !== false;
+  $('tickBubble').checked = cfg.tickBubble !== false;
+  $('replyBtn').checked = cfg.replyBtn !== false;
+  $('replyAlways').checked = cfg.replyAlways === true;
   if (s.note) say(s.note);
 })().catch((e) => say('读状态失败：' + e.message, 'bad'));
 
@@ -66,6 +69,9 @@ $('spin').addEventListener('change', () => save({ spinTurns: Number($('spin').va
 $('interactive').addEventListener('change', () => save({ interactive: $('interactive').checked }, '分区互动已切换'));
 $('cursorTrack').addEventListener('change', () => save({ cursorTrack: $('cursorTrack').checked }, '指针追踪已切换'));
 $('onTop').addEventListener('change', () => save({ onTop: $('onTop').checked }, '置顶已切换'));
+$('tickBubble').addEventListener('change', () => save({ tickBubble: $('tickBubble').checked }, '阶段气泡已切换'));
+$('replyBtn').addEventListener('change', () => save({ replyBtn: $('replyBtn').checked }, '回复钮已切换'));
+$('replyAlways').addEventListener('change', () => save({ replyAlways: $('replyAlways').checked }, '回复钮常驻已切换'));
 
 $('close').onclick = () => window.stagePanel.close();
 $('x').onclick = () => window.stagePanel.close();

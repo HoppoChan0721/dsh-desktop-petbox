@@ -26,6 +26,9 @@ const DEFAULTS = {
   bridge: true,          // 点触转给 DSH 侧桥（61944）；关掉只断这一条，本地反应照做
   bridgeUrl: 'http://127.0.0.1:61944/event',
   moodJson: MOOD_JSON,   // 心情来源文件
+  tickBubble: true,      // 阶段气泡：DSH 会话跑长任务时从肩线冒小泡
+  replyBtn: true,        // 回复钮：说完话冒出来一个小钮，点开能直接打字
+  replyAlways: false,    // 常驻：钮一直挂在头顶右侧
 };
 
 function load() {
