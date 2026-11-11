@@ -826,7 +826,7 @@ app.whenReady().then(async () => {
     if (panel && !panel.isDestroyed()) { panel.show(); panel.focus(); return panel; }
     const area = screen.getPrimaryDisplay().workArea;
     const PW = 400;
-    const PH = 740;
+    const PH = 764;
     panel = new BrowserWindow({
       width: PW,
       height: PH,
