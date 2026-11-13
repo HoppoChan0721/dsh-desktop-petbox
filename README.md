@@ -10,6 +10,8 @@
 - 说话：`/say` 进来一句话就冒泡；接了 TTS 桥就有声音，没接就只有文字（不会报错）
 - 会话联动：任何 DSH 会话在跑，她的肩头会冒阶段小泡（读 DSH 会话事件流，可选）
 - 托盘 + 设置面板：开关、音量、尺寸、帧率、摇摆、回复钮、会话联动全在面板里
+- 同台：菜单「同台 ▸ 叫另一只过来」再开一只模型并排站在旁边；两只靠近会互相看一眼、离太近会互相嫌弃一句。
+  副实例有自己的窗口位置文件，不占托盘、不跑语音保活、不看会话，主实例退出时跟着退
 
 ## 快速开始
 
@@ -49,7 +51,7 @@ GET 走查询串，POST 走 JSON 体，体里的键优先。
 | `POST /api/execute {"plan":{...}}` | 参数级/动作级计划 |
 | `GET /status` `GET /state` `GET /params?ids=AngleX` | 自检读数 |
 | `GET /panel?toggle=1` `GET /menu` | 开设置面板 / 看菜单结构 |
-| `GET /watch?on=0` | 会话联动开关 |
+| `GET /peer/list` `POST /peer/spawn` `POST /peer/spawn?off=1` | 同台：看报到情况 / 叫一只过来 / 收回去 |
 
 命令行等价物：`node cli/pet.mjs say "台词" --voice --emotion shy`（其余子命令见 `node cli/pet.mjs`）。
 
@@ -65,6 +67,7 @@ GET 走查询串，POST 走 JSON 体，体里的键优先。
 | `replyBtn` `replyAlways` | 回复钮 / 常驻（常驻会自动把主开关打开） |
 | `voiceVolume` `ttsKeepAlive` `ttsKeepMinutes` | 音量 / 语音服务保活 / 探活间隔 |
 | `sessionWatch` `sessionsDir` | 会话联动 / DSH 会话目录 |
+| `peerModelDir` | 同台时第二只用哪个模型（留空 = 同一个） |
 | `bridge` `bridgeUrl` | 点触转给 DSH 侧桥 |
 
 ## 自检与测试
