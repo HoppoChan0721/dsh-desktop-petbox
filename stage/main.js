@@ -319,7 +319,7 @@ app.whenReady().then(async () => {
 
   const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
   console.log(JSON.stringify({ modelDir: MODEL_DIR, modelFile: modelFile ? '(found)' : 'MISSING', core: CORE_FILE ? '(found)' : 'MISSING' }));
-  // 舞台页的启动参数：帧率上限、待机摆动倍数都从配置来，托盘/面板改完就重载一遍。
+  // 舞台页的启动参数：帧率上限、头部摆动倍数都从配置来，托盘/面板改完就重载一遍。
   // 优先级：命令行参数 > 配置 > 默认。
   const stageUrl = () => {
     const q = new URLSearchParams({ model: modelFile });
