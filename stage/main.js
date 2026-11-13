@@ -804,7 +804,9 @@ app.whenReady().then(async () => {
     return hit ? Number(hit.slice(10)) || 61945 : 61945;
   })();
   const peers = new Map();     // 主实例：port → { port, bounds, pid, at }
-  let peerChild = null;
+  // 叫来的那几只（不设上限：能跑几只取决于自己机器的性能，主人自己按手感加）。
+  // 每只一个进程 + 一个窗口位置文件（stage-window-N.json），所以 instance 号要不一样。
+  const peerChildren = [];     // [{ child, instance, pid, port, at }]
 
   const peerList = () => Array.from(peers.values()).map((p) => ({
     port: p.port, pid: p.pid || 0, bounds: p.bounds || null, age: Date.now() - p.at,
@@ -824,7 +826,7 @@ app.whenReady().then(async () => {
   function registerToPeerHost(port) {
     const send = () => {
       if (!win || win.isDestroyed()) return;
-      postPeer(peerHostPort, '/peer/hello', { port, pid: process.pid, bounds: win.getBounds() });
+      postPeer(peerHostPort, '/peer/hello', { port, pid: process.pid, instance: INSTANCE, bounds: win.getBounds() });
     };
     send();
     let t = null;
@@ -832,8 +834,10 @@ app.whenReady().then(async () => {
     win.on('move', again);
     win.on('resize', again);
     // 主实例没了就别留在桌上当孤儿（被强杀、崩溃、托盘退出没来得及通知都算）
+    // 顺带每 5 秒补一次报到：多只同台时主实例靠这个心跳判断谁还活着（收的时候不一定来得及说再见）
     let misses = 0;
     setInterval(() => {
+      send();
       fetch('http://127.0.0.1:' + peerHostPort + '/peer/list', { signal: AbortSignal.timeout(1500) })
         .then((r) => { if (r.ok) misses = 0; else misses++; })
         .catch(() => { misses++; })
@@ -846,39 +850,124 @@ app.whenReady().then(async () => {
   }
 
   // 主实例：叫一只过来 / 收回去
+  // 不设数量上限（2026-11-13 主人定：能叫几只按自己机器性能来，这只是个趣味选项）。
+  // 每只带自己的 instance 号 → 各记各的窗口位置；站位按序号往外排，不会几只摞在一点。
   function spawnPeer() {
-    if (peerChild && peerChild.pid) return { ok: true, already: true, pid: peerChild.pid };
+    if (IS_PEER) return { ok: false, error: '副实例不再叫别人' };
     const root = path.join(STAGE_DIR, '..');
-    const b = win && !win.isDestroyed() ? win.getBounds() : { x: 200, y: 200, width: 600 };
-    const args = [root, '--role=peer', '--port=0', '--peer-of=' + PORT, '--instance=2',
-      '--spawn-at=' + [b.x, b.y, b.width || 600, b.height || 900].join(',')];
+    const b = win && !win.isDestroyed() ? win.getBounds() : { x: 200, y: 200, width: 600, height: 900 };
+    const W = b.width || 600;
+    const H = b.height || 900;
+    const used = new Set(peerChildren.map((p) => p.instance).concat(peersPatchedInstances()));
+    let instance = 2;
+    while (used.has(instance)) instance++;
+    const slot = instance - 2;
+    const at = peerSlot(b, slot, W, H);
+    const args = [root, '--role=peer', '--port=0', '--peer-of=' + PORT, '--instance=' + instance,
+      '--spawn-at=' + [at.x, at.y, W, H].join(',')];
     if (cfg.peerModelDir) args.push('--model=' + String(cfg.peerModelDir));
     try {
-      peerChild = spawn(process.execPath, args, { detached: true, stdio: 'ignore', cwd: root });
-      peerChild.on('exit', () => { peerChild = null; });
-      peerChild.unref();
-      return { ok: true, pid: peerChild.pid };
+      const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', cwd: root });
+      const rec = { child, instance, pid: child.pid || 0, port: 0, at: Date.now() };
+      peerChildren.push(rec);
+      child.on('exit', () => {
+        const i = peerChildren.indexOf(rec);
+        if (i >= 0) peerChildren.splice(i, 1);
+      });
+      child.unref();
+      return { ok: true, pid: rec.pid, instance, count: peerChildren.length };
     } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   }
 
-  function killPeer() {
-    const pid = peerChild && peerChild.pid;
-    peerChild = null;
-    peers.clear();
-    if (!pid) return { ok: true, killed: 0 };
-    try { spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }); } catch (e) {}
-    return { ok: true, killed: pid };
+  // 已经报到过的那些副实例占着哪些 instance 号（新叫一只时别撞窗口位置文件）
+  function peersPatchedInstances() {
+    const out = [];
+    for (const p of peers.values()) if (p.instance) out.push(Number(p.instance));
+    return out;
   }
 
-  // 主实例当导演：每 1.5 秒看一眼两边的距离
-  let peerLastLook = 0;
-  let peerLastTalk = 0;
+  // 第 slot 只该站在哪：先把主人那只右边的空位填满，再往左边排；
+  // 一行都排不下了才换上一行（这时候必然有重叠，屏幕就这么大）。
+  // 副实例自己收到 --spawn-at 后还会再往右偏 0.92 身位，所以这里要把那一步减掉，
+  // 让它的实际落点正好落在格子上。
+  function peerSlot(b, slot, W, H) {
+    const step = Math.max(80, Math.round(W * 0.92));
+    // 可用区取「所有屏的并集」，不是最近那块屏：主人的窗口压在两块屏交界时有半边的空位
+    // 明明能站人，按单块屏算就会被判成「没地方」。
+    let area = null;
+    try {
+      const ds = screen.getAllDisplays() || [];
+      let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+      for (const d of ds) {
+        const r = d.workArea || d.bounds;
+        if (!r) continue;
+        x1 = Math.min(x1, r.x); y1 = Math.min(y1, r.y);
+        x2 = Math.max(x2, r.x + r.width); y2 = Math.max(y2, r.y + r.height);
+      }
+      if (Number.isFinite(x1) && x2 > x1) area = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+    } catch (e) { area = null; }
+    if (!area) area = { x: b.x, y: b.y, width: 5120, height: 1440 };
+    const right = area.x + area.width;
+    const left = area.x;
+    const firstLeft = b.x + step;                                        // 右边第 0 只的落点
+    const rightSlots = Math.max(0, Math.floor((right - W - firstLeft) / step) + 1);
+    const leftSlots = Math.max(0, Math.floor((b.x - step - left) / step) + 1);
+    const perRow = Math.max(1, rightSlots + leftSlots);
+    const row = Math.floor(slot / perRow);
+    const idx = slot % perRow;
+    const finalX = idx < rightSlots ? firstLeft + step * idx : b.x - step * (idx - rightSlots + 1);
+    const rowStep = Math.round(H * 0.28);
+    const y = row === 0 ? b.y : Math.max(area.y, Math.round(b.y - rowStep * row));
+    return { x: Math.round(finalX - step), y: Math.round(y) };
+  }
+
+  // 全收回去
+  function killPeer() {
+    const pids = peerChildren.map((p) => p.pid).filter(Boolean);
+    peerChildren.length = 0;
+    peers.clear();
+    peerLookAt.clear();
+    peerTalkAt.clear();
+    for (const pid of pids) {
+      try { spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }); } catch (e) {}
+    }
+    return { ok: true, killed: pids.length, pids };
+  }
+
+  // 收回最后叫的那一只（菜单里「收回一只」用）
+  function killLastPeer() {
+    const last = peerChildren[peerChildren.length - 1];
+    if (!last) return { ok: true, killed: 0, pids: [] };
+    peerChildren.splice(peerChildren.length - 1, 1);
+    if (last.port) peers.delete(last.port);
+    if (last.pid) {
+      try { spawn('taskkill', ['/PID', String(last.pid), '/T', '/F'], { windowsHide: true }); } catch (e) {}
+    }
+    return { ok: true, killed: last.pid ? 1 : 0, pids: last.pid ? [last.pid] : [] };
+  }
+
+  // 主实例当导演：每 1.5 秒看一眼各只的距离。
+  // 节流按「每只」算（以前是一个全局时间戳，多只同台时只有第一只能被看到）。
+  const peerLookAt = new Map();   // port → 上次对视的时间
+  const peerTalkAt = new Map();   // port → 上次搭话的时间
+  const PEER_STALE_MS = 20000;    // 20 秒没报到就当它没了（副实例每 5 秒心跳一次）
+  function prunePeers() {
+    const now = Date.now();
+    for (const [port, p] of peers) {
+      if (now - (p.at || 0) <= PEER_STALE_MS) continue;
+      peers.delete(port);
+      peerLookAt.delete(port);
+      peerTalkAt.delete(port);
+    }
+  }
   function startPeerWatch() {
     setInterval(() => {
+      prunePeers();
       if (!win || win.isDestroyed() || !peers.size) return;
       const b = win.getBounds();
       const cx = b.x + b.width / 2;
       const cy = b.y + b.height * 0.35;
+      const now = Date.now();
       for (const p of peers.values()) {
         const pb = p.bounds;
         if (!pb) continue;
@@ -888,15 +977,14 @@ app.whenReady().then(async () => {
         if (dist > 1400) continue;                       // 离太远，各玩各的
         const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
         const flip = dir === 'left' ? 'right' : dir === 'right' ? 'left' : dir;
-        const now = Date.now();
-        if (now - peerLastLook > 5000) {
-          peerLastLook = now;
+        if (now - (peerLookAt.get(p.port) || 0) > 5000) {
+          peerLookAt.set(p.port, now);
           // 保持 2.6 秒：转过去、停住、慢慢收回视线。以前用冲量演，看着像「转一半被拽回去」
           push({ type: 'look', direction: dir, ms: 2600 });
           postPeer(p.port, '/look', { direction: flip, ms: 2600 });
         }
-        if (dist < 420 && now - peerLastTalk > 15000) {
-          peerLastTalk = now;
+        if (dist < 420 && now - (peerTalkAt.get(p.port) || 0) > 15000) {
+          peerTalkAt.set(p.port, now);
           const line = ['别挤我…', '这边视野好', '你也在这儿', '站远点啦'][Math.floor(Math.random() * 4)];
           postPeer(p.port, '/say', { text: line, ms: 3200 });
         }
@@ -1227,16 +1315,33 @@ app.whenReady().then(async () => {
       if (!Number.isFinite(port) || port <= 0) throw new Error('缺 port');
       let bounds = null;
       try { const raw = q.get('bounds'); bounds = raw ? JSON.parse(raw) : null; } catch (e) { bounds = null; }
-      peers.set(port, { port, bounds, pid: Number(q.get('pid')) || 0, at: Date.now() });
+      const pid = Number(q.get('pid')) || 0;
+      const instance = Number(q.get('instance')) || 0;
+      peers.set(port, { port, bounds, pid, instance, at: Date.now() });
+      // 认得是哪只：把报到的端口记到进程账本上，收回的时候好按只清
+      const rec = peerChildren.find((p) => p.pid === pid || (p.port && p.port === port));
+      if (rec) { rec.port = port; rec.at = Date.now(); if (instance) rec.instance = instance; }
+      prunePeers();
       return { peers: peerList() };
     },
     '/peer/bye': (q) => {
       const port = Number(q.get('port'));
-      if (Number.isFinite(port)) peers.delete(port);
+      if (Number.isFinite(port)) {
+        peers.delete(port);
+        peerLookAt.delete(port);
+        peerTalkAt.delete(port);
+        peerChildren.forEach((p) => { if (p.port === port) p.port = 0; });
+      }
       return { peers: peerList() };
     },
-    '/peer/list': () => ({ peers: peerList(), child: peerChild ? peerChild.pid : 0, role: ROLE }),
-    '/peer/spawn': (q) => (q.get('off') !== null ? killPeer() : spawnPeer()),
+    '/peer/list': () => ({ peers: (prunePeers(), peerList()), child: peerChildren.length ? peerChildren[0].pid : 0, children: peerChildren.map((p) => ({ pid: p.pid, instance: p.instance, port: p.port || 0 })), role: ROLE }),
+    // ?off=1 全收；?off=last 只收最后叫的那只；不带参数就再叫一只（不设上限）
+    '/peer/spawn': (q) => {
+      const off = q.get('off');
+      if (off === null) return spawnPeer();
+      if (off === 'last') return killLastPeer();
+      return killPeer();
+    },
     '/look': (q) => {
       const dir = String(q.get('direction') || 'center');
       push({ type: 'look', direction: dir, ms: Number(q.get('ms')) || 0 });
@@ -1584,8 +1689,10 @@ app.whenReady().then(async () => {
         { label: '复原服装（衣服回默认档）', click: () => push({ type: 'outfit-reset' }) },
       ] },
       { label: '同台', submenu: [
-        { label: peerChild ? '再叫一只过来' : '叫另一只过来', click: () => { const r = spawnPeer(); if (r && r.error) console.log(JSON.stringify({ peerSpawn: r })); } },
-        { label: '收回去', enabled: !!peerChild, click: () => killPeer() },
+        // 不设上限：能同时跑几只按自己机器的手感来（每只都是一个独立进程）
+        { label: peerChildren.length ? '再叫一只过来（现在 ' + peerChildren.length + ' 只）' : '叫另一只过来', click: () => { const r = spawnPeer(); if (r && r.error) console.log(JSON.stringify({ peerSpawn: r })); } },
+        { label: '收回一只', enabled: peerChildren.length > 0, click: () => killLastPeer() },
+        { label: '全收回去', enabled: peerChildren.length > 0, click: () => killPeer() },
         { label: peers.size ? '现在有 ' + peers.size + ' 只报到' : '现在只有她一只', enabled: false },
       ] },
       { label: '重新载入舞台', click: () => loadStage() },
