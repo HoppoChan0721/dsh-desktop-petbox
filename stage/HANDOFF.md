@@ -312,6 +312,21 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
 - 自检：`/state` 的 `stats.pace`；CDP 里量 `internal.update` 的间隔（现在 17.8~18.7ms，几乎全落 18ms）。
 - 别再往 `ticker.maxFPS` 上想办法——那是取模节流，屏幕刷新率一变就会重新错行。
 
+回复输入框必须待在「脚底以下那条空白带子」里（2026-11-13，主人报「输入框挡住模型还容易误触」）：
+
+- 舞台窗口里模型几乎是整窗高的，唯一不画东西的地方就是**剪影脚底到窗口底边**那一条
+  （本机 671×1182 的窗口、脚底 1121，剩 61px；所有体型都对齐到同一条脚底线，所以这条带子永远存在）。
+  输入卡以前是「贴着钮往上弹」——常驻模式钮在脚边，于是卡正好压在裙子和小腿上。
+- 现在 `placeCard()` 固定贴底：高度 `clamp(可用高度, 26, 40)`、宽度 `min(窗宽-24, 560)`、水平居中，
+  y 取 `H - h - 6` 并保证不低于脚底（`bandTop + 1`）。改成单行 input + × + 发送，回车发、Esc 关。
+- 常驻钮也挪进这条带子（`footAnchor().x + 窗宽×0.16`，y 贴底），离脚约 200px，不再贴脚趾缝。
+  卡打开时 `sync()` 里把钮的亮态摘掉（同一块地方会叠），关掉自动回来。
+- **别再整窗吃鼠标**：以前 `setForceEat(cardOpen)` 为了让点输入框那一下不穿透，把整个窗口都变成可交互，
+  打字期间桌面和游戏全点不到。卡本来就注册在 `interaction.addHitTest` 里（`extraHit` 会在 mousemove 里问到），
+  只靠热区就够了。实测：卡上吃、模型上吃、卡旁边透明处穿透（`interaction.ignored` 三种状态都对）。
+- 自检：CDP 里 `__stageReply.open()` 后读 `#reply-card` 的 `getBoundingClientRect()`，y 必须 ≥ 脚底；
+  `interaction.ignored` 在卡上应为 false、在透明处 true。截图看 `F:\DaFeiYu\out\stage\reply-bottom.png`。
+
 同台不设数量上限（2026-11-13，主人要「按各自机器性能叫，别设上限」）：
 
 - 以前 `peerChild` 是单个进程句柄，`spawnPeer()` 见它有 pid 就直接返回 `already`，第二次点等于空转。

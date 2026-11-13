@@ -26,16 +26,17 @@
       '#reply-btn.on{opacity:1;pointer-events:auto;transform:scale(1)}',
       '#reply-btn:hover{background:rgba(233,243,255,.98)}',
       '#reply-btn svg{width:16px;height:16px;display:block}',
-      '#reply-card{position:absolute;z-index:10002;box-sizing:border-box;border-radius:12px;',
-      'background:rgba(255,255,255,.97);box-shadow:0 10px 26px rgba(0,0,0,.22);padding:8px;',
-      'display:none;font-family:system-ui,"Microsoft YaHei"}',
-      '#reply-card.on{display:block}',
-      '#reply-card textarea{display:block;width:100%;box-sizing:border-box;resize:none;border:0;outline:0;',
-      'background:transparent;color:#2b3d3a;line-height:1.5;font:inherit;max-height:110px}',
-      '#reply-card .row{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}',
-      '#reply-card button{font:inherit;font-size:12px;padding:4px 12px;border-radius:8px;cursor:pointer;',
-      'border:1px solid rgba(90,150,230,.5);background:#fff;color:#2b3d3a}',
+      '#reply-card{position:absolute;z-index:10002;box-sizing:border-box;border-radius:11px;',
+      'background:rgba(255,255,255,.97);box-shadow:0 8px 22px rgba(0,0,0,.22);padding:0 8px;',
+      'display:none;align-items:center;gap:6px;font-family:system-ui,"Microsoft YaHei"}',
+      '#reply-card.on{display:flex}',
+      '#reply-card input{flex:1 1 auto;min-width:0;height:100%;box-sizing:border-box;border:0;outline:0;',
+      'background:transparent;color:#2b3d3a;font:inherit;line-height:1.4}',
+      '#reply-card input::placeholder{color:#9aa8b8}',
+      '#reply-card button{flex:0 0 auto;font:inherit;font-size:12px;height:24px;padding:0 10px;border-radius:7px;',
+      'cursor:pointer;border:1px solid rgba(90,150,230,.5);background:#fff;color:#2b3d3a}',
       '#reply-card button.send{background:#2a7fff;border-color:#2a7fff;color:#fff}',
+      '#reply-card button.close{padding:0 7px;border-color:transparent;background:transparent;color:#8b98a8}',
       '#reply-card button:active{transform:translateY(1px)}',
     ].join('');
     document.head.appendChild(style);
@@ -56,20 +57,20 @@
 
     const card = document.createElement('div');
     card.id = 'reply-card';
-    const ta = document.createElement('textarea');
-    ta.rows = 2;
-    ta.placeholder = '跟她说一句…';
-    const row = document.createElement('div');
-    row.className = 'row';
-    const cancel = document.createElement('button');
-    cancel.textContent = '取消';
+    const ta = document.createElement('input');
+    ta.type = 'text';
+    ta.maxLength = 200;
+    ta.placeholder = '跟她说一句…（回车发送）';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'close';
+    closeBtn.textContent = '×';
+    closeBtn.title = '关闭（Esc）';
     const send = document.createElement('button');
     send.className = 'send';
     send.textContent = '发送';
-    row.appendChild(cancel);
-    row.appendChild(send);
     card.appendChild(ta);
-    card.appendChild(row);
+    card.appendChild(closeBtn);
+    card.appendChild(send);
     document.body.appendChild(card);
 
     let enabled = true;
@@ -98,14 +99,15 @@
 
     // 两个模式两个位置，别用一个凑合：
     //   跟随（她说完话冒一下）→ 头顶右侧，离气泡近，顺手
-    //   常驻（一直在）→ 脚边，不占身上的热区
+    //   常驻（一直在）→ 脚底下面那条空白带子里，离脚往外挪一截（贴着脚点一下就是误触）
     function placeBtn() {
       const size = 30;
       let x; let y;
       if (always) {
         const a = footAnchor();
-        x = Math.max(6, Math.min(W() - size - 6, a.x));
-        y = Math.max(6, Math.min(H() - size - 6, a.y));
+        // 空白带子 = 剪影脚底到窗口底边那一条（本机 1182 的窗口里约 60px），所有体型都对齐到同一条脚底线
+        x = Math.max(6, Math.min(W() - size - 6, Math.round(a.x + W() * 0.16)));
+        y = Math.max(6, Math.min(H() - size - 6, Math.round(Math.max(a.y + 8, H() - size - 8))));
       } else {
         const a = anchor();
         x = Math.max(6, Math.min(W() - size - 6, a.x + W() * 0.13));
@@ -117,25 +119,32 @@
       pos = { x, y, w: size, h: size };
     }
 
-    // 输入卡跟着钮走：默认贴钮上方，上面放不开就翻到下面
+    // 输入卡：固定在**窗口最下方那条空白带子**里，横着摊开。
+    // 以前是贴着钮往上弹，正好盖住裙子和小腿——要打字先挡自己，还容易点穿到模型。
+    // 脚底以下本来就不画东西，所以这一条永远不覆盖模型；高度按剩下的空间给（窗口被拖矮也不会顶穿）。
     function placeCard() {
-      const w = Math.max(140, Math.min(W() - 20, 280));
+      const pad = 6;
+      const a = footAnchor();
+      const bandTop = Math.max(0, a.y);                      // 剪影脚底
+      const bandH = Math.max(0, H() - bandTop - pad * 2);    // 底下能用的高度
+      const h = Math.round(Math.max(26, Math.min(40, bandH)));
+      const w = Math.max(220, Math.min(W() - 24, 560));
+      const x = Math.round(Math.max(8, Math.min(W() - w - 8, (W() - w) / 2)));
+      // 贴窗口底；万一那条带子太矮（窗口被拖得很扁），就往脚底下面挤一点，宁可靠着也不盖模型
+      const y = Math.round(Math.max(bandTop + 1, H() - h - pad));
       card.style.width = w + 'px';
-      const p = pos || { x: W() / 2, y: H() * 0.14, w: 30, h: 30 };
-      const h = Math.max(96, card.offsetHeight || 108);
-      const x = Math.round(Math.max(10, Math.min(W() - w - 10, p.x + p.w / 2 - w / 2)));
-      const above = p.y - h - 10;
-      const y = above >= 8 ? above : Math.min(H() - h - 10, p.y + p.h + 10);
+      card.style.height = h + 'px';
       card.style.left = x + 'px';
-      card.style.top = Math.round(Math.max(8, y)) + 'px';
+      card.style.top = y + 'px';
       ta.style.fontSize = Math.max(12, Math.min(15, Math.round(W() * 0.021))) + 'px';
     }
 
     function sync() {
       const want = enabled && (cardOpen || always || Date.now() < visibleUntil);
-      btn.classList.toggle('on', want);
-      // 卡开着的时候窗口必须一直吃鼠标，否则点输入框的瞬间窗口穿透了
-      if (interaction && interaction.setForceEat) interaction.setForceEat(cardOpen);
+      // 卡开着的时候钮收起来：它俩都在窗口底部那条带子里，不收起会叠在一起
+      btn.classList.toggle('on', want && !cardOpen);
+      // 不再整窗吃鼠标（`setForceEat`）：卡已经在交互层的热区里了，鼠标压上去窗口自然不吃穿透。
+      // 整窗吃鼠标的话，打字期间连模型以外的地方都点不到桌面（游戏/别的窗口全被挡住）。
     }
 
     function loop() {
@@ -191,12 +200,12 @@
     ta.addEventListener('keydown', (e) => {
       // 中文输入法选词时回车不能算发送
       if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
       else if (e.key === 'Escape') { e.preventDefault(); close(); }
       e.stopPropagation();
     });
     send.addEventListener('click', (e) => { e.stopPropagation(); submit(); });
-    cancel.addEventListener('click', (e) => { e.stopPropagation(); close(); });
+    closeBtn.addEventListener('click', (e) => { e.stopPropagation(); close(); });
     card.addEventListener('mousedown', (e) => e.stopPropagation());
 
     // 热区：钮和卡都算，不然这两块会被判成透明区直接穿透
