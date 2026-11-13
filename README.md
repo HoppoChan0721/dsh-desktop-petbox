@@ -1,14 +1,28 @@
-# whale-pet-shell
+# 棉花糖（whale-pet-shell）
 
-把 **鲸语（Jingyu Live2D Agent）** 的 `?stage=1` 舞台变成 Windows 桌面上的透明桌宠外壳。
+把任意 Live2D（Cubism 4）模型放到 Windows 桌面上当桌宠。
 
-壳子本身只做「窗口 + 交互 + 玩法」，不做渲染、不带模型：模型、鲸语、Live2D Cubism Core 全部由使用者自备。
+自带舞台负责渲染和演出：气泡、语音口型、情绪表情、动作、点触反应、整身摇摆；
+外壳负责透明窗口、像素级穿透、托盘、设置面板和玩法层。**模型不随仓库发布**，换成谁的脸都行。
 
 ```
-鲸语舞台（本机 HTTP）  ←  壳子（Electron 透明窗口 / 托盘 / 面板 / 玩法层）
-      ↑ 动作执行                    ↓ 情绪、气泡、指针、尺寸
-   /api/execute              127.0.0.1:61943
+舞台（自渲染 Live2D，pet://stage）  ←→  控制口 127.0.0.1:61945（别名 61942 / 61943）
+      ↑ 动作 / 气泡 / 情绪                    ↓
+   DSH 侧桥（可选，61944）               命令行 cli/pet.mjs
 ```
+
+## 换模型
+
+舞台启动时在模型目录里找第一个 `*.model3.json`，配套的 `*.moc3` / 纹理 / 物理 / 表情都在同一目录即可。
+指定目录有三种方式，优先级从高到低：
+
+```powershell
+node_modules\electron\dist\electron.exe stage --model D:\models\mymodel     # 1. 命令行
+$env:WHALE_MODEL_DIR = 'D:\models\mymodel'                                   # 2. 环境变量
+# 3. data\stage-config.json 里写 "modelDir": "D:\\models\\mymodel"
+```
+
+Cubism Core（`live2dcubismcore.min.js`）会自己找，找不到就用 `--core <路径>` 或配置里的 `cubismCore` 指过去。
 
 ## 预览
 

@@ -229,7 +229,7 @@
     // 注意 FPS 是「屏幕刷新率」不是「模型每秒更新几次」：模型走 Ticker.shared 的节流，
     // 实际更新频率看 /state 里 frames 的增量（锁 60 时约 50~60 次/秒）。
     window.__stageStats = () => ({ rawRafFps: Math.round(PIXI.Ticker.shared.FPS), maxFps: PIXI.Ticker.shared.maxFPS, size: { w: app.screen.width, h: app.screen.height } });
-    document.title = '鲸鱼舞台 · ' + (groups.motions || []).join('/');
+    document.title = '棉花糖 · ' + (groups.motions || []).join('/');
 
     // ---- 窗口尺寸：节流 + 停手补最后一帧 ------------------------------------
     // 拖尺寸滑杆时 resize 事件一秒来几十次。每来一次就 resize 缓冲区 + 重算 fit + 重扫剪影，

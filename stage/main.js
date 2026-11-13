@@ -35,9 +35,13 @@ const arg = (name, dflt = '') => {
 };
 
 const STAGE_DIR = __dirname;
-const MODEL_DIR = path.resolve(arg('model', 'F:\\DaFeiYu\\tools\\jingyu\\model\\DeepSeek'));
+// 模型目录三级来源：命令行 --model > 环境变量 > 配置文件 data\stage-config.json 的 modelDir > 内置默认。
+// 「换模型」就是换个目录：里面放 *.model3.json 配套文件，舞台自己找第一个。
+// 这里提前读一次配置（cfg 在后面才装配），配置读不到就当没配，不拦启动。
+const earlyCfg = (() => { try { return Cfg.load(); } catch (e) { return {}; } })();
+const MODEL_DIR = path.resolve(arg('model', process.env.WHALE_MODEL_DIR || String(earlyCfg.modelDir || '') || 'F:\\DaFeiYu\\tools\\jingyu\\model\\DeepSeek'));
 const CORE_FILE = (() => {
-  const given = arg('core', process.env.WHALE_CUBISM_CORE || '');
+  const given = arg('core', process.env.WHALE_CUBISM_CORE || String(earlyCfg.cubismCore || ''));
   const candidates = [
     given,
     'F:\\DaFeiYu\\tools\\jingyu\\jingyu-live2d-agent-main\\web\\vendor\\live2dcubismcore.min.js',
@@ -1276,7 +1280,7 @@ app.whenReady().then(async () => {
     // 图标加载不到只会得到空图、托盘一片空白，还不报错——留一行日志方便排查
     console.log(JSON.stringify({ trayIcon: img.isEmpty() ? 'EMPTY:' + iconPath : img.getSize() }));
     tray = new Tray(img);
-    tray.setToolTip('安娜 · 鲸鱼舞台');
+    tray.setToolTip('安娜 · 棉花糖');
     // 左键开关设置面板，右键才是菜单——托盘的老规矩，别反着来
     tray.on('click', () => trayLeftClick());
     tray.on('right-click', () => trayMenu());
