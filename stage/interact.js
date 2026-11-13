@@ -293,14 +293,15 @@
     }
 
     // 脚边锚点：常驻回复钮蹲在她脚边，不压在身上——压头顶那块的结果是每次摸头都点到钮。
-    // y 取剪影最低点往上抬一点点（抬多少跟窗口高度成比例，缩放后还是「脚背上一点点」），
-    // x 取那一行的右沿再往外挪一点；右沿已经贴到窗边就退回窗口 70% 处（跟老外壳同一套相对量）。
+    // y 取剪影最低点往上抬一点点（抬多少跟窗口高度成比例，缩放后还是「脚那块」），
+    // x 取那一行的右沿再往外让开一段（主人说贴脚太近，让开尺度跟窗口宽度成比例）；
+    // 右沿已经贴到窗边就退回窗口 74% 处。
     function footAnchor() {
       const W = canvas.clientWidth || canvas.width;
       const H = canvas.clientHeight || canvas.height;
       const p = ensureProfile();
-      if (!p || !p.rows || !p.rows.length) return { x: W * 0.7, y: H * 0.9 };
-      const y = Math.max(6, Math.min(H - 36, p.bbox.bottom * H - Math.max(10, H * 0.014)));
+      if (!p || !p.rows || !p.rows.length) return { x: W * 0.74, y: H * 0.92 };
+      const y = Math.max(6, Math.min(H - 36, p.bbox.bottom * H - Math.max(6, H * 0.008)));
       // 钮是 30px 高，取钮中心那一行看右沿，才不会贴到脚趾缝里
       const targetN = Math.min(1, (y + 15) / Math.max(1, H));
       let row = p.rows[p.rows.length - 1];
@@ -309,8 +310,9 @@
         const d = Math.abs(r.y - targetN);
         if (d < bestD) { bestD = d; row = r; }
       }
-      const beside = row.r * W + 10;
-      return { x: beside < W - 34 ? beside : W * 0.7, y };
+      const gap = Math.max(30, W * 0.07);
+      const beside = row.r * W + gap;
+      return { x: beside < W - 34 ? beside : Math.max(W * 0.74, W - 44), y };
     }
 
     // 阶段气泡的出生点（跟着外壳那套）：在上半身轮廓里随机挑一行，再在这一行里随机横坐标。
