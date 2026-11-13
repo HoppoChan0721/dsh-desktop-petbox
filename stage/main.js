@@ -762,10 +762,11 @@ app.whenReady().then(async () => {
         const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
         const flip = dir === 'left' ? 'right' : dir === 'right' ? 'left' : dir;
         const now = Date.now();
-        if (now - peerLastLook > 2600) {
+        if (now - peerLastLook > 5000) {
           peerLastLook = now;
-          push({ type: 'look', direction: dir });
-          postPeer(p.port, '/look', { direction: flip });
+          // 保持 2.6 秒：转过去、停住、慢慢收回视线。以前用冲量演，看着像「转一半被拽回去」
+          push({ type: 'look', direction: dir, ms: 2600 });
+          postPeer(p.port, '/look', { direction: flip, ms: 2600 });
         }
         if (dist < 420 && now - peerLastTalk > 15000) {
           peerLastTalk = now;
@@ -1082,7 +1083,7 @@ app.whenReady().then(async () => {
     '/peer/spawn': (q) => (q.get('off') !== null ? killPeer() : spawnPeer()),
     '/look': (q) => {
       const dir = String(q.get('direction') || 'center');
-      push({ type: 'look', direction: dir });
+      push({ type: 'look', direction: dir, ms: Number(q.get('ms')) || 0 });
       return { pushed: true, direction: dir };
     },
     '/api/stop': () => {

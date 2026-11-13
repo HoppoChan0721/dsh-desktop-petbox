@@ -149,6 +149,7 @@
       this.voiceLevel = 0;
       this.voiceUntil = 0;
       this.impulse = null;
+      this.lookState = null;   // 「看一眼」的保持状态（见 look / applyLook）
       this.emotionTimer = null;
       this.emotionName = '';
       this.expr = null;         // { name, params:[{id,value,blend}], at, until, loaded }
@@ -317,12 +318,29 @@
     // 幅度刻意小——台词配的动作是「配合说话」，不是表演杂技。
     tilt(dir) { return this.react('AngleZ', dir === 'left' ? 11 : -11, 900, 1); }
 
-    look(dir) {
-      if (dir === 'left') return this.react('AngleX', 9, 760, 1);
-      if (dir === 'right') return this.react('AngleX', -9, 760, 1);
-      if (dir === 'up') return this.react('AngleY', -7, 700, 1);
-      if (dir === 'down') return this.react('AngleY', 7, 700, 1);
-      return this.react('AngleY', -3, 500, 1);
+    // 「看一眼」不能用冲量演。冲量是 sin 一个完整周期：转过去、再自己转回来，
+    // 看着就是「刚转一半就被拽回去」——两只站一起时导演每两三秒发一次，特别明显。
+    // 改成保持型：快速转过去、停住、最后 0.4 秒慢慢回正，像真的看了一眼再收回视线。
+    look(dir, ms) {
+      const span = Math.max(0.3, (Number(ms) || 0) / 1000 || 1.8);
+      const dx = dir === 'left' ? 9 : dir === 'right' ? -9 : 0;
+      const dy = dir === 'up' ? -7 : dir === 'down' ? 7 : dir === 'center' ? -3 : 0;
+      this.lookState = { at: this.clock, ms: span, dx, dy };
+      return { dir, ms: Math.round(span * 1000) };
+    }
+
+    // 看的方向也走叠加层：不覆盖头部摆动，只在它上面加一个偏移
+    applyLook({ set, target }) {
+      const s = this.lookState;
+      if (!s) return;
+      const t = this.clock - s.at;
+      if (t >= s.ms) { this.lookState = null; return; }
+      // 0.18 秒转过去，剩下的保持，最后 0.4 秒回正
+      const inK = Math.min(1, t / 0.18);
+      const outK = Math.min(1, Math.max(0, (s.ms - t) / 0.4));
+      const w = Math.min(inK, outK);
+      if (s.dx) set('AngleX', num(target.get('AngleX'), 0) + s.dx * w);
+      if (s.dy) set('AngleY', num(target.get('AngleY'), 0) + s.dy * w);
     }
 
     blink() { return this.react('ParamEyeLOpen', -1, 190, 1); }
@@ -470,6 +488,7 @@
       const ctx = { target, set: (id, v) => { if (Number.isFinite(v)) target.set(id, v); } };
       this.applyIdle(ctx);
       this.applyPointer(ctx);
+      this.applyLook({ set: ctx.set, target });   // 看一眼：叠在摆动和指针之上，不打断它们
       this.applyImpulse(ctx, target);
       this.applyGaze(ctx);
       this.applyMouth(ctx);
