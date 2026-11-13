@@ -157,6 +157,8 @@
     window.__stageBubble = bubble;
     window.__stageVoice = voice;
     window.__stageReply = reply;
+    // 调试：一对窗口坐标 → 算成哪个部位、命中的是哪根 part（/hit 走这条）
+    window.__stageHit = (x, y) => { try { return interaction.inspectHit(x, y); } catch (e) { return { error: String(e && e.message || e) }; } };
     window.__stageInspect = (ids) => {
       const out = {};
       const core = internal.coreModel;
@@ -264,6 +266,8 @@
         else if (cmd.type === 'talk') engine.talk(cmd.ms);
         else if (cmd.type === 'sway-tilt') engine.setSwayTilt(cmd.value, cmd.period);
         else if (cmd.type === 'form') applyBody(cmd.names || cmd.name, !!cmd.align);
+        // 部件名表（partId → cdi3 里的中文名）：点触要按真部件分区，主进程读好推过来
+        else if (cmd.type === 'parts') interaction.setParts(cmd.names || null);
         else if (cmd.type === 'voice') {
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();

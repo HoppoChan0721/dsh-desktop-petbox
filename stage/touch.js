@@ -18,21 +18,35 @@ const path = require('node:path');
 const ZONES = {
   hair: { emotion: '眯眼', lines: ['嘿嘿…', '欸…', '嗯…'] },
   head: { emotion: '眯眼', lines: ['唔…', '嘿嘿…', '嗯…'] },
+  // 耳朵比头发还敏感一点：摸耳鳍她最绷不住
+  ear: { emotion: '脸红', lines: ['呀…', '唔…', '痒…'] },
   neck: { emotion: '＞＜', lines: ['呜…', '唔…', '呀…'] },
   chest: { emotion: '脸红', lines: ['诶…', '呀…', '唔…'] },
   waist: { emotion: '脸红', lines: ['唔…', '哈…', '呃…'] },
   skirt: { emotion: '＞＜', lines: ['哼…', '呃…', '唔…'] },
   leg: { emotion: '＞＜', lines: ['呃…', '哼…', '呜…'] },
+  // 尾巴是鲸鱼那部分：捏一下能弹回去
+  tail: { emotion: '＞＜', lines: ['呀…', '别拽…', '唔…'] },
+  hand: { emotion: '眯眼', lines: ['嗯…', '嘿嘿…', '握…'] },
+  arm: { emotion: '眯眼', lines: ['欸…', '嗯…', '唔…'] },
   foot: { emotion: '流冷汗', lines: ['呀…', '啊…', '诶…'] },
   body: { emotion: null, lines: ['嗯…', '唔…', '呃…'] },
 };
 
 const MANY = {
   head: ['呃…', '唔…'],
+  ear: ['唔…', '呀…'],
   chest: ['呀…', '哼…'],
   skirt: ['哼…', '呃…'],
   leg: ['哼…', '唔…'],
+  tail: ['哼…', '呀…'],
   default: ['呃…', '哼…'],
+};
+// 部位的中文名：给桥那边出「有人摸了摸你的尾巴」这类句子用，也让点触账本好读
+const ZONE_LABEL = {
+  hair: '头发', head: '脑袋', ear: '耳朵', neck: '脖子', chest: '胸口',
+  waist: '腰', skirt: '裙摆', leg: '腿', foot: '脚', tail: '尾巴',
+  hand: '手', arm: '手臂', body: '身子',
 };
 const MISS = ['呀…', '诶…', '唔…'];
 const CLINGY = ['嘿嘿…', '嗯…', '唔…'];
@@ -177,6 +191,11 @@ function createTouchBook(opts) {
       ts: new Date(t).toISOString(),
       seq: ++seq,
       zone,
+      // 中文部位名和命中的真部件：桥那边用它出「摸了摸你的尾巴」，
+      // part 留着排查用（点腰报成胸那类问题，一眼就能看出命中的是哪根部件）
+      zoneLabel: ZONE_LABEL[zone] || '',
+      part: typeof p.part === 'string' ? p.part : '',
+      partId: typeof p.partId === 'string' ? p.partId : '',
       nx: Number.isFinite(Number(p.nx)) ? Number(p.nx) : null,
       ny: Number.isFinite(Number(p.ny)) ? Number(p.ny) : null,
       calibrated: !!p.calibrated,
@@ -211,6 +230,7 @@ function createTouchBook(opts) {
 
 module.exports = {
   ZONES,
+  ZONE_LABEL,
   MANY,
   MISS,
   CLINGY,

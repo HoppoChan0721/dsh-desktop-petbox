@@ -56,6 +56,7 @@ GET 走查询串，POST 走 JSON 体，体里的键优先。
 | `GET /panel?toggle=1` `GET /menu` | 开设置面板 / 看菜单结构 |
 | `GET /peer/list` `POST /peer/spawn` `POST /peer/spawn?off=1` | 同台：看报到情况 / 叫一只过来 / 收回去 |
 | `GET /body?preset=small\|medium\|standard` | 主模型的体型预设（菜单「外观 ▸ 体型预设」的控制口版本），不带参数报当前档 |
+| `GET /parts` `GET /hit?x=330&y=1000` | 这个模型有哪些部件 / 一对坐标会算成哪个部位（配点触分区、排查误判用） |
 
 命令行等价物：`node cli/pet.mjs say "台词" --voice --emotion shy`（其余子命令见 `node cli/pet.mjs`）。
 

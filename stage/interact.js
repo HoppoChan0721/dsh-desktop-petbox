@@ -27,11 +27,15 @@
   const REACTION = {
     hair: { move: 'nod' },
     head: { move: 'shake' },
+    ear: { move: 'shake' },
     neck: { move: 'shake' },
     chest: { move: 'nod' },
     waist: { move: 'nod' },
     skirt: { move: 'shake' },
     leg: { move: 'nod' },
+    tail: { move: 'shake' },
+    hand: { move: 'nod' },
+    arm: { move: 'nod' },
     foot: { move: 'nod' },
     body: { move: 'nod' },
   };
@@ -204,15 +208,175 @@
       return 'foot';
     }
 
+    // ---- 真部件级点触 -------------------------------------------------------
+    //
+    // 剪影比例分区只能到「腰／裙摆／腿」这种粗档：长裙压着腰、尾巴从腿前面绕过去，
+    // 点上去报的部位就是错的（点腰说她被摸胸，点尾巴说她被摸腿，都是这个原因）。
+    // 这里改成问模型自己：每个 drawable 的顶点、它挂在哪根 part 下都能从 Cubism 读出来，
+    // 点落在哪些三角形里就算命中哪些，取画在最上面那一层（drawOrder 最大），
+    // 头发／尾巴挡住的部位自然不算数。开销只在松手那一下，只算不渲染。
+    //
+    // partId → 中文名来自模型目录里的 *.cdi3.json，由主进程读出来推过来（没推就退化成 partId）。
+    // 换模型不用改代码：名字对不上就直接落回剪影分区，不会点不动。
+    let partNames = null;
+    function setParts(map) {
+      partNames = map && typeof map === 'object' ? map : null;
+      return !!partNames;
+    }
+
+    // Cubism 的 canvas 坐标原点在画布中心、y 朝上；PIXI 那边是左上角、y 朝下。
+    // toModelPosition 给的是模型原始像素坐标，按 canvas/original 的比例缩一下再挪到中心。
+    // 整体摇摆、体型偏移、窗口缩放都已经在 worldTransform 里，所以这里不用再补。
+    function coreFrame() {
+      try {
+        const im = model.internalModel;
+        const core = im && im.coreModel;
+        const d = core && core._model && core._model.drawables;
+        if (!d || !d.count) return null;
+        const cw = core.getCanvasWidth();
+        const ch = core.getCanvasHeight();
+        const ow = im.originalWidth || im.width || 0;
+        const oh = im.originalHeight || im.height || 0;
+        if (!(cw > 0 && ch > 0 && ow > 0 && oh > 0)) return null;
+        return { core, d, cx: cw / 2, cy: ch / 2, sx: cw / ow, sy: ch / oh };
+      } catch (e) { return null; }
+    }
+
+    // ---- 点触算哪个部件：直接问渲染管线 --------------------------------------
+    //
+    // 只看几何靠不住：这套模型 715 个 drawable 里，腿和鞋是 Cubism 的「蒙皮」网格，
+    // 核心给出的顶点只是绑定姿势，跟屏幕上实际画在哪不是一回事；尾巴、头发又是一整块大网格罩一片。
+    // 结果就是点腿报成尾巴、点腰报成胸——主人说的正是这一类。
+    //
+    // 所以改成让 GL 自己回答：drawable 按渲染顺序从下往上排好，二分找
+    // 「至少画到第几层，这个像素才不透明」，那一层就是点在最上面的东西。
+    // 715 层 → 10 次渲染，每次几毫秒，只在松手那一下算；判完立刻把完整画面渲回去，
+    // 全在同一个任务里做完，屏幕上看不到中间那些帧，也不会闪。
+    let maskSet = null;   // 哪些 drawable 被别的图层当遮罩源用
+    function pickDrawable(clientX, clientY) {
+      const f = coreFrame();
+      if (!f || !gl) return -1;
+      if (alphaAt(clientX, clientY) <= ALPHA_MIN) return -1;   // 本来点在透明处
+      const d = f.d;
+      if (!maskSet) {
+        maskSet = new Uint8Array(d.count);
+        for (let i = 0; i < d.count; i++) {
+          const ms = d.masks && d.masks[i];
+          if (!ms) continue;
+          for (let k = 0; k < ms.length; k++) maskSet[ms[k]] = 1;
+        }
+      }
+      // 遮罩源不能藏：Cubism 的裁剪是「先把遮罩源画进遮罩缓冲」，藏了遮罩源，
+      // 被它裁的图层整片消失，二分就会一路找到别人身上。所以只在「不是遮罩源」的图层里二分。
+      // 藏的时候连遮罩源一起藏：留着它们就不会变透明（这套模型的遮罩源本身就是主画面那一层），
+      // 二分永远走不到底。代价是被遮罩的图层会跟着遮罩源一起消失，但那是往下掉的，
+      // 不影响「最上面这一层是谁」。
+      const order = [];
+      for (let i = 0; i < d.count; i++) order.push(i);
+      // renderOrders 才是真正的绘制顺序（drawOrders 这套模型全是 500，没法用）。
+      // 而且 Cubism 里**数值小的画在前面**：脸 408 压着后脑勺 430，尾巴 39 压着腿。
+      // 所以降序排：order[0] = 最前面那一层。
+      order.sort((a, b) => (Number(d.renderOrders[b]) || 0) - (Number(d.renderOrders[a]) || 0));
+      const saved = new Array(d.count);
+      for (let i = 0; i < d.count; i++) saved[i] = d.opacities[i];
+      // 二分的是「从最前面往后藏掉几层」：藏着藏着这个像素变透明了，
+      // 那刚好藏掉的那一层就是点在最前面的东西。
+      const n = order.length;
+      const apply = (k) => {
+        for (let j = 0; j < n; j++) {
+          const i = order[j];
+          d.opacities[i] = j < k ? 0 : saved[i];
+        }
+      };
+      let lo = 1;
+      let hi = n;
+      let hidden = 0;                 // 最少藏几层才会变透明
+      try {
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          apply(mid);
+          app.renderer.render(app.stage);
+          if (alphaAt(clientX, clientY) > ALPHA_MIN) lo = mid + 1;
+          else { hidden = mid; hi = mid - 1; }
+        }
+      } catch (e) { hidden = 0; } finally {
+        for (let i = 0; i < d.count; i++) d.opacities[i] = saved[i];
+        try { app.renderer.render(app.stage); } catch (e) {}
+      }
+      return hidden ? order[hidden - 1] : -1;
+    }
+
+    // 点 → 部件。返回 null = 没命中（交给剪影分区兜底）
+    function partAt(clientX, clientY) {
+      const f = coreFrame();
+      if (!f) return null;
+      const best = pickDrawable(clientX, clientY);
+      if (best < 0) return null;
+      const d = f.d;
+      const partIndex = d.parentPartIndices[best];
+      const partId = (f.core._partIds && f.core._partIds[partIndex]) || '';
+      const name = (partNames && (partNames[partId] || partNames[partIndex])) || partId || '';
+      return { name, partId, partIndex, drawable: best };
+    }
+
+    // 部件中文名 → 分区。顺序有讲究：先长词（手臂要排在手指前面），裙子整块都算裙摆。
+    const PART_ZONE = [
+      [/耳朵/, 'ear'],
+      [/手臂|大臂|袖子/, 'arm'],
+      [/^手$|手(?!臂)/, 'hand'],
+      [/尾巴/, 'tail'],
+      [/脖子/, 'neck'],
+      [/胸|领子/, 'chest'],
+      [/腰/, 'waist'],
+      [/裙/, 'skirt'],
+      [/呆毛|前发|侧发|后发|后脑勺|头发|发饰/, 'hair'],
+      [/腿|脚|鞋|袜/, 'leg'],
+      [/头|脸|眼|眉|嘴|鼻|五官|口内|牙/, 'head'],
+    ];
+    // 腿这块 part 从上到下一整块（袜子、脚踝、鞋都画在里面），蒙皮网格拿不到顶点位置，
+    // 所以不再按 part 自己的包围盒切，而是看这一点在**整只剪影**里有多靠下：
+    // 最后 7% 算脚。脱了鞋点脚背就是丝足，点小腿还是小腿。
+    const FOOT_BAND = 0.07;
+
+    function zoneOfPart(hit, my) {
+      if (!hit || !hit.name) return '';
+      for (const [re, zone] of PART_ZONE) {
+        if (!re.test(hit.name)) continue;
+        if (zone === 'leg' && Number.isFinite(my) && my > 1 - FOOT_BAND) return 'foot';
+        return zone;
+      }
+      return '';
+    }
+
+    // 调试用：给一对坐标，返回它算成哪个部位、命中的是哪根 part
+    function inspectHit(clientX, clientY) {
+      const hit = partAt(clientX, clientY);
+      const at = toSilhouette(clientX, clientY);
+      const band = at ? zoneOf(at.my, at.mx, profile) : 'body';
+      const zone = zoneOfPart(hit, at ? at.my : NaN) || band;
+      return { zone, band, part: hit ? hit.name : '', partId: hit ? hit.partId : '', drawable: hit ? hit.drawable : -1, calibrated: at ? !!at.calibrated : false, names: partNames ? Object.keys(partNames).length : 0 };
+    }
+
     // ---- 点她 --------------------------------------------------------------
     function tap(clientX, clientY) {
       if (!interactive) return null;
       if (!(overModel(clientX, clientY))) return null;
       const at = toSilhouette(clientX, clientY);
       if (!at) return null;
-      const zone = zoneOf(at.my, at.mx, profile);
+      // 默认还是按剪影分区（稳）。部件级判定能用，但这套模型是重蒙皮 + 重遮罩的，
+      // 拿不准的地方比拿得准的多，所以先用 window.__stagePartZones = true 单独开着试，
+      // 用 /hit?x=&y= 能同时看到「真部件」和「剪影分区」两个结果。
+      let hit = null;
+      let zone = zoneOf(at.my, at.mx, profile);
+      if (window.__stagePartZones) {
+        hit = partAt(clientX, clientY);
+        zone = zoneOfPart(hit, at.my) || zone;
+      }
       const round = (v) => Math.round(Math.min(1, Math.max(0, v)) * 1000) / 1000;
-      const payload = { nx: round(at.mx), ny: round(at.my), zone, calibrated: !!at.calibrated, at: Date.now() };
+      const payload = {
+        nx: round(at.mx), ny: round(at.my), zone, calibrated: !!at.calibrated, at: Date.now(),
+        part: hit ? hit.name : '', partId: hit ? hit.partId : '',
+      };
       react(zone);
       if (bridge && bridge.tap) bridge.tap(payload);
       return payload;
@@ -419,6 +583,8 @@
       },
       get smart() { return smart; },
       alphaAt,
+      setParts,
+      inspectHit,
       headAnchor,
       footAnchor,
       feetAnchor,

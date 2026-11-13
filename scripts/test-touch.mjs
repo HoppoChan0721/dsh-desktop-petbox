@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import touchModule from '../stage/touch.js';
 
-const { ZONES, MANY, MISS, CLINGY, decide, affinityLevel, dayKey, infoOf, createTouchBook, TIERS } = touchModule;
+const { ZONES, ZONE_LABEL, MANY, MISS, CLINGY, decide, affinityLevel, dayKey, infoOf, createTouchBook, TIERS } = touchModule;
 
 let pass = 0;
 let fail = 0;
@@ -69,12 +69,21 @@ console.log('decide：部位表情与语气词');
   ok(many.tone === null && many.many, '翻脸优先于语境');
 }
 {
-  const r = decide({ zone: 'tail', count: 1, aff: {} });
+  const r = decide({ zone: 'necklace', count: 1, aff: {} });
   ok(r.zone === 'body', '未知部位退回 body');
   ok(typeof r.text === 'string' && r.text.length > 0, 'body 也有台词', r.text);
   const a = decide({ zone: 'leg', count: 1, aff: {}, rand: () => 0 });
   const b = decide({ zone: 'leg', count: 1, aff: {}, rand: () => 0.999 });
   ok(a.text === ZONES.leg.lines[0] && b.text === ZONES.leg.lines[ZONES.leg.lines.length - 1], 'rand 落到池子两端');
+}
+{
+  // 真部件判定把部位切细了：新加的这几个各有各的台词池，也各有一个中文名给桥用
+  for (const z of ['ear', 'tail', 'hand', 'arm']) {
+    ok(!!ZONES[z] && !!ZONE_LABEL[z], `新部位可用：${z}`, z);
+    const r = decide({ zone: z, count: 1, aff: {}, rand: () => 0 });
+    ok(r.zone === z && r.emotion === ZONES[z].emotion, `走自己的池子：${z}`, r.zone);
+  }
+  ok(Object.keys(ZONE_LABEL).length >= Object.keys(ZONES).length, '每个部位都有中文名');
 }
 {
   for (const z of Object.keys(ZONES)) {

@@ -438,8 +438,26 @@ app.whenReady().then(async () => {
     push({ type: 'form', names: form, align: true });
     return form;
   }
+  // 部件名表：模型目录里的 *.cdi3.json 有 partId → 中文名（「腿」「尾巴」「胸」这些）。
+  // 点触要按真部件分区，页面读不到这个文件，所以主进程读好推过去；没有就推空表，页面退回剪影分区。
+  let partNamesCache = null;
+  function readPartNames() {
+    if (partNamesCache) return partNamesCache;
+    const names = {};
+    let file = '';
+    try {
+      file = fs.readdirSync(MODEL_DIR).find((f) => /\.cdi3\.json$/i.test(f)) || '';
+      if (file) {
+        const j = JSON.parse(fs.readFileSync(path.join(MODEL_DIR, file), 'utf8').replace(/^\uFEFF/, ''));
+        for (const p of (j.Parts || [])) if (p && p.Id) names[p.Id] = String(p.Name || p.Id);
+      }
+    } catch (e) { /* 没有 cdi3 就只能靠剪影分区 */ }
+    partNamesCache = { file, names };
+    return partNamesCache;
+  }
+  const pushParts = () => push({ type: 'parts', names: readPartNames().names });
   win.webContents.on('did-finish-load', () => {
-    pushReplyConfig(); pushVolume(); pushSmart();
+    pushReplyConfig(); pushVolume(); pushSmart(); pushParts();
     if (IS_PEER) pushForm(peerForm || pickForm());
     else pushBody();
   });
@@ -1021,6 +1039,19 @@ app.whenReady().then(async () => {
       const z = await win.webContents.executeJavaScript('window.__stageZones ? window.__stageZones() : null');
       return { zones: z };
     },
+    // 这个模型有哪些部件可以按（cdi3 里的中文名），配分区表、换模型时用
+    '/parts': () => {
+      const { file, names } = readPartNames();
+      return { cdi3: file, count: Object.keys(names).length, parts: names };
+    },
+    // 点触自检：给一对窗口坐标，返回真部件判定 + 命中的 part。/hit?x=330&y=1000
+    '/hit': async (q) => {
+      const x = Number(q.get('x'));
+      const y = Number(q.get('y'));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('缺 x / y');
+      const hit = await win.webContents.executeJavaScript(`window.__stageHit ? window.__stageHit(${x}, ${y}) : null`);
+      return { at: { x, y }, hit };
+    },
     // 读几个参数当前值：排查「某条驱动到底有没有生效」用（比如摆动的身体角）
     '/params': async (q) => {
       const ids = (q.get('ids') || 'AngleX,ParamBodyAngleX,ParamBodyAngleZ,ParamAngleX').split(',').map((s) => s.trim()).filter(Boolean);
@@ -1557,7 +1588,7 @@ app.whenReady().then(async () => {
   ipcMain.on('stage:menu', () => popupMenu());
   // 页面说「我的指令监听挂好了」→ 把配置再推一遍。did-finish-load 那一枪有时会赶在
   // 模型加载完、监听注册好之前发出，页面收不到，回复钮常驻就会掉回默认值。
-  ipcMain.on('stage:ready', () => { pushReplyConfig(); pushVolume(); pushSmart(); if (IS_PEER) pushForm(peerForm || pickForm()); else pushBody(); });
+  ipcMain.on('stage:ready', () => { pushReplyConfig(); pushVolume(); pushSmart(); pushParts(); if (IS_PEER) pushForm(peerForm || pickForm()); else pushBody(); });
   ipcMain.on('stage:reply', (_e, text) => { sendReply(text).catch(() => {}); });
   ipcMain.on('panel:close', () => { if (panel && !panel.isDestroyed()) panel.close(); });
   ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT, keepalive: keepAlive.status(), voice: voiceReady() }));
