@@ -20,6 +20,8 @@ const DEFAULTS = {
   // 空 = 用仓库里的 models\；本机的实际路径写在 data\stage-config.json（不进仓库）
   modelDir: '',
   cubismCore: '',        // Cubism Core 的 js 路径；空 = 自动在 stage\vendor、仓库 vendor、模型目录里找
+  // 同台：叫第二只过来时用它自己的模型（留空 = 跟主人那只同一个模型）
+  peerModelDir: '',
   interactive: true,     // 分区互动：点她按部位反应
   cursorTrack: true,     // 指针追踪：视线和身体跟着鼠标
   onTop: true,           // 置顶

@@ -18,9 +18,13 @@ const Touch = require('./touch');
 const Mood = require('./mood');
 const Plan = require('./plan');
 
-// 单实例：托盘图标点第二遍、开机自启和手动启动撞在一起时，别再开第二只
+// 单实例：托盘图标点第二遍、开机自启和手动启动撞在一起时，别再开第二只。
+// 例外是「同台」的副实例（--role=peer）：它们本来就该多开，不抢这把锁。
 let activeWin = null;
-const gotLock = app.requestSingleInstanceLock();
+const ROLE = (() => { const hit = process.argv.find((a) => a.startsWith('--role=')); return hit ? hit.slice(7) : 'main'; })();
+const INSTANCE = (() => { const hit = process.argv.find((a) => a.startsWith('--instance=')); return hit ? Math.max(1, Number(hit.slice(11)) || 1) : 1; })();
+const IS_PEER = ROLE === 'peer';
+const gotLock = IS_PEER ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
@@ -53,7 +57,10 @@ const CORE_FILE = (() => {
 
 // 窗口大小和位置记在 userData 里，重启不用重新调。
 // 只存一百来个字节，不进仓库（userData 在系统盘，仓库只放代码）。
-function boundsPath() { return path.join(app.getPath('userData'), 'stage-window.json'); }
+// 每只桌上角色各存一份窗口位置：同台时副实例不能跟主人那只抢同一个文件
+function boundsPath() {
+  return path.join(app.getPath('userData'), INSTANCE > 1 ? 'stage-window-' + INSTANCE + '.json' : 'stage-window.json');
+}
 function loadBounds() {
   try {
     const b = JSON.parse(fs.readFileSync(boundsPath(), 'utf8'));
@@ -134,12 +141,26 @@ app.whenReady().then(async () => {
   });
 
   const saved = loadBounds();
+  // 副实例第一次出现：并排贴在主人那只旁边（主实例 spawn 时把自己的窗口矩形塞进来）
+  const spawnAt = (() => {
+    const hit = process.argv.find((a) => a.startsWith('--spawn-at='));
+    if (!hit) return null;
+    const [x, y, w, h] = hit.slice(11).split(',').map(Number);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return {
+      // 0.92 个身位：两只肩并肩但不叠在一起（太近了会互相挡脸）
+      x: Math.round(x + (Number(w) || 600) * 0.92),
+      y: Math.round(y),
+      width: Number(w) || undefined,
+      height: Number(h) || undefined,
+    };
+  })();
   let cfg = Cfg.load();
   const win = new BrowserWindow({
-    width: saved ? saved.width : 531,
-    height: saved ? saved.height : 950,
-    x: saved ? saved.x : undefined,
-    y: saved ? saved.y : undefined,
+    width: saved ? saved.width : (spawnAt && spawnAt.width ? spawnAt.width : 531),
+    height: saved ? saved.height : (spawnAt && spawnAt.height ? spawnAt.height : 950),
+    x: saved ? saved.x : (spawnAt ? spawnAt.x : undefined),
+    y: saved ? saved.y : (spawnAt ? spawnAt.y : undefined),
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -358,6 +379,7 @@ app.whenReady().then(async () => {
   // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
   // 端口刻意避开现役桌宠那套 61942/61943/9333 和 dsh-pet-bridge 的 61944。
   const PORT = Number(arg('port', process.env.WHALE_STAGE_PORT || '61945'));
+  let ACTUAL_PORT = 0;
   const push = (cmd) => {
     try { if (win && !win.isDestroyed()) win.webContents.send('stage:command', cmd); return true; } catch (e) { return false; }
   };
@@ -436,8 +458,9 @@ app.whenReady().then(async () => {
     dropWav: (id) => { try { fs.unlinkSync(path.join(VOICE_DIR, id + '.wav')); } catch (e) {} },
     log: (m) => console.log('[keepalive] ' + m),
   });
-  // 启动两秒半后先探一次，之后按配置的间隔
-  keepAlive.start({ intervalMs: Math.max(1, Number(cfg.ttsKeepMinutes) || 5) * 60000 });
+  // 启动两秒半后先探一次，之后按配置的间隔。
+  // 副实例（同台的第二只）不跑保活：一只管服务就够了，多一只只会多抢一次模型显存。
+  if (!IS_PEER) keepAlive.start({ intervalMs: Math.max(1, Number(cfg.ttsKeepMinutes) || 5) * 60000 });
 
   // ---- 第 6 步：阶段气泡 / 回复她 / plan 执行 ---------------------------------
   // 这三样是 DSH 侧桥（dsh-pet-bridge）在用的口子，原来在外壳里，现在搬到舞台，协议不变。
@@ -642,6 +665,115 @@ app.whenReady().then(async () => {
       }
     }
     return { applied, skipped };
+  }
+
+  // ---- 同台：让第二只（甚至第三只）模型也上桌 ------------------------------
+  // 做法是多开一个进程，用 --role=peer 起：它不抢单实例锁、不开托盘和面板、不看会话、
+  // 不跑 TTS 保活，只把「我在这个端口、窗口在这个位置」报到主实例。
+  // 主实例负责导演：两只离得近就互相看一眼，再近一点搭一句话。
+  // 副实例第一次出现的位置由 --spawn-at 给（主实例把自己的窗口矩形塞进去）。
+  const peerHostPort = Number(process.env.WHALE_PEER_HOST || 0) || (() => {
+    const hit = process.argv.find((a) => a.startsWith('--peer-of='));
+    return hit ? Number(hit.slice(10)) || 61945 : 61945;
+  })();
+  const peers = new Map();     // 主实例：port → { port, bounds, pid, at }
+  let peerChild = null;
+
+  const peerList = () => Array.from(peers.values()).map((p) => ({
+    port: p.port, pid: p.pid || 0, bounds: p.bounds || null, age: Date.now() - p.at,
+  }));
+
+  function postPeer(port, route, body) {
+    if (!Number.isFinite(port) || port <= 0) return Promise.resolve(null);
+    return fetch('http://127.0.0.1:' + port + route, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
+      signal: AbortSignal.timeout(1500),
+    }).catch(() => null);
+  }
+
+  // 副实例：报到 + 位置变更重报。主实例靠 bounds 算「够不够近」
+  function registerToPeerHost(port) {
+    const send = () => {
+      if (!win || win.isDestroyed()) return;
+      postPeer(peerHostPort, '/peer/hello', { port, pid: process.pid, bounds: win.getBounds() });
+    };
+    send();
+    let t = null;
+    const again = () => { clearTimeout(t); t = setTimeout(send, 700); };
+    win.on('move', again);
+    win.on('resize', again);
+    // 主实例没了就别留在桌上当孤儿（被强杀、崩溃、托盘退出没来得及通知都算）
+    let misses = 0;
+    setInterval(() => {
+      fetch('http://127.0.0.1:' + peerHostPort + '/peer/list', { signal: AbortSignal.timeout(1500) })
+        .then((r) => { if (r.ok) misses = 0; else misses++; })
+        .catch(() => { misses++; })
+        .finally(() => { if (misses >= 3) app.quit(); });
+    }, 5000);
+  }
+
+  function sayByeToHost() {
+    if (ACTUAL_PORT) postPeer(peerHostPort, '/peer/bye', { port: ACTUAL_PORT });
+  }
+
+  // 主实例：叫一只过来 / 收回去
+  function spawnPeer() {
+    if (peerChild && peerChild.pid) return { ok: true, already: true, pid: peerChild.pid };
+    const root = path.join(STAGE_DIR, '..');
+    const b = win && !win.isDestroyed() ? win.getBounds() : { x: 200, y: 200, width: 600 };
+    const args = [root, '--role=peer', '--port=0', '--peer-of=' + PORT, '--instance=2',
+      '--spawn-at=' + [b.x, b.y, b.width || 600, b.height || 900].join(',')];
+    if (cfg.peerModelDir) args.push('--model=' + String(cfg.peerModelDir));
+    try {
+      peerChild = spawn(process.execPath, args, { detached: true, stdio: 'ignore', cwd: root });
+      peerChild.on('exit', () => { peerChild = null; });
+      peerChild.unref();
+      return { ok: true, pid: peerChild.pid };
+    } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  }
+
+  function killPeer() {
+    const pid = peerChild && peerChild.pid;
+    peerChild = null;
+    peers.clear();
+    if (!pid) return { ok: true, killed: 0 };
+    try { spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }); } catch (e) {}
+    return { ok: true, killed: pid };
+  }
+
+  // 主实例当导演：每 1.5 秒看一眼两边的距离
+  let peerLastLook = 0;
+  let peerLastTalk = 0;
+  function startPeerWatch() {
+    setInterval(() => {
+      if (!win || win.isDestroyed() || !peers.size) return;
+      const b = win.getBounds();
+      const cx = b.x + b.width / 2;
+      const cy = b.y + b.height * 0.35;
+      for (const p of peers.values()) {
+        const pb = p.bounds;
+        if (!pb) continue;
+        const dx = pb.x + pb.width / 2 - cx;
+        const dy = pb.y + pb.height * 0.35 - cy;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 1400) continue;                       // 离太远，各玩各的
+        const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+        const flip = dir === 'left' ? 'right' : dir === 'right' ? 'left' : dir;
+        const now = Date.now();
+        if (now - peerLastLook > 2600) {
+          peerLastLook = now;
+          push({ type: 'look', direction: dir });
+          postPeer(p.port, '/look', { direction: flip });
+        }
+        if (dist < 420 && now - peerLastTalk > 15000) {
+          peerLastTalk = now;
+          const line = ['别挤我…', '这边视野好', '你也在这儿', '站远点啦'][Math.floor(Math.random() * 4)];
+          postPeer(p.port, '/say', { text: line, ms: 3200 });
+        }
+      }
+    }, 1500);
   }
 
   const routes = {
@@ -892,8 +1024,11 @@ app.whenReady().then(async () => {
     // 桥（dsh-pet-bridge，61944）现在的配置是 petSayUrl=61943/say、petStageUrl=61942，
     // 所以控制口额外监听这两个端口，桥不用改一行配置就能连上新舞台。
     '/status': () => ({
-      port: PORT,
+      port: ACTUAL_PORT || PORT,
       ports: listenPorts(),
+      role: ROLE,
+      instance: INSTANCE,
+      peers: peerList(),
       interactive: cfg.interactive !== false,
       bridge: cfg.bridge !== false,
       tick: cfg.tickBubble !== false,
@@ -929,6 +1064,27 @@ app.whenReady().then(async () => {
       return { btn: cfg.replyBtn !== false, always: !!cfg.replyAlways, url: String(replyUrl()) };
     },
     // 打断当前动作：会话联动的 watcher 在状态真变了的时候会先打一枪再重投
+    // ---- 同台 ----------------------------------------------------------------
+    '/peer/hello': (q) => {
+      const port = Number(q.get('port'));
+      if (!Number.isFinite(port) || port <= 0) throw new Error('缺 port');
+      let bounds = null;
+      try { const raw = q.get('bounds'); bounds = raw ? JSON.parse(raw) : null; } catch (e) { bounds = null; }
+      peers.set(port, { port, bounds, pid: Number(q.get('pid')) || 0, at: Date.now() });
+      return { peers: peerList() };
+    },
+    '/peer/bye': (q) => {
+      const port = Number(q.get('port'));
+      if (Number.isFinite(port)) peers.delete(port);
+      return { peers: peerList() };
+    },
+    '/peer/list': () => ({ peers: peerList(), child: peerChild ? peerChild.pid : 0, role: ROLE }),
+    '/peer/spawn': (q) => (q.get('off') !== null ? killPeer() : spawnPeer()),
+    '/look': (q) => {
+      const dir = String(q.get('direction') || 'center');
+      push({ type: 'look', direction: dir });
+      return { pushed: true, direction: dir };
+    },
     '/api/stop': () => {
       push({ type: 'stop' });
       return { stopped: true };
@@ -1220,6 +1376,11 @@ app.whenReady().then(async () => {
       { label: '外观', submenu: [
         { label: '复原服装（衣服回默认档）', click: () => push({ type: 'outfit-reset' }) },
       ] },
+      { label: '同台', submenu: [
+        { label: peerChild ? '再叫一只过来' : '叫另一只过来', click: () => { const r = spawnPeer(); if (r && r.error) console.log(JSON.stringify({ peerSpawn: r })); } },
+        { label: '收回去', enabled: !!peerChild, click: () => killPeer() },
+        { label: peers.size ? '现在有 ' + peers.size + ' 只报到' : '现在只有她一只', enabled: false },
+      ] },
       { label: '重新载入舞台', click: () => loadStage() },
       { type: 'separator' },
       { label: win && win.isVisible() ? '藏起来（托盘里点左键叫回）' : '显示出来', click: () => { if (!win) return; win.isVisible() ? win.hide() : win.show(); } },
@@ -1283,7 +1444,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('panel:size', (_e, p) => applySize(p && p.w, p && p.h));
   ipcMain.handle('panel:save', (_e, patch) => applyConfig(patch));
 
-  createTray();
+  // 托盘只有主人那只配；副实例是同台的客人，没有自己的托盘和设置面板
+  if (!IS_PEER) createTray();
   win.on('closed', () => {
     try { if (tray) tray.destroy(); } catch (e) {}
     try { if (panel && !panel.isDestroyed()) panel.close(); } catch (e) {}
@@ -1343,21 +1505,28 @@ app.whenReady().then(async () => {
       console.log(JSON.stringify({ port, label, error: (e && e.message) || String(e) }));
     });
     srv.listen(port, '127.0.0.1', () => {
-      portsListening.push(port);
-      console.log(JSON.stringify({ port, label, listening: true }));
+      const a = srv.address();
+      const actual = a && a.port ? a.port : port;
+      if (label === 'control') ACTUAL_PORT = actual;   // 别名口别把主口覆盖掉
+      portsListening.push(actual);
+      console.log(JSON.stringify({ port: actual, label, listening: true }));
+      if (IS_PEER) registerToPeerHost(actual);
     });
     return srv;
   }
 
   // 主口 61945；另外两个是给 DSH 桥的别名口（桥里写死 61942/61943），
-  // 这样不用改桥的配置就能连上新舞台。
-  const aliasList = String(arg('alias-ports', process.env.WHALE_STAGE_ALIAS_PORTS || '61942,61943'))
+  // 这样不用改桥的配置就能连上新舞台。副实例（同台）只开自己那一个随机口。
+  const aliasList = IS_PEER ? [] : String(arg('alias-ports', process.env.WHALE_STAGE_ALIAS_PORTS || '61942,61943'))
     .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0 && n !== PORT);
   const servers = [listen(PORT, 'control'), ...aliasList.map((p) => listen(p, 'alias'))];
-  // 会话联动要等别名口起来再拉：watcher 按老地址（61942/61943）往那儿砸气泡和表情
-  setTimeout(() => { try { startWatcher(); } catch (e) {} }, 1500);
+  // 会话联动要等别名口起来再拉：watcher 按老地址（61942/61943）往那儿砸气泡和表情。
+  // 副实例不看会话，只跟着主人那只做反应。
+  if (!IS_PEER) setTimeout(() => { try { startWatcher(); } catch (e) {} }, 1500);
+  if (!IS_PEER) startPeerWatch();
   app.on('will-quit', () => {
     try { stopWatcher(); } catch (e) {}
+    try { if (IS_PEER) sayByeToHost(); else killPeer(); } catch (e) {}
     for (const s of servers) { try { s.close(); } catch (e) {} }
   });
 });
