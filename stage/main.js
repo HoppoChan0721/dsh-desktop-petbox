@@ -1070,14 +1070,9 @@ app.whenReady().then(async () => {
     return panel.getBounds();
   }
 
-  // 托盘点开面板之后，点面板外面就收起——弹出式面板的常规手势。
-  // 记一下「刚刚是被点外面关掉的」，不然托盘左键那一下：blur 先关、click 后到，
-  // 就会当成「没开过」又开一个新的，看着像点了关不掉。
-  let panelBlurClosedAt = 0;
-
   function panelInfo() {
     const open = !!(panel && !panel.isDestroyed());
-    return { open, visible: open ? panel.isVisible() : false, focused: open ? panel.isFocused() : false, autoClose: cfg.panelAutoClose === true };
+    return { open, visible: open ? panel.isVisible() : false, focused: open ? panel.isFocused() : false };
   }
 
   // 托盘左键 = 开关设置面板（她藏起来的时候先把她叫回来）。
@@ -1087,8 +1082,7 @@ app.whenReady().then(async () => {
       if (panel.isVisible()) { panel.close(); return false; }
       panel.show(); panel.focus(); return true;
     }
-    // 上一拍是被「点外面」关的 → 这一下就是在收它，别再开回来
-    if (Date.now() - panelBlurClosedAt < 600) return false;
+    // 上一拍是「点外面」关的这件事不存在了：面板失焦不再自动收起，左键就是老老实实的开关
     openPanel();
     return true;
   }
@@ -1141,14 +1135,6 @@ app.whenReady().then(async () => {
       }, 400);
     });
     self.on('closed', () => { if (saveTimer) clearTimeout(saveTimer); if (panel === self || !panel || panel.isDestroyed()) panel = null; });
-    // 点面板外面（失焦）就收起来。开关在面板里，默认开：
-    // 这套东西别人也下载，有人喜欢让它开着不动，那就得能关。
-    self.on('blur', () => {
-      if (cfg.panelAutoClose !== true) return;
-      if (!self || self.isDestroyed()) return;
-      panelBlurClosedAt = Date.now();
-      self.close();
-    });
     return self;
   }
 
