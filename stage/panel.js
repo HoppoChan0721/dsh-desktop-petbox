@@ -20,6 +20,15 @@ function say(text, kind) {
   statusEl.textContent = text || '';
 }
 
+// 常驻是回复钮的子模式：主开关关着的时候它没意义。灰掉并说清楚，
+// 不然只勾常驻会以为「开关没生效」——钮根本不会出现，因为主开关是关的。
+function syncReplyGate() {
+  const on = $('replyBtn').checked;
+  $('replyAlways').disabled = !on;
+  $('replyAlways').title = on ? '' : '先打开上面的回复钮，常驻才有意义';
+  if (!on) $('replyAlways').checked = false;
+}
+
 async function save(patch, note) {
   try {
     const r = await window.stagePanel.save(patch);
@@ -80,6 +89,7 @@ function paintKeepAlive(ka) {
   $('tickBubble').checked = cfg.tickBubble !== false;
   $('replyBtn').checked = cfg.replyBtn !== false;
   $('replyAlways').checked = cfg.replyAlways === true;
+  syncReplyGate();
   $('panelAutoClose').checked = cfg.panelAutoClose === true;
   $('sessionWatch').checked = cfg.sessionWatch !== false;
   $('ttsKeepAlive').checked = cfg.ttsKeepAlive !== false;
@@ -122,8 +132,17 @@ $('onTop').addEventListener('change', () => save({ onTop: $('onTop').checked }, 
 $('smartIgnore').addEventListener('change', () => save({ smartIgnore: $('smartIgnore').checked }, '智能穿透已切换'));
 $('bridge').addEventListener('change', () => save({ bridge: $('bridge').checked }, '点触桥已切换'));
 $('tickBubble').addEventListener('change', () => save({ tickBubble: $('tickBubble').checked }, '阶段气泡已切换'));
-$('replyBtn').addEventListener('change', () => save({ replyBtn: $('replyBtn').checked }, '回复钮已切换'));
-$('replyAlways').addEventListener('change', () => save({ replyAlways: $('replyAlways').checked }, '回复钮常驻已切换'));
+$('replyBtn').addEventListener('change', () => {
+  const on = $('replyBtn').checked;
+  syncReplyGate();
+  save({ replyBtn: on, replyAlways: $('replyAlways').checked }, on ? '回复钮已打开' : '回复钮已关，常驻一并关掉');
+});
+$('replyAlways').addEventListener('change', () => {
+  const on = $('replyAlways').checked;
+  // 开常驻就等于要它一直在，顺手把主开关也打开
+  if (on && !$('replyBtn').checked) { $('replyBtn').checked = true; syncReplyGate(); }
+  save({ replyAlways: on, replyBtn: $('replyBtn').checked }, on ? '回复钮常驻已开' : '回复钮改为说完话才冒');
+});
 $('panelAutoClose').addEventListener('change', () => save({ panelAutoClose: $('panelAutoClose').checked }, $('panelAutoClose').checked ? '点外面自动收起' : '面板会一直开着'));
 $('sessionWatch').addEventListener('change', () => save({ sessionWatch: $('sessionWatch').checked }, $('sessionWatch').checked ? '会话联动已开' : '会话联动已关'));
 $('ttsKeepAlive').addEventListener('change', () => save({ ttsKeepAlive: $('ttsKeepAlive').checked }, '语音保活已切换'));

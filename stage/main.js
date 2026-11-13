@@ -936,7 +936,10 @@ app.whenReady().then(async () => {
 
   // 配置改了就地生效；帧率/摆动要重载舞台页才吃到
   function applyConfig(patch) {
-    const p = patch || {};
+    const p = { ...(patch || {}) };
+    // 常驻只是回复钮的一种模式：主开关关着的时候开常驻，钮永远不会出现，
+    // 面板上看着就像「常驻开关没生效」。三条入口（面板/菜单/接口）都在这里汇合，补一次就一致了。
+    if (p.replyAlways === true || p.replyAlways === 'true') p.replyBtn = true;
     const before = Cfg.load();
     cfg = Cfg.save(p);
     if ('interactive' in p) push({ type: 'interactive', value: cfg.interactive !== false });
