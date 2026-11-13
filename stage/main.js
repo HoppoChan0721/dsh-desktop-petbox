@@ -329,6 +329,9 @@ app.whenReady().then(async () => {
   }
 
   const taps = [];
+  // 复读防护：同一句话在 1.2 秒内又来一次，基本就是同一条被投了两遍
+  // （桥重试、两条通道同时发、客户端没有去抖）。念两遍比漏一遍更让人出戏，所以直接吞掉。
+  let lastSay = null;
   ipcMain.on('stage:tap', (_e, payload) => {
     const r = book.record(payload || {});
     if (!r) return;
@@ -892,6 +895,13 @@ app.whenReady().then(async () => {
       const emo = q.get('emotion');
       const mo = q.get('motion');
       const wantVoice = q.get('voice') === '1' || q.get('voice') === 'true';
+      // 复读防护：同一句话（连语音开关都一样）1.2 秒内来两遍，只放第一遍。
+      const saidAt = Date.now();
+      if (lastSay && lastSay.text === text && lastSay.voice === wantVoice && saidAt - lastSay.at < 1200) {
+        console.log(JSON.stringify({ sayDup: { text: text.slice(0, 24), gapMs: saidAt - lastSay.at } }));
+        return { pushed: false, skipped: '重复投递，已经念过了', text };
+      }
+      lastSay = { text, voice: wantVoice, at: saidAt };
       const cueRes = readCues(q);
       // 这一句开始之前挂着的动作排期作废：新的一句自己带动作，别让上一条的 [点头] 半路插进来
       clearCueTimers();

@@ -87,6 +87,10 @@
 
     async function play(url) {
       if (!url) return false;
+      // 同一个 wav 一秒内又来一次：同一条指令被投了两遍，别再从头念一遍。
+      // 这里拦一道是因为主进程那边只能拦「同一句话」，同一段音频换个说法还会漏过来。
+      const now = performance.now();
+      if (url === lastUrl && now - startedAt < 1200) return false;
       try {
         stop();
         const c = ensureCtx();

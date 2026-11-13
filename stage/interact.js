@@ -136,8 +136,18 @@
         let r = -1;
         for (let x = 0; x < W; x++) if (rowBuf[x * 4 + 3] > ALPHA_MIN) { l = x; break; }
         if (l < 0) continue;
+        // 顺手记下这一行的每一段：头发、尾巴、手这些「伸出去的」跟身子在这一行里是分开的几段，
+        // 只记左右边界的话，侧面头发会被当成胸口、尾巴会被当成腿。
+        const segs = [];
+        let open = -1;
+        for (let x = l; x < W; x++) {
+          const on = rowBuf[x * 4 + 3] > ALPHA_MIN;
+          if (on && open < 0) open = x;
+          else if (!on && open >= 0) { segs.push([open / Math.max(1, W - 1), (x - 1) / Math.max(1, W - 1)]); open = -1; }
+        }
+        if (open >= 0) segs.push([open / Math.max(1, W - 1), 1]);
         for (let x = W - 1; x >= 0; x--) if (rowBuf[x * 4 + 3] > ALPHA_MIN) { r = x; break; }
-        rows.push({ y: yy / Math.max(1, H - 1), l: l / Math.max(1, W - 1), r: r / Math.max(1, W - 1), w: (r - l) / Math.max(1, W - 1) });
+        rows.push({ y: yy / Math.max(1, H - 1), l: l / Math.max(1, W - 1), r: r / Math.max(1, W - 1), w: (r - l) / Math.max(1, W - 1), segs });
       }
       if (rows.length < 6) return null;
       let left = 1;
@@ -153,6 +163,11 @@
         if (!neck || row.w < neck.w) neck = row;
       }
       const anchors = { neck: neck ? (neck.y - bbox.top) / h : 0.2 };
+      // 身体中线：取头顶那几行的中点。头是对称的，比整块包围盒（被尾巴拉偏）靠谱。
+      const topRows = rows.filter((row) => row.y < bbox.top + h * 0.15);
+      anchors.center = topRows.length
+        ? topRows.reduce((acc, row) => acc + (row.l + row.r) / 2, 0) / topRows.length
+        : 0.5;
       return { bbox, rows, anchors, at: Date.now(), canvasH: H };
     }
 
@@ -195,8 +210,7 @@
     }
 
     // 剪影里的纵向比例 → 部位。以自动找出来的脖子为基准往下切，不依赖固定数值。
-    function zoneOf(my, mx, p) {
-      if (!p) return 'body';
+    function bandZone(my, p) {
       const neck = p.anchors.neck;
       if (my < neck * 0.28) return 'hair';
       if (my < neck * 0.92) return 'head';
@@ -206,6 +220,51 @@
       if (my < neck + (1 - neck) * 0.72) return 'skirt';
       if (my < 0.95) return 'leg';
       return 'foot';
+    }
+
+    // 部位 = 纵向那条带子 + 横向这一截是不是「伸出去的」。
+    // 侧面头发和尾巴在剪影里是单独几段，跟身子分开：离身体中线远、又不宽的那一段，
+    // 上半身算头发、下半身算尾巴。这样点侧发不会再报胸口，点尾巴也不会再报腿。
+    // 不分左右、不猜手臂：这两样要真部件才分得准，先只修最刺眼的那两类误判。
+    function zoneOf(my, mx, p) {
+      if (!p) return 'body';
+      const band = bandZone(my, p);
+      if (!p.rows || !p.rows.length) return band;
+      const center = Number.isFinite(p.anchors.center) ? p.anchors.center : 0.5;
+      let row = p.rows[0];
+      let best = Infinity;
+      for (const r of p.rows) {
+        const dd = Math.abs(r.y - my);
+        if (dd < best) { best = dd; row = r; }
+      }
+      const segs = row.segs;
+      if (!segs || !segs.length) return band;
+      // mx 是「剪影包围盒里的比例」，segs 是画布绝对比例，先换算到同一套坐标再比
+      const bw = Math.max(1e-4, p.bbox.right - p.bbox.left);
+      const ax = p.bbox.left + mx * bw;
+      // 身体中线附近一律按带子算：那里不管剪影怎么分叉，都是她的身子。
+      // 没有这条，裙摆中间那种地方偶尔会被判成尾巴（上下几行分叉的位置不一样）。
+      if (Math.abs(ax - center) < 0.10) return band;
+      // 只看最近那一行不够：头发往下垂、尾巴往回勾的地方，那一行常常跟身子连成一片，
+      // 上下挪两三行才又分开。所以看一个小窗口，只要附近有一行能证明它是「伸出去的」就算。
+      let off = 0;
+      let wide = 1;
+      let found = false;
+      for (const r of p.rows) {
+        if (Math.abs(r.y - my) > 0.025) continue;
+        const ss = r.segs || [];
+        let seg = null;
+        for (const s of ss) {
+          if (ax >= s[0] - 0.012 && ax <= s[1] + 0.012) { seg = s; break; }
+        }
+        if (!seg) continue;
+        const w = seg[1] - seg[0];
+        if (w >= 0.3) continue;                   // 这一行整块身子连着，看不出什么
+        const o = Math.abs((seg[0] + seg[1]) / 2 - center);
+        if (o > off) { off = o; wide = w; found = true; }
+      }
+      if (found && off > 0.12) return my < 0.52 ? 'hair' : 'tail';
+      return band;
     }
 
     // ---- 真部件级点触 -------------------------------------------------------
@@ -354,7 +413,17 @@
       const at = toSilhouette(clientX, clientY);
       const band = at ? zoneOf(at.my, at.mx, profile) : 'body';
       const zone = zoneOfPart(hit, at ? at.my : NaN) || band;
-      return { zone, band, part: hit ? hit.name : '', partId: hit ? hit.partId : '', drawable: hit ? hit.drawable : -1, calibrated: at ? !!at.calibrated : false, names: partNames ? Object.keys(partNames).length : 0 };
+      // 横向那一步到底是哪一截、离中线多远，配分区阈值时要看这个
+      let segInfo = null;
+      if (at && profile && profile.rows && profile.rows.length) {
+        let row = profile.rows[0];
+        let best = Infinity;
+        for (const r of profile.rows) { const dd = Math.abs(r.y - at.my); if (dd < best) { best = dd; row = r; } }
+        const bw = Math.max(1e-4, profile.bbox.right - profile.bbox.left);
+        const ax = profile.bbox.left + at.mx * bw;
+        segInfo = { y: +row.y.toFixed(3), ax: +ax.toFixed(3), segs: row.segs, center: +(profile.anchors.center || 0).toFixed(3) };
+      }
+      return { zone, band, seg: segInfo, part: hit ? hit.name : '', partId: hit ? hit.partId : '', drawable: hit ? hit.drawable : -1, calibrated: at ? !!at.calibrated : false, names: partNames ? Object.keys(partNames).length : 0 };
     }
 
     // ---- 点她 --------------------------------------------------------------
