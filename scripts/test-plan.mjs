@@ -70,5 +70,27 @@ console.log('单步映射');
   ok(r.applied.length === 2, 'applied 只算真发出去的');
 }
 
+console.log('语义动作（台词里 [点头] [歪头] [看一眼] 这些）');
+{
+  const r = toCommands({ actions: [
+    { kind: 'nod', count: 2 },
+    { kind: 'shake_head', count: 2 },
+    { kind: 'tilt', direction: 'left', duration: 1.8 },
+    { kind: 'look', direction: 'up', duration: 1.2 },
+    { kind: 'blink', side: 'both' },
+    { kind: 'smile' },
+    { kind: 'talk', duration: 2.4 },
+  ] });
+  ok(r.commands.map((c) => c.type).join(',') === 'nod,shake,tilt,look,blink,smile,talk', '七种语义动作都能翻', r.commands.map((c) => c.type).join(','));
+  ok(r.commands[2].direction === 'left', '歪头方向保留');
+  ok(r.commands[3].direction === 'up', '看的方向保留');
+  ok(r.commands[2].ms === 1800, '歪头时长按秒换算成毫秒');
+  ok(r.skipped.length === 0, '一个都没被跳过');
+}
+{
+  const r = toCommands({ actions: [{ kind: 'look', direction: 'somewhere' }] });
+  ok(r.commands[0].direction === 'center', '认不出的方向退回 center');
+}
+
 console.log(`\n${pass} 通过，${fail} 失败`);
 process.exit(fail ? 1 : 0);

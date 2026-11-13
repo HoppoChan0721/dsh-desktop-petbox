@@ -181,6 +181,11 @@
           }
         } else if (cmd.type === 'nod') engine.nod();
         else if (cmd.type === 'shake') engine.shake();
+        else if (cmd.type === 'tilt') engine.tilt(cmd.direction);
+        else if (cmd.type === 'look') engine.look(cmd.direction);
+        else if (cmd.type === 'blink') engine.blink(cmd.side);
+        else if (cmd.type === 'smile') engine.smile();
+        else if (cmd.type === 'talk') engine.talk(cmd.ms);
         else if (cmd.type === 'voice') {
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();

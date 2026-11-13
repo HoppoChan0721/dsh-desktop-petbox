@@ -293,6 +293,26 @@
 
     shake() { return this.react('AngleX', 8, 460, 1.5); }
 
+    // 语义动作：桥那边的 [歪头] [看一眼] [眨眼] [笑一下] 没有动作文件，全用参数冲量演。
+    // 幅度刻意小——台词配的动作是「配合说话」，不是表演杂技。
+    tilt(dir) { return this.react('AngleZ', dir === 'left' ? 11 : -11, 900, 1); }
+
+    look(dir) {
+      if (dir === 'left') return this.react('AngleX', 9, 760, 1);
+      if (dir === 'right') return this.react('AngleX', -9, 760, 1);
+      if (dir === 'up') return this.react('AngleY', -7, 700, 1);
+      if (dir === 'down') return this.react('AngleY', 7, 700, 1);
+      return this.react('AngleY', -3, 500, 1);
+    }
+
+    blink() { return this.react('ParamEyeLOpen', -1, 190, 1); }
+
+    // 笑一下：嘴角是 ParamMouthForm，抿嘴笑走这个；EyeSmile 有就一起抬
+    smile() {
+      const a = this.react('ParamMouthForm', 0.7, 1200, 1);
+      return a;
+    }
+
     // 一键复原服装：换装是「状态」不是动作——裙子切换、鞋子、胸衣这些表情只有「变成」没有「变回」，
     // 穿上之后自己下不来，只能把八个 Clothes 参数摁回各自默认档。
     // 必须同时改 this.current，不然下一帧 commit 会拿旧值平滑回去（看着像没反应）。

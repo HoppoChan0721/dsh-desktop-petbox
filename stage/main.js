@@ -562,6 +562,78 @@ app.whenReady().then(async () => {
     return watcherState();
   }
 
+  // ---- 台词配的表情 / 动作 ------------------------------------------------------
+  // 桥那边把 [害羞] [点头] 这类标签编译成 emotion + gestures/moves 一起塞进 /say。
+  // 老外壳能直接吃参数级计划，舞台这层要把它们翻译成自己的指令，不然「标签还在、动作没了」。
+  //
+  // 英文情绪是桥的词表（happy / shy / excited …），舞台只认七种中文心情，
+  // 所以先翻成心情再走 /mood 那条路：表情、俯身、歪头、手势一次给全。
+  const EMO_MOOD = {
+    happy: '开心', excited: '开心', proud: '开心', greeting: '恬静', neutral: '恬静',
+    shy: '害羞', flustered: '害羞',
+    thinking: '认真',
+    sleepy: '困',
+    sad: '担心', surprised: '担心', confused: '担心',
+    annoyed: '撒娇', playful: '撒娇', pout: '撒娇',
+  };
+
+  function pushEmotion(name, ms) {
+    if (!name) return null;
+    const key = String(name).trim();
+    const moodName = EMO_MOOD[key] || (Mood.names().includes(key) ? key : null);
+    if (moodName) {
+      const plan = Mood.plan(moodName, undefined);
+      push({ type: 'mood', plan });
+      if (plan.expression) push({ type: 'emotion', name: plan.expression, ms: plan.expressionMs });
+      return { mood: moodName, expression: plan.expression || null };
+    }
+    // 不是英文情绪也不是心情名，就当模型表情名（脸红 / 眯眼 / 爱心眼 …）直接给引擎
+    push({ type: 'emotion', name: key, ms: Number(ms) || 0 });
+    return { expression: key };
+  }
+
+  // /say 收到的动作：手势单独一个字段，其余在 moves 数组里（带 at 秒偏移）
+  function readCues(q) {
+    let moves = [];
+    const rawMoves = q.get('moves');
+    if (rawMoves) {
+      try {
+        const j = typeof rawMoves === 'string' ? JSON.parse(rawMoves) : rawMoves;
+        if (Array.isArray(j)) moves = j;
+      } catch (e) { /* 不是数组就当没有，别把整句话弄挂 */ }
+    }
+    const gesture = q.get('gesture') || '';
+    return { moves, gesture: gesture ? String(gesture) : '' };
+  }
+
+  // 动作按 at 秒排期。新的一句台词进来会把这些定时器清掉——
+  // 不然上一句的 [点头] 可能在下一句说到一半的时候突然冒出来。
+  const cueTimers = new Set();
+  function clearCueTimers() {
+    for (const t of cueTimers) clearTimeout(t);
+    cueTimers.clear();
+  }
+
+  function runCues(cues, delay) {
+    const list = [];
+    if (cues && cues.gesture) list.push({ kind: 'gesture', name: cues.gesture, at: 0 });
+    for (const a of (cues && cues.moves) || []) list.push(a);
+    const applied = [];
+    const skipped = [];
+    for (const a of list.slice(0, 16)) {
+      const cmd = Plan.commandOf(a);
+      if (!cmd) { if (a && a.kind) skipped.push(a.kind + ':' + (a.name || '')); continue; }
+      applied.push(a.kind + ':' + (cmd.name || a.name || cmd.type));
+      const ms = Math.max(0, Math.round((Number(a && a.at) || 0) * 1000) + (Number(delay) || 0));
+      if (ms <= 30) push(cmd);
+      else {
+        const t = setTimeout(() => { cueTimers.delete(t); push(cmd); }, ms);
+        cueTimers.add(t);
+      }
+    }
+    return { applied, skipped };
+  }
+
   const routes = {
     '/state': async () => {
       const s = await win.webContents.executeJavaScript('window.__petEngine ? window.__petEngine.state() : null');
@@ -590,12 +662,16 @@ app.whenReady().then(async () => {
       const emo = q.get('emotion');
       const mo = q.get('motion');
       const wantVoice = q.get('voice') === '1' || q.get('voice') === 'true';
-      if (emo) push({ type: 'emotion', name: emo, ms: Number(q.get('emotionMs')) || 0 });
+      const cueRes = readCues(q);
+      // 这一句开始之前挂着的动作排期作废：新的一句自己带动作，别让上一条的 [点头] 半路插进来
+      clearCueTimers();
+      if (emo) pushEmotion(emo, Number(q.get('emotionMs')) || 0);
       if (mo) push({ type: 'motion', name: mo });
       if (!wantVoice) {
         const ms = Number(q.get('ms')) || 0;
         push({ type: 'say', text, ms });
-        return { pushed: true, text, ms: ms || null, voice: false, emotion: emo || null, motion: mo || null };
+        const cues = runCues(cueRes, 0);
+        return { pushed: true, text, ms: ms || null, voice: false, emotion: emo || null, motion: mo || null, cues };
       }
       // 语音要等合成：先冒等待泡，好了气泡和声音一起出场，字按音频时长摊平
       push({ type: 'wait' });
@@ -604,11 +680,14 @@ app.whenReady().then(async () => {
         const ms = Math.round((Number(job.duration) || 0) * 1000);
         push({ type: 'say', text, ms: ms + 700, reveal: Math.round(ms * 0.92), voice: true });
         push({ type: 'voice', url: 'pet://stage/voice/' + encodeURIComponent(job.job_id) + '.wav' });
+        // 动作从气泡/声音真出来的那一刻开始排期，不然会赶在合成前面空演一遍
+        runCues(cueRes, 0);
       }).catch((e) => {
         push({ type: 'say', text, ms: 0, voice: true });
+        runCues(cueRes, 0);
         push({ type: 'error', text: 'TTS：' + ((e && e.message) || e) });
       });
-      return { pushed: true, text, voice: true, queued: true, emotion: emo || null, motion: mo || null };
+      return { pushed: true, text, voice: true, queued: true, emotion: emo || null, motion: mo || null, cues: cueRes };
     },
     '/voice': (q) => {
       const job = q.get('job') || '';

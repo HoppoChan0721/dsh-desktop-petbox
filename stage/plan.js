@@ -30,7 +30,20 @@ function commandOf(a) {
     if (g) return { type: 'motion', name: g };
     if (a.name === 'nod') return { type: 'nod' };
     if (a.name === 'shake') return { type: 'shake' };
+    return null;
   }
+  // 下面这些是「语义动作」：没有动作文件，舞台用参数冲量演（点头、歪头、看一眼）
+  if (a.kind === 'nod') return { type: 'nod', count: Number(a.count) || 2 };
+  if (a.kind === 'shake_head' || a.kind === 'shake') return { type: 'shake', count: Number(a.count) || 2 };
+  if (a.kind === 'tilt') return { type: 'tilt', direction: a.direction === 'left' ? 'left' : 'right', ms: Math.round((Number(a.duration) || 1.8) * 1000) };
+  if (a.kind === 'look') {
+    const d = String(a.direction || 'center');
+    return { type: 'look', direction: ['left', 'right', 'up', 'down'].includes(d) ? d : 'center', ms: Math.round((Number(a.duration) || 1.2) * 1000) };
+  }
+  if (a.kind === 'blink') return { type: 'blink', side: String(a.side || 'both'), count: Number(a.count) || 1 };
+  if (a.kind === 'smile') return { type: 'smile', ms: Math.round((Number(a.duration) || 1.8) * 1000) };
+  if (a.kind === 'talk') return { type: 'talk', ms: Math.round((Number(a.duration) || 2.4) * 1000) };
+  // pose 是参数级帧序列，舞台这层做不了，如实跳过（桥那边也只在外壳里用）
   return null;
 }
 
