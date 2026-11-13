@@ -79,6 +79,20 @@
       <span class="val" id="swayVal">1.6 ×</span>
     </div>
     <div class="row">
+      <label>整身摇摆</label>
+      <input id="tilt" type="range" min="0" max="3" step="0.1" value="0.8">
+      <span class="val" id="tiltVal">0.8°</span>
+    </div>
+    <div class="row">
+      <label>摇摆周期</label>
+      <select id="tiltPeriod">
+        <option value="5">5 秒 · 快</option>
+        <option value="7">7 秒 · 默认</option>
+        <option value="9">9 秒 · 慢</option>
+        <option value="12">12 秒 · 很慢</option>
+      </select>
+    </div>
+    <div class="row">
       <label>绕圈发晕</label>
       <select id="spin">
         <option value="2">2 圈</option>

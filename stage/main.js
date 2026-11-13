@@ -329,6 +329,11 @@ app.whenReady().then(async () => {
     const swayArg = arg('sway', process.env.WHALE_SWAY || '');
     const sway = swayArg !== '' ? Number(swayArg) : Number(cfg.sway);
     if (Number.isFinite(sway) && sway > 0) q.set('sway', String(sway));
+    // 整身摇摆：0 也要写进 URL（那是「要关掉」，不是「没配」）
+    const tilt = Number(cfg.swayTilt);
+    if (Number.isFinite(tilt) && tilt >= 0) q.set('tilt', String(Math.min(4, tilt)));
+    const tiltPeriod = Number(cfg.swayTiltPeriod);
+    if (Number.isFinite(tiltPeriod) && tiltPeriod > 0.5) q.set('tiltPeriod', String(tiltPeriod));
     // 音量必须从一开始就在 URL 里：页面拿不到就是 0，等于全静音。
     // 后面虽然 push 补一次，但那次可能赶在页面注册监听之前就丢了。
     const volArg = arg('volume', '');
@@ -1025,6 +1030,10 @@ app.whenReady().then(async () => {
     if ('cursorTrack' in p) tracker.setTrack(cfg.cursorTrack !== false);
     if ('onTop' in p && win && !win.isDestroyed()) win.setAlwaysOnTop(cfg.onTop !== false, 'screen-saver');
     if ('spinTurns' in p) tracker.setSpinTurns(cfg.spinTurns);
+    // 整身摇摆是引擎里的一个角度，就地改就行，不用重载舞台
+    if ('swayTilt' in p || 'swayTiltPeriod' in p) {
+      push({ type: 'sway-tilt', value: Number(cfg.swayTilt) || 0, period: Number(cfg.swayTiltPeriod) || 7 });
+    }
     if ('replyBtn' in p || 'replyAlways' in p) pushReplyConfig();
     if ('voiceVolume' in p) pushVolume();
     if ('ttsKeepAlive' in p) keepAlive.setEnabled(p.ttsKeepAlive !== false);
@@ -1042,7 +1051,7 @@ app.whenReady().then(async () => {
   }
 
   const PANEL_W = 400;
-  const PANEL_H = 824;
+  const PANEL_H = 884;
 
   // 面板回到屏幕正中（拖丢了、换屏了、或者就是看它碍事）
   function centerPanel() {

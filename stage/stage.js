@@ -90,7 +90,13 @@
       step();
     })();
 
-    const engine = window.createPetEngine(model, { baseUrl: new URL('.', modelUrl).href, sway: Number(qs.get('sway')) || undefined });
+    const engine = window.createPetEngine(model, {
+      baseUrl: new URL('.', modelUrl).href,
+      sway: Number(qs.get('sway')) || undefined,
+      // 整身摇摆（渲染层绕脚底转）：?tilt=0 关掉，?tiltPeriod=7 一个来回几秒
+      swayTilt: qs.get('tilt') === null ? undefined : Number(qs.get('tilt')),
+      swayTiltPeriod: Number(qs.get('tiltPeriod')) || undefined,
+    });
 
     // 关键接线，两个时机缺一不可：
     //
@@ -186,6 +192,7 @@
         else if (cmd.type === 'blink') engine.blink(cmd.side);
         else if (cmd.type === 'smile') engine.smile();
         else if (cmd.type === 'talk') engine.talk(cmd.ms);
+        else if (cmd.type === 'sway-tilt') engine.setSwayTilt(cmd.value, cmd.period);
         else if (cmd.type === 'voice') {
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();

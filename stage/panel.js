@@ -76,6 +76,11 @@ function paintKeepAlive(ka) {
   $('fps').value = String(cfg.fps === undefined ? 60 : cfg.fps);
   swayEl.value = String(cfg.sway === undefined ? 1.6 : cfg.sway);
   swayVal.textContent = Number(swayEl.value).toFixed(1) + ' ×';
+  const tiltEl = $('tilt');
+  const tiltVal = $('tiltVal');
+  tiltEl.value = String(cfg.swayTilt === undefined ? 0.8 : cfg.swayTilt);
+  tiltVal.textContent = Number(tiltEl.value).toFixed(1) + '°';
+  $('tiltPeriod').value = String(Math.round(cfg.swayTiltPeriod || 7));
   $('spin').value = String(cfg.spinTurns || 4);
   const volEl = $('volume');
   const volVal = $('volumeVal');
@@ -113,6 +118,14 @@ sizeEl.addEventListener('change', async () => { const { w, h } = paintSize(); aw
 $('fps').addEventListener('change', () => save({ fps: Number($('fps').value) }, '帧率已改，重载中…'));
 swayEl.addEventListener('input', () => { swayVal.textContent = Number(swayEl.value).toFixed(1) + ' ×'; });
 swayEl.addEventListener('change', () => save({ sway: Number(swayEl.value) }, '摆动已改，重载中…'));
+// 整身摇摆是引擎里的角度，拖着就能看到效果，不用重载
+$('tilt').addEventListener('input', () => {
+  const v = Number($('tilt').value);
+  $('tiltVal').textContent = v.toFixed(1) + '°';
+  window.stagePanel.save({ swayTilt: v }).catch(() => {});
+});
+$('tilt').addEventListener('change', () => save({ swayTilt: Number($('tilt').value) }, '整身摇摆 ' + Number($('tilt').value).toFixed(1) + '°'));
+$('tiltPeriod').addEventListener('change', () => save({ swayTiltPeriod: Number($('tiltPeriod').value) }, '摇摆周期 ' + $('tiltPeriod').value + ' 秒'));
 $('spin').addEventListener('change', () => save({ spinTurns: Number($('spin').value) }, '绕圈圈数已改'));
 
 // 音量是即时生效的：拖着滑杆就发，松手才落盘——不然每动一格写一次盘

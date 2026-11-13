@@ -136,6 +136,13 @@
       this.swayScale = Number(options.sway) > 0 ? Number(options.sway) : TUNE.swayScale;
       this.moodState = null;   // { name, at, ms, sway, lean, tilt }，由 setMood 写入
 
+      // 整身摇摆：渲染层把整个模型绕脚底转多少度、多久一个来回。
+      // 0 = 关掉（想对比老外壳的「定住感」就把这个调 0）；没传参数就用 0.8 度。
+      const seedTilt = options.swayTilt === undefined || options.swayTilt === null ? NaN : Number(options.swayTilt);
+      this.swayTiltDeg = Number.isFinite(seedTilt) ? Math.min(4, Math.max(0, seedTilt)) : 0.8;
+      this.swayTiltPeriod = Number(options.swayTiltPeriod) > 0.5 ? Number(options.swayTiltPeriod) : 7;
+      this.swayAngle = 0;      // 当前这一帧的倾角（度），气泡 / 回复钮要拿它补坐标
+
       this.mouth = 0;
       this.mouthTarget = 0;
       this.mouthUntil = 0;
@@ -291,6 +298,19 @@
 
     nod() { return this.react('AngleY', -9, 430, 1); }
 
+    // 整身摇摆的现场调节（设置面板 / 控制口 / 命令行都走这里）
+    setSwayTilt(deg, period) {
+      const d = Number(deg);
+      this.swayTiltDeg = Number.isFinite(d) ? Math.min(4, Math.max(0, d)) : 0;
+      const p = Number(period);
+      if (Number.isFinite(p) && p > 0.5) this.swayTiltPeriod = p;
+      if (!(this.swayTiltDeg > 0)) {
+        this.swayAngle = 0;
+        try { this.model.rotation = 0; } catch (e) {}
+      }
+      return { tilt: this.swayTiltDeg, period: this.swayTiltPeriod };
+    }
+
     shake() { return this.react('AngleX', 8, 460, 1.5); }
 
     // 语义动作：桥那边的 [歪头] [看一眼] [眨眼] [笑一下] 没有动作文件，全用参数冲量演。
@@ -417,6 +437,25 @@
       }
       const target = this.buildTarget();
       this.commit(target, dt);
+      this.applyWholeSway();
+    }
+
+    // ---- 整身摇摆（渲染层）----------------------------------------------------
+    // 老外壳那套是给 canvas 加 CSS 旋转，绕脚底支点把「整张画面」转一点点；参数层再同号配对，
+    // 让髋和腿真的横移。舞台这边换个更干净的做法：转 PIXI 里的模型本身（anchor 已经在脚底），
+    // 不动 canvas、不动 DOM，所以剪影标定、点击坐标、气泡定位都还是同一套坐标系，
+    // 只需要在取头顶锚点时把旋转补回去。
+    //
+    // 和头部那层参数摆动**叠加**：参数层管头和上身的飘，这一层管整个人像钟摆一样轻晃。
+    applyWholeSway() {
+      if (!this.model) return;
+      const amp = Number(this.swayTiltDeg);
+      if (!(amp > 0)) { this.swayAngle = 0; return; }
+      const period = Number(this.swayTiltPeriod) > 0.5 ? Number(this.swayTiltPeriod) : 7;
+      const w = (Math.PI * 2) / period;
+      // 用 sin 而不是三角波：两头自然减速，看着像重心在挪，不像被谁推着晃
+      this.swayAngle = amp * Math.sin(this.clock * w);
+      try { this.model.rotation = this.swayAngle * (Math.PI / 180); } catch (e) {}
     }
 
     // 每帧从零算目标值。目标表填完，等于「这一帧她应该长什么样」。
@@ -612,6 +651,8 @@
         idleCurves: this.idleMotion ? this.idleMotion.curves.length : 0,
         writeErrors: this.writeErrors,
         sway: this.swayScale,
+        swayTilt: +Number(this.swayTiltDeg).toFixed(2),
+        swayAngle: +Number(this.swayAngle).toFixed(3),
         mood: this.moodState ? this.moodState.name : null,
       };
     }

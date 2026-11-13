@@ -276,6 +276,20 @@
     // 不能用「剪影最上面 12% 里最宽的那一行」——那往往是头发最蓬的地方，比头顶低一大截；
     // 也不能用包围盒中心——这套模型尾巴往右伸得远，盒子中心会偏到她右侧去。
     // 正确做法：y 取剪影最顶那一行，x 取「顶下 3%」那一行的左右中点，那一行已经很靠近头顶中心了。
+    // 模型整身会绕脚底轻晃（engine.applyWholeSway），但剪影是标定那一刻扫下来的：
+    // 头已经跟着转过去一点点，气泡还贴在旧位置，看着就是「泡和头分家」。
+    // 按当前倾角把点绕着支点转回来，支点就是模型位置（anchor 在脚底中心 = (W/2, H)）。
+    function swayCompensate(pt, W, H) {
+      const deg = engine && Number.isFinite(engine.swayAngle) ? engine.swayAngle : 0;
+      if (!deg) return pt;
+      const a = deg * Math.PI / 180;
+      const px = W / 2;
+      const py = H;
+      const dx = pt.x - px;
+      const dy = pt.y - py;
+      return { x: px + dx * Math.cos(a) - dy * Math.sin(a), y: py + dx * Math.sin(a) + dy * Math.cos(a) };
+    }
+
     function headAnchor() {
       const W = canvas.clientWidth || canvas.width;
       const H = canvas.clientHeight || canvas.height;
@@ -289,7 +303,7 @@
         const d = Math.abs(r.y - goal);
         if (d < bestD) { bestD = d; row = r; }
       }
-      return { x: ((row.l + row.r) / 2) * W, y: p.bbox.top * H };
+      return swayCompensate({ x: ((row.l + row.r) / 2) * W, y: p.bbox.top * H }, W, H);
     }
 
     // 脚边锚点：常驻回复钮蹲在她脚边，不压在身上——压头顶那块的结果是每次摸头都点到钮。
