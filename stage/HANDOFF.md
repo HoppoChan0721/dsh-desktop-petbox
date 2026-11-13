@@ -206,6 +206,15 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
 - 记住这条链的现状：**桥解析出的动作（moves）现在送不到舞台**——新舞台的 `/say` 只吃 `emotion`，
   `moves` / `gesture` 字段没接（老外壳接过）。所以括号指令目前只是「不再碍眼」，动作还没真演
 
+回复钮两个开关的依赖（2026-11-13，主人报「常驻开关没生效」）：
+
+- `reply.js` 的 `sync()` 判据是 `enabled && (always || 刚说过话 || 卡片开着)`——**主开关 `replyBtn` 关着时，
+  单独打开 `replyAlways` 什么都不会发生**，钮永远不会出现；面板上两个勾选框看着像平级，实际是父子
+- 现在 `applyConfig` 里补一条归一化：`replyAlways` 为真就把 `replyBtn` 一起置真，三条入口（面板/菜单/接口）都经过它；
+  面板那边主开关关着时把常驻勾选框 `disabled` 掉，点不着，也就不存在「灰开关还亮着」的错觉
+- 查这类问题先看 `/status.reply` 的 `btn` / `always`，再进页面看 `window.__stageReply.always` 和 `#reply-btn` 的 class
+  （`on` 且 `opacity: 1` 才算真显示）；`/config?json={"replyBtn":true}` 可以远程改，`POST /config` 只认查询串里的 `json`，body 不生效
+
 设置面板能拖着走（2026-11-11 晚，主人点名要）：
 - 拖标题栏。实现是 CSS `-webkit-app-region: drag`，交给系统做拖拽，比自己算 mousemove 稳、不抖；
   标题里的关闭按钮标了 `no-drag`，不然点不着
@@ -321,7 +330,9 @@ node scripts\test-gaze.mjs                  # 绕圈状态机单测（31 条，`
 ## 9. 变更记录
 
 ```
-<下一次提交>  会话联动接回舞台：任何 DSH 会话的进度都冒阶段小泡（integ\dsh-watch.mjs + /api/stop + /mood 容错）
+<下一次提交>  （占位）
+f3df709  「回复钮常驻」单独打开时自动把主开关也打开；面板里主开关关着就把常驻灰掉
+60ab4f8  会话联动接回舞台：任何 DSH 会话的进度都冒阶段小泡（integ\dsh-watch.mjs + /api/stop + /mood 容错）
 fb0c4a5  托盘右键菜单改走 tray.popUpContextMenu（点外面会自己收）；面板自动收起默认关
 70f2bf1  设置面板点外面自动收起（失焦关闭 + 托盘左键 600ms 防抖）
 f90cde5  台词里的舞台说明方括号不再显示/念出来（stage\text.js + 桥 cues.js，裸动词也认）
