@@ -28,18 +28,14 @@
   app.renderer.resize(Math.max(2, window.innerWidth), Math.max(2, window.innerHeight));
   window.__stageApp = app;
 
-  // 锁 60 帧不是省性能，是手感（`pixi.ticker.maxFPS = 60`）——
-  // 高刷屏跑满 144Hz 时同一套物理参数每帧积分步长变小，头发摆动看着发死，没有那种软的感觉。
-  // 想放开就 ?fps=0（不限）或 ?fps=90。
-  {
+  // 目标帧率。**不是**直接塞给 `ticker.maxFPS`：PIXI 那套是按「距上次更新的毫秒数取模」算的，
+  // 屏幕不是 60Hz 的时候会算出 12ms / 18ms 交错的一串帧（见下面 paceLoop 的注释）。
+  // 想放开就 ?fps=0（每一帧都跑）或 ?fps=90。
+  const FPS_TARGET = (() => {
     const raw = qs.get('fps');
     const tf = raw === null ? 60 : Number(raw);
-    const cap = Number.isFinite(tf) && tf >= 0 ? tf : 60;
-    app.ticker.maxFPS = cap;
-    // 模型不是挂在 app.ticker 上的：pixi-live2d-display 的 autoUpdate 用的是 PIXI.Ticker.shared，
-    // 所以两个都要锁，只锁 app 那个等于只限了渲染、没人管模型更新（实测还是 160+ 帧）。
-    try { if (PIXI.Ticker && PIXI.Ticker.shared) PIXI.Ticker.shared.maxFPS = cap; } catch (e) {}
-  }
+    return Number.isFinite(tf) && tf >= 0 ? tf : 60;
+  })();
 
   function fit(model) {
     // 用 app.screen 而不是 renderer.width/resolution：screen 是 PIXI 自己算出来的逻辑尺寸，
@@ -59,13 +55,15 @@
   (async () => {
     if (!modelFile) { err('没有指定模型文件'); return; }
 
-    // 必须先把模型的时钟接到 PIXI 的 ticker 上：不接的话 update 收到的 dt 一直是 0，
+    // 时钟自己带（见下面的 paceLoop）：不接 PIXI 的 ticker 的话，`internal.update` 收不到 dt，
     // 动作时间不前进、呼吸不走、只有物理在动，看上去就像一张会甩尾巴的静态图。
     PIXI.live2d.Live2DModel.registerTicker(PIXI.Ticker);
 
     const model = await PIXI.live2d.Live2DModel.from(modelUrl, {
       autoInteract: false,
-      autoUpdate: true,
+      // 不让它挂 PIXI.Ticker.shared：渲染和模型更新都由 paceLoop 在同一个 rAF 里驱动，
+      // 两条 ticker 各自节流会互相错开半帧（模型更新比渲染晚一拍，看着就是抖）
+      autoUpdate: false,
       // 故意给个模型里不存在的组名：待机由我们自己驱动，不要让它再叠一层自带动作
       idleMotionGroup: 'petStageManual',
     });
@@ -138,6 +136,57 @@
     app.stage.addChild(swayGroup);
     swayGroup.addChild(model);
     const fitInfo = fit(model);
+
+    // ---- 帧节拍：自己数帧，不用 PIXI 的 maxFPS --------------------------------
+    // 症状（2026-11-13 主人报「俯身追鼠标卡卡的」）：PIXI 的 `ticker.maxFPS` 是拿「距上次更新的
+    // 毫秒数」取模算的，屏幕不是 60Hz 就会错行。本机 rAF 间隔约 7.1ms（141Hz），锁 60 实测走出来
+    // 是 12ms / 18ms 交替（2 秒里 19 次 12ms、94 次 18ms），每五帧丢半帧的时间——跟手看得见。
+    // 老外壳没节流，跑满屏幕刷新率，所以那边没这个现象。
+    // 现在按「屏幕帧的整数倍」跑：7.1ms × 2 ≈ 14ms（约 70fps），步长恒定，不会再一帧长一帧短。
+    const frameMs = await (async () => {
+      const d = [];
+      let last = performance.now();
+      await new Promise((resolve) => {
+        const step = (now) => {
+          d.push(now - last);
+          last = now;
+          if (d.length < 14) requestAnimationFrame(step);
+          else resolve();
+        };
+        requestAnimationFrame(step);
+      });
+      d.sort((a, b) => a - b);
+      const med = d[Math.floor(d.length / 2)];
+      return Number.isFinite(med) && med > 1 ? med : 16.67;
+    })();
+    const stepFrames = FPS_TARGET > 0 ? Math.max(1, Math.round((1000 / FPS_TARGET) / frameMs)) : 1;
+    const stepMs = stepFrames * frameMs;
+    window.__stagePace = () => ({
+      frameMs: +frameMs.toFixed(2),
+      hz: +(1000 / frameMs).toFixed(1),
+      target: FPS_TARGET,
+      stepFrames,
+      fps: +(1000 / stepMs).toFixed(1),
+    });
+    // 渲染和模型更新交给同一个循环：每 stepFrames 帧跑一次，中间攒的时间一起给模型。
+    // 两条 ticker 各自节流的时候，模型更新可能比渲染晚半拍，就是那种「动是动了但一抖一抖」。
+    try { app.stop(); } catch (e) {}            // 关掉 PIXI 自带的 ticker 渲染
+    let paceFrames = 0;
+    let paceAcc = 0;
+    let paceLast = performance.now();
+    const paceLoop = (now) => {
+      requestAnimationFrame(paceLoop);
+      const dt = now - paceLast;
+      paceLast = now;
+      if (!(dt > 0)) return;
+      paceAcc += Math.min(dt, 250);              // 被系统挂起过就别一次补一大截
+      if (++paceFrames % stepFrames !== 0) return;
+      const step = paceAcc;
+      paceAcc = 0;
+      try { model.update(step); } catch (e) {}   // 只累加时间，真正的 update 在 render 里
+      try { app.render(); } catch (e) {}
+    };
+    requestAnimationFrame(paceLoop);
 
     const interaction = window.createStageInteraction({ app, model, engine });
     // 整身摇摆绕「她自己剪影的脚底」转：窗口底边当支点的话，小体型会像踩钟摆一样漂
@@ -335,10 +384,9 @@
       } catch (e) { return { motions: [], expressions: [], error: String(e) }; }
     })();
     window.__stageInfo = { modelFile, fit: fitInfo, ...groups, engine: engine.state() };
-    // 帧率：舞台锁 60。看 /state 里的 stats.fps 就知道有没有跑对。
-    // 注意 FPS 是「屏幕刷新率」不是「模型每秒更新几次」：模型走 Ticker.shared 的节流，
-    // 实际更新频率看 /state 里 frames 的增量（锁 60 时约 50~60 次/秒）。
-    window.__stageStats = () => ({ rawRafFps: Math.round(PIXI.Ticker.shared.FPS), maxFps: PIXI.Ticker.shared.maxFPS, size: { w: app.screen.width, h: app.screen.height } });
+    // 帧率：真实节拍看 `__stagePace()`（屏幕是几 Hz、分频几帧、实际多少 fps）。
+    // 模型每秒更新几次 = fps ÷ 1，因为渲染和模型更新同一个循环。
+    window.__stageStats = () => ({ rawRafFps: Math.round(1000 / frameMs), maxFps: Math.round(1000 / stepMs), pace: window.__stagePace(), size: { w: app.screen.width, h: app.screen.height } });
     document.title = '棉花糖 · ' + (groups.motions || []).join('/');
 
     // ---- 窗口尺寸：节流 + 停手补最后一帧 ------------------------------------

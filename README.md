@@ -72,7 +72,7 @@ GET 走查询串，POST 走 JSON 体，体里的键优先。
 |---|---|
 | `modelDir` / `cubismCore` | 模型目录 / Core 的 js 路径 |
 | `interactive` `cursorTrack` `smartIgnore` `onTop` | 分区互动 / 指针追踪 / 智能穿透 / 置顶 |
-| `fps` `sway` `swayTilt` `swayTiltPeriod` | 帧率 / 头部摆动 / 整身摇摆角度 / 摇摆周期 |
+| `fps` `sway` `swayTilt` `swayTiltPeriod` | 目标帧率（按屏幕刷新率的整数倍分频，164Hz 屏设 60 实跑约 55fps；0 = 跑满屏幕）/ 头部摆动 / 整身摇摆角度 / 摇摆周期 |
 | `replyBtn` `replyAlways` | 回复钮 / 常驻（常驻会自动把主开关打开） |
 | `voiceVolume` `ttsKeepAlive` `ttsKeepMinutes` | 音量 / 语音服务保活 / 探活间隔 |
 | `sessionWatch` `sessionsDir` | 会话联动 / DSH 会话目录 |

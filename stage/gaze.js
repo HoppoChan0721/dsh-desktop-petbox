@@ -13,7 +13,10 @@
 const DEG = Math.PI * 2;
 
 const TUNE = {
-  pollMs: 33,
+  // 指针采样间隔。老外壳（鲸语）是 33ms = 30Hz，页面 60Hz 渲染时手一快就是台阶；
+  // 2026-11-13 主人说「俯身追鼠标卡卡的」，压到 16ms（约 60Hz）跟手明显更顺。
+  // 一次采样就是 getCursorScreenPoint + 两次 getDisplayNearestPoint，很便宜。
+  pollMs: 16,
   // 鼠标静止超过这么久就当它离开了：视线和身体收回正前方，别一直偏着头朝着同一个方向。
   // 一动就立刻恢复追踪（位置一变就刷新 lastMoveAt）。
   idleMs: 10000,

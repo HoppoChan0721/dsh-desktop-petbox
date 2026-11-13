@@ -293,6 +293,25 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
   `expression:`；`/params?ids=Clothes4,key7,LeanInput` 三个同时到位，3 秒后 `Clothes4` 仍是 1，
   `key7`/`LeanInput` 回 0；`/page` 的 `body.outfit` 记着穿上的，`expressions` 是当前挂着的表情表。
 
+帧节拍别再交给 PIXI 的 maxFPS（2026-11-13，主人报「俯身追鼠标卡卡的」）：
+
+- 症状：跟手的时候一顿一顿，老外壳（鲸语）没这个感觉。先排掉两个「像是原因」的：
+  指针采样 30Hz（老外壳也是 33ms，一样）、智能穿透（`sendIgnore` 只在真假变化时发，没有抖动）。
+- 真凶是帧节奏。本机 rAF 间隔约 6.1ms（164Hz 屏），`app.ticker.maxFPS = 60` 实测走出来是
+  **12ms / 18ms 交替**（2 秒 19 次 12ms + 94 次 18ms，平均 49~58fps）。PIXI 的算法是
+  `lastTime = now - (elapsed % (1000/maxFPS))`，164 除不尽 60 就必然错行，每五帧丢 6ms。
+  换成整除数（55fps / 82fps）也一样：`elapsed > minElapsed` 的严格比较会让它继续在 2 帧和 3 帧之间跳。
+- 现在这版（`stage/stage.js` 的 `paceLoop`）：开局量一次 rAF 间隔（14 个样本取中位数）→
+  `stepFrames = round((1000/目标fps) / frameMs)`（164Hz、目标 60 → 3 帧）→ 自己的 rAF 循环里
+  每 `stepFrames` 帧跑一次 `model.update(累积dt)` + `app.render()`。步长恒定，`?fps=0` 就是每帧跑。
+- 配套改了两处：`Live2DModel.from({autoUpdate:false})`（不挂 `PIXI.Ticker.shared`，否则模型更新和
+  渲染是两条 ticker，相位会错开半拍）；`app.stop()`（停掉 PIXI 自带的 ticker 渲染）。
+  `Live2DModel.update(ms)` 只往 `deltaTime` 累加，真正的 `internalModel.update` 在 `_render` 里跑，
+  所以顺序必须是先 `model.update(step)` 再 `app.render()`，漏了前者就一动不动。
+- 顺带：指针采样 `gaze.js` 的 `pollMs` 33 → 16（约 60Hz）。老外壳的 33ms 是台阶，压到 16ms 跟手更细。
+- 自检：`/state` 的 `stats.pace`；CDP 里量 `internal.update` 的间隔（现在 17.8~18.7ms，几乎全落 18ms）。
+- 别再往 `ticker.maxFPS` 上想办法——那是取模节流，屏幕刷新率一变就会重新错行。
+
 点触为什么还没做到「真部件级」（2026-11-13，主人要「点尾巴别报成腿、点腰别报成胸」）：
 - 现在点触还是**剪影分区**（`interact.zoneOf`：脖子 = 头下方最窄那一行，其余按比例切）。
   它只看纵向比例，所以侧面的头发会被算成胸口、尾巴会被算成腿。这就是主人说的误判。
