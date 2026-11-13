@@ -153,6 +153,8 @@
       this.emotionTimer = null;
       this.emotionName = '';
       this.expr = null;         // { name, params:[{id,value,blend}], at, until, loaded }
+      this.formParams = [];     // 形态（换装）合成出来的参数：体型 + 裙子/鞋子/尾巴 叠起来
+      this.formNames = [];
       this.exprCache = new Map();
 
       this.blinkNext = 2.0;
@@ -423,6 +425,46 @@
 
     // 表情叠在最后一层：待机/指针/动作都写完，再由它盖上去，
     // 这样「眯眼」「脸红」不会被驱动层每帧擦掉。
+    // 形态（换装）：这个模型把「体型1 / 体型2 / 体型默认 / 裙子切换 / 鞋子 / 胸衣 / 尾巴切换」
+    // 都做成表情文件，各自改几个 ClothesN 参数。表情层一次只能挂一个，但形态是**叠加**的，
+    // 所以要能把好几份表情的参数合起来一起挂着——同台的第二只靠它随机出一身不一样的。
+    setForm(names) {
+      const list = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
+      this.formNames = list;
+      this.formParams = [];
+      const merged = new Map();
+      let pending = list.length;
+      if (!pending) { this.formLayer = null; return { form: [], params: 0 }; }
+      const done = () => {
+        // 后写的覆盖先写的：同一件衣服被两份表情都改，以列表里靠后的为准
+        for (const [id, p] of merged) this.formParams.push(p);
+        this.formLayer = { names: list, at: this.clock };
+        return { form: list, params: this.formParams.length };
+      };
+      for (const name of list) {
+        this.loadExpression(name).then((params) => {
+          for (const p of params || []) merged.set(p.id, p);
+        }).catch(() => {}).finally(() => {
+          if (--pending === 0) done();
+        });
+      }
+      return { form: list, params: 0, queued: true };
+    }
+
+    applyForm({ set }) {
+      if (!this.formParams || !this.formParams.length) return;
+      for (const p of this.formParams) {
+        if (!this.info.has(p.id)) continue;
+        // 基准一律取参数默认值，不能取「当前值」：换装参数在 hold 集合里，
+        // 当前值是上一帧自己写进去的结果，再叠一次就是每帧累加，最后一路顶到上限。
+        const base = this.info.get(p.id).default;
+        let v = base + p.value;
+        if (p.blend === 'Multiply') v = base * p.value;
+        else if (p.blend === 'Overwrite') v = p.value;
+        set(p.id, v);
+      }
+    }
+
     applyExpression({ set }, target) {
       const ex = this.expr;
       if (!ex || !ex.params || !ex.params.length) return;
@@ -494,6 +536,7 @@
       this.applyMouth(ctx);
       this.applyMotion(ctx, target);
       this.applyBlink(ctx, target);
+      this.applyForm(ctx, target);   // 形态叠在最后：换装是「状态」，压过其它层
       this.applyExpression(ctx, target);
       return target;
     }

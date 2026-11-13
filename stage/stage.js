@@ -193,6 +193,7 @@
         else if (cmd.type === 'smile') engine.smile();
         else if (cmd.type === 'talk') engine.talk(cmd.ms);
         else if (cmd.type === 'sway-tilt') engine.setSwayTilt(cmd.value, cmd.period);
+        else if (cmd.type === 'form') engine.setForm(cmd.names || cmd.name);
         else if (cmd.type === 'voice') {
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();

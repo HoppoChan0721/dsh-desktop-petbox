@@ -370,10 +370,36 @@ app.whenReady().then(async () => {
   const loadStage = () => win.loadURL(stageUrl()).catch(() => {});
   await loadStage();
   // 页面每次载入（含改帧率/摆动后的重载）都要重新把「回复钮开没开」「音量多大」告诉它
-  const pushReplyConfig = () => push({ type: 'reply-set', on: cfg.replyBtn !== false, always: !!cfg.replyAlways });
+  // 副实例（同台的客人）不给回复钮：会话只有主人那只，这里多一个输入框只会把话投错地方
+  const pushReplyConfig = () => push({ type: 'reply-set', on: !IS_PEER && cfg.replyBtn !== false, always: !IS_PEER && !!cfg.replyAlways });
   const pushVolume = () => push({ type: 'volume', value: Number(cfg.voiceVolume) });
   const pushSmart = () => push({ type: 'smart', value: cfg.smartIgnore !== false });
-  win.webContents.on('did-finish-load', () => { pushReplyConfig(); pushVolume(); pushSmart(); });
+  // 同台的客人每只随机挑一身形态：这个模型把「体型1/体型2/体型默认/裙子切换/鞋子/胸衣/尾巴切换」
+  // 都做成了表情文件，各自改几个 Clothes 参数。挑一个体型，再随机叠一两件配饰，就不像复印了。
+  let peerForm = null;
+  const FORM_BODIES = ['体型默认', '体型1', '体型2'];
+  const FORM_EXTRAS = ['裙子切换', '鞋子', '尾巴切换'];
+  function pickForm() {
+    const list = Array.isArray(cfg.peerForms) && cfg.peerForms.length ? cfg.peerForms : null;
+    if (list) {
+      const one = list[Math.floor(Math.random() * list.length)];
+      return Array.isArray(one) ? one.map(String) : [String(one)];
+    }
+    const form = [FORM_BODIES[Math.floor(Math.random() * FORM_BODIES.length)]];
+    for (const extra of FORM_EXTRAS) if (Math.random() < 0.45) form.push(extra);
+    return form;
+  }
+  function pushForm(names) {
+    const form = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
+    if (!form.length) return null;
+    peerForm = form;
+    push({ type: 'form', names: form });
+    return form;
+  }
+  win.webContents.on('did-finish-load', () => {
+    pushReplyConfig(); pushVolume(); pushSmart();
+    if (IS_PEER) pushForm(peerForm || pickForm());
+  });
 
   // ---- 控制口 ---------------------------------------------------------------
   // 一个只监听本机的 HTTP 口，外部（命令行、以后的气泡/情绪端口）通过它跟她说话。
@@ -1029,11 +1055,12 @@ app.whenReady().then(async () => {
       ports: listenPorts(),
       role: ROLE,
       instance: INSTANCE,
+      form: peerForm,
       peers: peerList(),
       interactive: cfg.interactive !== false,
       bridge: cfg.bridge !== false,
       tick: cfg.tickBubble !== false,
-      reply: { btn: cfg.replyBtn !== false, always: !!cfg.replyAlways, url: String(replyUrl()) },
+      reply: { btn: !IS_PEER && cfg.replyBtn !== false, always: !IS_PEER && !!cfg.replyAlways, url: String(replyUrl()) },
       voice: voiceReady(),
       volume: Number(cfg.voiceVolume),
       keepalive: keepAlive.status(),
@@ -1085,6 +1112,20 @@ app.whenReady().then(async () => {
       const dir = String(q.get('direction') || 'center');
       push({ type: 'look', direction: dir, ms: Number(q.get('ms')) || 0 });
       return { pushed: true, direction: dir };
+    },
+    // 页面里的实际状态：回复钮到底有没有开、形态是什么。
+    // 查「配置说开了但屏上没有」这类问题只认这个，不认配置文件。
+    '/page': async () => {
+      const js = '({ reply: window.__stageReply ? { enabled: window.__stageReply.enabled, always: window.__stageReply.always, cls: (document.getElementById("reply-btn") || {}).className || "" } : null,'
+        + ' form: window.__petEngine ? (window.__petEngine.emotionName || null) : null })';
+      return await win.webContents.executeJavaScript(js);
+    },
+    // 换形态（换装那类预设）：POST /form {"name":"体型1"}，不给 name 就随机挑
+    '/form': (q) => {
+      // 逗号分隔可以一次挂好几份：?name=体型1,裙子切换
+      const name = q.get('name');
+      if (!name) return { form: pushForm(pickForm()) };
+      return { form: pushForm(String(name).split(/[,，]/).map((s) => s.trim()).filter(Boolean)) };
     },
     '/api/stop': () => {
       push({ type: 'stop' });
@@ -1438,7 +1479,7 @@ app.whenReady().then(async () => {
   ipcMain.on('stage:menu', () => popupMenu());
   // 页面说「我的指令监听挂好了」→ 把配置再推一遍。did-finish-load 那一枪有时会赶在
   // 模型加载完、监听注册好之前发出，页面收不到，回复钮常驻就会掉回默认值。
-  ipcMain.on('stage:ready', () => { pushReplyConfig(); pushVolume(); pushSmart(); });
+  ipcMain.on('stage:ready', () => { pushReplyConfig(); pushVolume(); pushSmart(); if (IS_PEER) pushForm(peerForm || pickForm()); });
   ipcMain.on('stage:reply', (_e, text) => { sendReply(text).catch(() => {}); });
   ipcMain.on('panel:close', () => { if (panel && !panel.isDestroyed()) panel.close(); });
   ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT, keepalive: keepAlive.status(), voice: voiceReady() }));

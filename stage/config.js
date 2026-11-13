@@ -22,6 +22,9 @@ const DEFAULTS = {
   cubismCore: '',        // Cubism Core 的 js 路径；空 = 自动在 stage\vendor、仓库 vendor、模型目录里找
   // 同台：叫第二只过来时用它自己的模型（留空 = 跟主人那只同一个模型）
   peerModelDir: '',
+  // 同台的第二只随机挑什么形态。留空 = 内置：随机一个体型 + 随机叠一两件配饰（裙子/鞋子/尾巴）。
+  // 想指定就写成列表，元素可以是名字或名字数组，例如 ['体型1', '体型2', ['体型默认','裙子切换']]
+  peerForms: [],
   interactive: true,     // 分区互动：点她按部位反应
   cursorTrack: true,     // 指针追踪：视线和身体跟着鼠标
   onTop: true,           // 置顶
