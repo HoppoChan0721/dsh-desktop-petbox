@@ -276,15 +276,29 @@
     // 不能用「剪影最上面 12% 里最宽的那一行」——那往往是头发最蓬的地方，比头顶低一大截；
     // 也不能用包围盒中心——这套模型尾巴往右伸得远，盒子中心会偏到她右侧去。
     // 正确做法：y 取剪影最顶那一行，x 取「顶下 3%」那一行的左右中点，那一行已经很靠近头顶中心了。
+    // 剪影的脚底中心：整身摇摆的支点用它，不能用窗口底边（小体型会「漂」）
+    function feetAnchor() {
+      const W = canvas.clientWidth || canvas.width;
+      const H = canvas.clientHeight || canvas.height;
+      const p = ensureProfile();
+      if (!p || !p.rows || !p.rows.length) return { x: W / 2, y: H };
+      // 最低几行的中点平均：最后一行常常只有鞋跟一小块，单取一个点会偏
+      const tail = p.rows.slice(-3);
+      let x = 0;
+      for (const r of tail) x += (r.l + r.r) / 2;
+      return { x: (x / tail.length) * W, y: p.bbox.bottom * H };
+    }
+
     // 模型整身会绕脚底轻晃（engine.applyWholeSway），但剪影是标定那一刻扫下来的：
     // 头已经跟着转过去一点点，气泡还贴在旧位置，看着就是「泡和头分家」。
-    // 按当前倾角把点绕着支点转回来，支点就是模型位置（anchor 在脚底中心 = (W/2, H)）。
+    // 按当前倾角把点绕着**脚底支点**转回来。
     function swayCompensate(pt, W, H) {
       const deg = engine && Number.isFinite(engine.swayAngle) ? engine.swayAngle : 0;
       if (!deg) return pt;
       const a = deg * Math.PI / 180;
-      const px = W / 2;
-      const py = H;
+      const pivot = feetAnchor();
+      const px = pivot.x;
+      const py = pivot.y;
       const dx = pt.x - px;
       const dy = pt.y - py;
       return { x: px + dx * Math.cos(a) - dy * Math.sin(a), y: py + dx * Math.sin(a) + dy * Math.cos(a) };
@@ -407,6 +421,7 @@
       alphaAt,
       headAnchor,
       footAnchor,
+      feetAnchor,
       tickSpot,
       reportHead,
       resetProfile,

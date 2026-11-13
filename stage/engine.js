@@ -501,21 +501,39 @@
     }
 
     // ---- 整身摇摆（渲染层）----------------------------------------------------
-    // 老外壳那套是给 canvas 加 CSS 旋转，绕脚底支点把「整张画面」转一点点；参数层再同号配对，
-    // 让髋和腿真的横移。舞台这边换个更干净的做法：转 PIXI 里的模型本身（anchor 已经在脚底），
-    // 不动 canvas、不动 DOM，所以剪影标定、点击坐标、气泡定位都还是同一套坐标系，
-    // 只需要在取头顶锚点时把旋转补回去。
+    // 舞台这边转「包着模型的容器」，不动 canvas/DOM，也不动 model 自己的 pivot——
+    // 直接改 model.pivot / position 会把 Live2D 的绘制整坏（实测整个模型从窗口里消失）。
     //
-    // 和头部那层参数摆动**叠加**：参数层管头和上身的飘，这一层管整个人像钟摆一样轻晃。
+    // ⚠️ 支点必须是**她自己剪影的脚底**，不是窗口底边：窗口高度是固定的，小体型站上去时脚离窗口底边
+    // 还有一段距离，拿窗口底边当支点转，整个人就像踩在钟摆上「漂移」。容器 pivot 设在脚底，
+    // 旋转就完全等价于绕自己的脚转，跟身高无关。
+    setSwayTarget(obj) { this.swayTarget = obj || null; return !!this.swayTarget; }
+
+    setSwayPivot(fn) { this.swayPivotFn = typeof fn === 'function' ? fn : null; return !!this.swayPivotFn; }
+
     applyWholeSway() {
-      if (!this.model) return;
       const amp = Number(this.swayTiltDeg);
-      if (!(amp > 0)) { this.swayAngle = 0; return; }
+      const target = this.swayTarget || this.model;
+      if (!target) return;
+      const angleRad = () => (this.swayAngle * Math.PI) / 180;
+      if (!(amp > 0)) {
+        if (this.swayAngle) { try { target.rotation = 0; } catch (e) {} this.swayAngle = 0; }
+        return;
+      }
       const period = Number(this.swayTiltPeriod) > 0.5 ? Number(this.swayTiltPeriod) : 7;
       const w = (Math.PI * 2) / period;
       // 用 sin 而不是三角波：两头自然减速，看着像重心在挪，不像被谁推着晃
       this.swayAngle = amp * Math.sin(this.clock * w);
-      try { this.model.rotation = this.swayAngle * (Math.PI / 180); } catch (e) {}
+      let feet = null;
+      try { feet = this.swayPivotFn ? this.swayPivotFn() : null; } catch (err) { feet = null; }
+      try {
+        if (this.swayTarget && feet && Number.isFinite(feet.x) && Number.isFinite(feet.y)) {
+          // 容器的坐标空间就是舞台坐标：把 pivot 和 position 都设到脚底，绕脚底转
+          this.swayTarget.pivot.set(feet.x, feet.y);
+          this.swayTarget.position.set(feet.x, feet.y);
+        }
+        target.rotation = angleRad();
+      } catch (e) {}
     }
 
     // 每帧从零算目标值。目标表填完，等于「这一帧她应该长什么样」。

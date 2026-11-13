@@ -1119,7 +1119,9 @@ app.whenReady().then(async () => {
     // 查「配置说开了但屏上没有」这类问题只认这个，不认配置文件。
     '/page': async () => {
       const js = '({ reply: window.__stageReply ? { enabled: window.__stageReply.enabled, always: window.__stageReply.always, cls: (document.getElementById("reply-btn") || {}).className || "" } : null,'
-        + ' form: window.__petEngine ? (window.__petEngine.emotionName || null) : null })';
+        + ' form: window.__petEngine ? (window.__petEngine.emotionName || null) : null,'
+        + ' feet: window.__stageInteraction ? window.__stageInteraction.feetAnchor() : null,'
+        + ' swayAngle: window.__petEngine ? +(window.__petEngine.swayAngle || 0).toFixed(2) : null })';
       return await win.webContents.executeJavaScript(js);
     },
     // 有哪些形态可以挑：直接读模型目录里的表情文件，换模型也能用

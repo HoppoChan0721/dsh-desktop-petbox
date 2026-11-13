@@ -133,10 +133,16 @@
       engine.reassert();
     };
 
-    app.stage.addChild(model);
+    // 套一层容器：整身摇摆转这层，模型自己的 pivot/position 一点不动（动了 Live2D 会画不出来）
+    const swayGroup = new PIXI.Container();
+    app.stage.addChild(swayGroup);
+    swayGroup.addChild(model);
     const fitInfo = fit(model);
 
     const interaction = window.createStageInteraction({ app, model, engine });
+    // 整身摇摆绕「她自己剪影的脚底」转：窗口底边当支点的话，小体型会像踩钟摆一样漂
+    engine.setSwayTarget(swayGroup);
+    engine.setSwayPivot(() => interaction.feetAnchor());
     const bubble = window.createStageBubble({ app, interaction });
     // 音量：先看 URL（主进程开局就会带上），缺了就让 voice 自己用默认值 0.6。
     // 千万别写 Number(qs.get('volume'))——qs.get 给 null 时 Number(null) 是 0，直接全静音。
