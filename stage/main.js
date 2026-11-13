@@ -377,7 +377,9 @@ app.whenReady().then(async () => {
   // 同台的客人每只随机挑一身形态：这个模型把「体型1/体型2/体型默认/裙子切换/鞋子/胸衣/尾巴切换」
   // 都做成了表情文件，各自改几个 Clothes 参数。挑一个体型，再随机叠一两件配饰，就不像复印了。
   let peerForm = null;
-  const FORM_BODIES = ['体型默认', '体型1', '体型2'];
+  // 体型三档（看模型里的表情文件）：体型默认 = 小、体型1 = 中（Clothes2 加 0.4）、体型2 = 大（加 1）。
+  // 抽的时候偏向中号和大号：主人那只通常是小号，客人也小就分不出来。
+  const FORM_BODIES = ['体型1', '体型2', '体型1', '体型2', '体型默认'];
   const FORM_EXTRAS = ['裙子切换', '鞋子', '尾巴切换'];
   function pickForm() {
     const list = Array.isArray(cfg.peerForms) && cfg.peerForms.length ? cfg.peerForms : null;
@@ -1119,6 +1121,20 @@ app.whenReady().then(async () => {
       const js = '({ reply: window.__stageReply ? { enabled: window.__stageReply.enabled, always: window.__stageReply.always, cls: (document.getElementById("reply-btn") || {}).className || "" } : null,'
         + ' form: window.__petEngine ? (window.__petEngine.emotionName || null) : null })';
       return await win.webContents.executeJavaScript(js);
+    },
+    // 有哪些形态可以挑：直接读模型目录里的表情文件，换模型也能用
+    '/forms': () => {
+      const dirs = [path.join(MODEL_DIR, 'Exp3'), path.join(MODEL_DIR, 'exp3'), MODEL_DIR];
+      const seen = new Set();
+      for (const d of dirs) {
+        try {
+          for (const f of fs.readdirSync(d)) {
+            if (!f.toLowerCase().endsWith('.exp3.json')) continue;
+            seen.add(f.replace(/\.exp3\.json$/i, ''));
+          }
+        } catch (e) { /* 目录不存在就跳过 */ }
+      }
+      return { forms: Array.from(seen).sort(), current: peerForm };
     },
     // 换形态（换装那类预设）：POST /form {"name":"体型1"}，不给 name 就随机挑
     '/form': (q) => {
