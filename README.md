@@ -10,6 +10,8 @@
 - 说话：`/say` 进来一句话就冒泡；接了 TTS 桥就有声音，没接就只有文字（不会报错）
 - 会话联动：任何 DSH 会话在跑，她的肩头会冒阶段小泡（读 DSH 会话事件流，可选）
 - 托盘 + 设置面板：开关、音量、尺寸、帧率、摇摆、回复钮、会话联动全在面板里
+- 体型预设：右键菜单「外观 ▸ 体型预设」在 小／中等／标准 三档之间换（模型里做了体型表情文件才有），
+  换完脚底自动对齐到同一条基线，不会因为变矮就飘到半空
 - 同台：菜单「同台 ▸ 叫另一只过来」再开一只模型并排站在旁边，**自动随机换一身**（体型、裙子、鞋子、尾巴）；
   两只靠近会互相看一眼、离太近会互相嫌弃一句。副实例有自己的窗口位置文件，不占托盘、不跑语音保活、不看会话，
   **也不给回复钮**（会话只属主人那只），主实例退出时跟着退
@@ -53,6 +55,7 @@ GET 走查询串，POST 走 JSON 体，体里的键优先。
 | `GET /status` `GET /state` `GET /params?ids=AngleX` | 自检读数 |
 | `GET /panel?toggle=1` `GET /menu` | 开设置面板 / 看菜单结构 |
 | `GET /peer/list` `POST /peer/spawn` `POST /peer/spawn?off=1` | 同台：看报到情况 / 叫一只过来 / 收回去 |
+| `GET /body?preset=small\|medium\|standard` | 主模型的体型预设（菜单「外观 ▸ 体型预设」的控制口版本），不带参数报当前档 |
 
 命令行等价物：`node cli/pet.mjs say "台词" --voice --emotion shy`（其余子命令见 `node cli/pet.mjs`）。
 
@@ -69,6 +72,7 @@ GET 走查询串，POST 走 JSON 体，体里的键优先。
 | `voiceVolume` `ttsKeepAlive` `ttsKeepMinutes` | 音量 / 语音服务保活 / 探活间隔 |
 | `sessionWatch` `sessionsDir` | 会话联动 / DSH 会话目录 |
 | `peerModelDir` | 同台时第二只用哪个模型（留空 = 同一个） |
+| `mainForm` | 主模型的体型：`体型默认` = 标准、`体型1` = 中等、`体型2` = 小（菜单里点一下就写这里，重启还记得） |
 | `bridge` `bridgeUrl` | 点触转给 DSH 侧桥 |
 
 ## 自检与测试

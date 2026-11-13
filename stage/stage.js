@@ -166,6 +166,70 @@
       return out;
     };
 
+    // ---- 体型预设：换完把脚底对齐到标准身高的那条基线 ----------------------
+    // 三档体型是同一张画里的三种身材，剪影高度差得很多（标准占满窗口、小号只有三分之一）。
+    // 只改 Clothes2 不动位置的话，她一缩就整只飘到窗口上半截，看着像浮在半空。
+    // 所以开局先按标准身材记一条「脚底基线」（归一化 0~1），换体型后把模型整体上下挪，
+    // 让新剪影的底边落回那条线上。只动 model.position.y，绝不动 pivot——动 pivot 会让 Live2D 画不出来。
+    window.__stageFeetBaseline = 0;
+    window.__stageBody = [];
+    window.__stageBodyOffset = 0;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    async function scanSilhouette(waitMs) {
+      try { window.__stageZonesReset(0); } catch (e) { return null; }
+      await wait(waitMs === undefined ? 140 : waitMs);
+      try {
+        const z = window.__stageZones();
+        return z && z.bbox ? z.bbox : null;
+      } catch (e) { return null; }
+    }
+    // 基线只在「还是标准身材」的时候才准：拍早了是空白帧，拿它当基线后面全错
+    async function captureBaseline() {
+      for (let i = 0; i < 8; i++) {
+        if (i) await wait(150);
+        const bbox = await scanSilhouette(i ? 90 : 20);
+        if (bbox && bbox.bottom - bbox.top > 0.4) { window.__stageFeetBaseline = bbox.bottom; break; }
+      }
+      return window.__stageFeetBaseline;
+    }
+    let bodySeq = 0;
+    async function applyBody(names, align) {
+      const seq = ++bodySeq;
+      const list = (Array.isArray(names) ? names : (names ? [names] : [])).map(String).filter(Boolean);
+      window.__stageBody = list;
+      const res = engine.setForm(list) || {};
+      if (!align || !list.length) return { ...res, aligned: null };
+      await wait(420);                       // 等表情参数真写进 core 再量，不然量到的是上一档
+      const bbox = await scanSilhouette(120);
+      const H = app.screen.height;
+      if (!bbox || seq !== bodySeq) return { ...res, aligned: null };   // 量到一半又被换了一档，这一枪作废
+      const base = window.__stageFeetBaseline;
+      // 没有基线（换的模型不是这套画）就当场把当前这档当基线，至少别乱飘
+      if (!base) { window.__stageFeetBaseline = bbox.bottom; return { ...res, aligned: null }; }
+      // 走两遍：第一遍按量到的差值挪，挪完再量一次收掉残差（整身摇摆有零点几度，
+      // 量出来的底边会跟着晃一两像素）
+      let bottom = bbox.bottom;
+      let y = H;   // 偏移要累加：量到的是「窗口里的绝对位置」，直接按 H+差值算会把上一遍挪的又抹掉
+      for (let pass = 0; pass < 2; pass++) {
+        if (seq !== bodySeq) return { ...res, aligned: null };   // 又被换了一档，这一枪作废
+        const delta = (base - bottom) * H;
+        y += delta;
+        model.position.y = y;
+        if (Math.abs(delta) < 4 || pass === 1) break;
+        await wait(180);
+        const again = await scanSilhouette(110);
+        if (seq !== bodySeq) return { ...res, aligned: null };
+        if (!again) break;
+        bottom = again.bottom;
+      }
+      window.__stageBodyOffset = Math.round(model.position.y - H);   // 记的是真的挪了多少，不是算出来的
+      try { interaction.resetProfile(150); } catch (e) {}   // 位置变了，脚底/头顶锚点要重扫
+      return { ...res, aligned: { base: +base.toFixed(4), bottom: +bottom.toFixed(4), y: Math.round(model.position.y) } };
+    }
+    window.__stageApplyBody = applyBody;
+    // 基线要先有：页面重新载入时主进程会立刻推一次体型，那一枪来得比模型画完还早
+    await captureBaseline();
+
     // 指针和指令都来自主进程：桌宠大半时间穿透，页面收不到 mousemove
     if (window.petStage) {
       window.petStage.onCursor((c) => {
@@ -199,12 +263,18 @@
         else if (cmd.type === 'smile') engine.smile();
         else if (cmd.type === 'talk') engine.talk(cmd.ms);
         else if (cmd.type === 'sway-tilt') engine.setSwayTilt(cmd.value, cmd.period);
-        else if (cmd.type === 'form') engine.setForm(cmd.names || cmd.name);
+        else if (cmd.type === 'form') applyBody(cmd.names || cmd.name, !!cmd.align);
         else if (cmd.type === 'voice') {
           voice.play(cmd.url).catch(() => {});
         } else if (cmd.type === 'voice-stop') voice.stop();
         else if (cmd.type === 'volume') voice.setVolume(cmd.value);
-        else if (cmd.type === 'outfit-reset') { const ids = engine.resetOutfit(); bubble.tick('衣服复原了', 2200); window.__lastOutfitReset = ids; }
+        else if (cmd.type === 'outfit-reset') {
+          const ids = engine.resetOutfit();
+          bubble.tick('衣服复原了', 2200);
+          window.__lastOutfitReset = ids;
+          // 复原服装会把所有 Clothes 参数摁回默认，Clothes2 就是体型——主人挑过的那档要重新挂回去
+          if (window.__stageBody && window.__stageBody.length) applyBody(window.__stageBody, true);
+        }
         else if (cmd.type === 'error') err(cmd.text);
         else if (cmd.type === 'wait') bubble.wait(cmd.ms);
         else if (cmd.type === 'bubble-hide') bubble.hide();
@@ -243,6 +313,7 @@
     // 透明窗上看起来就是闪；而且重扫是同步读整张画布（几十万像素），越拖越卡。
     // 所以：尺寸按 ~25fps 跟上，剪影只在停手 200ms 后扫一次，头的位置也那时候才报。
     let resizeDue = 0;
+    let rebodyTimer = 0;
     let resizeTimer = null;
     let lastW = app.screen.width;
     let lastH = app.screen.height;
@@ -254,6 +325,12 @@
       lastH = H;
       try { app.renderer.resize(W, H); } catch (e) { return false; }
       try { fit(model); } catch (e) {}
+      // fit 会把模型重新摁回窗口底边：挑过体型的话得把脚底基线补回去，不然拖一下尺寸她就掉下去。
+      // 拖动时 resize 一秒来几十次，扫描要同步读整张画布，所以等停手再扫一次，别每次 resize 都扫
+      clearTimeout(rebodyTimer);
+      rebodyTimer = setTimeout(() => {
+        if (window.__stageBody && window.__stageBody.length) applyBody(window.__stageBody, true).catch(() => {});
+      }, 260);
       return true;
     };
     window.addEventListener('resize', () => {

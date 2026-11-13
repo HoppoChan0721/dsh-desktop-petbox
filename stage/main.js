@@ -381,6 +381,45 @@ app.whenReady().then(async () => {
   // 抽的时候偏向中号和大号：主人那只通常是小号，客人也小就分不出来。
   const FORM_BODIES = ['体型1', '体型2', '体型1', '体型2', '体型默认'];
   const FORM_EXTRAS = ['裙子切换', '鞋子', '尾巴切换'];
+  // 主人那只的体型预设（右键菜单「外观 → 体型预设」）。三档对应模型里的三个体型表情文件，
+  // 实测剪影高度：体型默认 = 标准身材（占满窗口）、体型1 = 中号（腿短一截）、体型2 = 小号 Q 版。
+  // 换体型只改 Clothes2，脸和衣服都不动；页面那边会把脚底对齐到标准身高的那条基线，不然她一缩就往上飘。
+  const BODY_PRESETS = [
+    { key: 'small', label: '小模型', form: '体型2' },
+    { key: 'medium', label: '中等模型', form: '体型1' },
+    { key: 'standard', label: '标准模型', form: '体型默认' },
+  ];
+  let bodyFormsCache = null;
+  // 这个模型有没有做体型表情文件：换一个模型就没有，菜单里别摆一串点了没反应的项
+  function bodyFormsAvailable() {
+    if (bodyFormsCache !== null) return bodyFormsCache;
+    const found = new Set();
+    const dirs = [path.join(MODEL_DIR, 'Exp3'), path.join(MODEL_DIR, 'exp3'), MODEL_DIR];
+    for (const d of dirs) {
+      try {
+        for (const f of fs.readdirSync(d)) {
+          if (/\.exp3\.json$/i.test(f)) found.add(f.replace(/\.exp3\.json$/i, ''));
+        }
+      } catch (e) { /* 目录不存在就跳过 */ }
+    }
+    bodyFormsCache = BODY_PRESETS.filter((b) => found.has(b.form)).length === BODY_PRESETS.length;
+    return bodyFormsCache;
+  }
+  const bodyKeyOf = (c) => {
+    const f = String((c && c.mainForm) || '').trim();
+    const hit = BODY_PRESETS.find((b) => b.form === f);
+    return hit ? hit.key : 'standard';
+  };
+  // 主模型当前该挂哪份体型：标准身材就挂「体型默认」（Value 0，等于没改），
+  // 好处是换回来的时候有人把 Clothes2 显式写回默认档——这个参数在引擎的 hold 集合里，
+  // 不写就一直是上一次的体型。
+  function pushBody(obj) {
+    const c = obj || (typeof cfg !== 'undefined' ? cfg : Cfg.load());
+    const key = bodyKeyOf(c);
+    const hit = BODY_PRESETS.find((b) => b.key === key) || BODY_PRESETS[0];
+    if (!bodyFormsAvailable() || IS_PEER) return null;
+    return push({ type: 'form', names: [hit.form], align: true, bodyKey: key });
+  }
   function pickForm() {
     const list = Array.isArray(cfg.peerForms) && cfg.peerForms.length ? cfg.peerForms : null;
     if (list) {
@@ -395,12 +434,14 @@ app.whenReady().then(async () => {
     const form = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
     if (!form.length) return null;
     peerForm = form;
-    push({ type: 'form', names: form });
+    // align：体型一换剪影就矮一截，不给页面一个「把脚底对齐」的活，小号那只就整只飘在窗口上半截
+    push({ type: 'form', names: form, align: true });
     return form;
   }
   win.webContents.on('did-finish-load', () => {
     pushReplyConfig(); pushVolume(); pushSmart();
     if (IS_PEER) pushForm(peerForm || pickForm());
+    else pushBody();
   });
 
   // ---- 控制口 ---------------------------------------------------------------
@@ -1120,6 +1161,7 @@ app.whenReady().then(async () => {
     '/page': async () => {
       const js = '({ reply: window.__stageReply ? { enabled: window.__stageReply.enabled, always: window.__stageReply.always, cls: (document.getElementById("reply-btn") || {}).className || "" } : null,'
         + ' form: window.__petEngine ? (window.__petEngine.emotionName || null) : null,'
+        + ' body: { forms: window.__stageBody || [], baseline: +(window.__stageFeetBaseline || 0).toFixed(4), offset: window.__stageBodyOffset || 0 },'
         + ' feet: window.__stageInteraction ? window.__stageInteraction.feetAnchor() : null,'
         + ' swayAngle: window.__petEngine ? +(window.__petEngine.swayAngle || 0).toFixed(2) : null })';
       return await win.webContents.executeJavaScript(js);
@@ -1148,6 +1190,16 @@ app.whenReady().then(async () => {
     '/api/stop': () => {
       push({ type: 'stop' });
       return { stopped: true };
+    },
+    // 主模型的体型预设（菜单「外观 → 体型预设」的控制口版本）：/body?preset=small|medium|standard
+    // 不带参数就报当前档。走 applyConfig，所以会落盘，重启还是这档。
+    '/body': (q) => {
+      const preset = String(q.get('preset') || '').trim().toLowerCase();
+      if (!preset) return { key: bodyKeyOf(cfg), form: String(cfg.mainForm || '') || '体型默认', presets: BODY_PRESETS };
+      const hit = BODY_PRESETS.find((b) => b.key === preset || b.form === preset);
+      if (!hit) throw new Error('不知道这个体型：' + preset);
+      applyConfig({ mainForm: hit.form });
+      return { key: hit.key, form: hit.form };
     },
   // 桥在「只有动作没台词」时往这里砸 plan：POST /api/execute {"plan":{...}}
     '/api/execute': (q) => {
@@ -1256,6 +1308,7 @@ app.whenReady().then(async () => {
       push({ type: 'sway-tilt', value: Number(cfg.swayTilt) || 0, period: Number(cfg.swayTiltPeriod) || 7 });
     }
     if ('replyBtn' in p || 'replyAlways' in p) pushReplyConfig();
+    if ('mainForm' in p) pushBody({ mainForm: cfg.mainForm });
     if ('voiceVolume' in p) pushVolume();
     if ('ttsKeepAlive' in p) keepAlive.setEnabled(p.ttsKeepAlive !== false);
     if ('ttsKeepMinutes' in p) keepAlive.setIntervalMs(Math.max(1, Number(p.ttsKeepMinutes) || 5) * 60000);
@@ -1434,6 +1487,13 @@ app.whenReady().then(async () => {
       { label: live ? '搭话（DSH 桥）' : '搭话（DSH 桥没在跑）', submenu: talkItems },
       { type: 'separator' },
       { label: '外观', submenu: [
+        // 体型预设：三档体型是模型里做好的表情文件（只改 Clothes2），换完脚底对齐到同一条基线。
+        // 换的模型没有这些文件时整条灰掉并写清原因，别让人点了没反应还以为坏了。
+        { label: '体型预设', submenu: bodyFormsAvailable() ? BODY_PRESETS.map((b) => ({
+          label: b.label, type: 'radio', checked: bodyKeyOf(now) === b.key,
+          click: () => applyConfig({ mainForm: b.form }),
+        })) : [{ label: '这个模型没有做体型表情文件', enabled: false }] },
+        { type: 'separator' },
         { label: '复原服装（衣服回默认档）', click: () => push({ type: 'outfit-reset' }) },
       ] },
       { label: '同台', submenu: [
@@ -1497,7 +1557,7 @@ app.whenReady().then(async () => {
   ipcMain.on('stage:menu', () => popupMenu());
   // 页面说「我的指令监听挂好了」→ 把配置再推一遍。did-finish-load 那一枪有时会赶在
   // 模型加载完、监听注册好之前发出，页面收不到，回复钮常驻就会掉回默认值。
-  ipcMain.on('stage:ready', () => { pushReplyConfig(); pushVolume(); pushSmart(); if (IS_PEER) pushForm(peerForm || pickForm()); });
+  ipcMain.on('stage:ready', () => { pushReplyConfig(); pushVolume(); pushSmart(); if (IS_PEER) pushForm(peerForm || pickForm()); else pushBody(); });
   ipcMain.on('stage:reply', (_e, text) => { sendReply(text).catch(() => {}); });
   ipcMain.on('panel:close', () => { if (panel && !panel.isDestroyed()) panel.close(); });
   ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT, keepalive: keepAlive.status(), voice: voiceReady() }));
