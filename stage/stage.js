@@ -28,8 +28,8 @@
   app.renderer.resize(Math.max(2, window.innerWidth), Math.max(2, window.innerHeight));
   window.__stageApp = app;
 
-  // 锁 60 帧：鲸语那边同一个补丁（`pixi.ticker.maxFPS = 60`）不是省性能，是手感——
-  // 高刷屏跑满 144Hz 时同一套物理参数每帧积分步长变小，头发摆动看着比鲸语「死」。
+  // 锁 60 帧不是省性能，是手感（`pixi.ticker.maxFPS = 60`）——
+  // 高刷屏跑满 144Hz 时同一套物理参数每帧积分步长变小，头发摆动看着发死，没有那种软的感觉。
   // 想放开就 ?fps=0（不限）或 ?fps=90。
   {
     const raw = qs.get('fps');
@@ -111,7 +111,7 @@
     // 这三样交给我们自己：眨眼（engine.applyBlink）、呼吸（engine.applyIdle 写 ParamBreath）、
     // 视线（engine.applyGaze 写 ParamEyeBallX/Y）。不关掉的话它们每帧还会各写一遍，
     // 参数最后谁赢看顺序，表现就是眼睛「黏」在鼠标上、眨眼节奏怪。
-    // 鲸语也是这么处理的（eyeBlink/breath/updateFocus 全摘掉）。
+    // 官方那套被动画摘干净之后就是这样处理的（eyeBlink/breath/updateFocus 全摘掉）。
     internal.eyeBlink = undefined;
     internal.breath = undefined;
     internal.updateFocus = () => {};

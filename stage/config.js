@@ -16,9 +16,10 @@ const CFG_FILE = path.join(DATA_DIR, 'stage-config.json');
 const MOOD_JSON = process.env.WHALE_MOOD_JSON || 'F:\\DaFeiYu\\persona\\mood.json';
 
 const DEFAULTS = {
-  // 模型：换角色就是换这个目录，里面放 *.model3.json 和配套文件，舞台自己找第一个
-  modelDir: 'F:\\DaFeiYu\\tools\\jingyu\\model\\DeepSeek',
-  cubismCore: '',        // Cubism Core 的 js 路径；空 = 自动在常见位置找
+  // 模型：换角色就是换这个目录，里面放 *.model3.json 和配套文件，舞台自己找第一个。
+  // 空 = 用仓库里的 models\；本机的实际路径写在 data\stage-config.json（不进仓库）
+  modelDir: '',
+  cubismCore: '',        // Cubism Core 的 js 路径；空 = 自动在 stage\vendor、仓库 vendor、模型目录里找
   interactive: true,     // 分区互动：点她按部位反应
   cursorTrack: true,     // 指针追踪：视线和身体跟着鼠标
   onTop: true,           // 置顶

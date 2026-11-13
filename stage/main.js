@@ -1,8 +1,8 @@
-// 自建轻量舞台的独立入口。刻意跟 src/main.js 完全分开：
+// 棉花糖的独立入口。舞台自带渲染，不依赖任何外部舞台工程：
 // 现役桌宠照旧跑它自己的入口，这里只负责「我们自己的舞台」能不能站起来。
 //
 // 跑法：node_modules\electron\dist\electron.exe stage\main.js --model="模型目录" [--core="core 文件"] [--cdp=9340] [--port=61945]
-//   --core 不给就依次找：环境变量 WHALE_CUBISM_CORE、鲸语 1.4 部署里的 vendor、模型目录
+//   --core 不给就依次找：环境变量 WHALE_CUBISM_CORE、stage\\vendor、仓库 vendor\\、模型目录
 const { app, BrowserWindow, protocol, net, screen, ipcMain, Menu, Tray, nativeImage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -39,12 +39,13 @@ const STAGE_DIR = __dirname;
 // 「换模型」就是换个目录：里面放 *.model3.json 配套文件，舞台自己找第一个。
 // 这里提前读一次配置（cfg 在后面才装配），配置读不到就当没配，不拦启动。
 const earlyCfg = (() => { try { return Cfg.load(); } catch (e) { return {}; } })();
-const MODEL_DIR = path.resolve(arg('model', process.env.WHALE_MODEL_DIR || String(earlyCfg.modelDir || '') || 'F:\\DaFeiYu\\tools\\jingyu\\model\\DeepSeek'));
+const MODEL_DIR = path.resolve(arg('model', process.env.WHALE_MODEL_DIR || String(earlyCfg.modelDir || '') || path.join(STAGE_DIR, '..', 'models')));
 const CORE_FILE = (() => {
   const given = arg('core', process.env.WHALE_CUBISM_CORE || String(earlyCfg.cubismCore || ''));
   const candidates = [
     given,
-    'F:\\DaFeiYu\\tools\\jingyu\\jingyu-live2d-agent-main\\web\\vendor\\live2dcubismcore.min.js',
+    path.join(STAGE_DIR, 'vendor', 'live2dcubismcore.min.js'),
+    path.join(STAGE_DIR, '..', 'vendor', 'live2dcubismcore.min.js'),
     path.join(MODEL_DIR, 'live2dcubismcore.min.js'),
   ].filter(Boolean);
   return candidates.find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || '';

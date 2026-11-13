@@ -85,11 +85,11 @@ function probeLight(cfg) {
 // 「这窗口我自己」的判定：主人在跟你聊天、或者桌宠窗口在前台时别凑热闹
 // 两类「不该瞄」的窗口，处理不一样：
 //   dsh = 主人在跟你说话。手动点的时候他就在这儿，放行；定时那一路放行没意义，跳过。
-//   pet = 桌宠壳子自己（鲸语窗口）。任何时候都不该瞄——点托盘菜单也会把前台抢成它。
+//   pet = 桌宠窗口自己（现在叫棉花糖）。任何时候都不该瞄——点托盘菜单也会把前台抢成它。
 function selfKind(proc, title) {
   const p = String(proc || '').toLowerCase();
   const t = String(title || '');
-  if (/whale-pet|桌宠|大肥鱼|鲸语|live2d/i.test(t)) return 'pet';
+  if (/whale-pet|marshmallow|桌宠|大肥鱼|棉花糖|live2d/i.test(t)) return 'pet';
   if (p === 'electron') return 'pet';
   if (/deepseek\s*harness|dsh\b/i.test(t)) return 'dsh';
   return '';
