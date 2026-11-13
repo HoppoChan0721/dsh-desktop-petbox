@@ -133,6 +133,11 @@ function parseOne(raw) {
   // 裸表情名：[脸红]
   if (EXPRESSIONS.includes(inner)) return { kind: 'expr', name: inner };
 
+  // 裸情绪词：[pout] [shy] [happy]。以前只认 [emotion:pout]，写成裸词就被当成「认不出的括号」
+  // 原样留在台词里，TTS 照着念「pout」——主人 2026-11-13 听到的就是这个。
+  const low = inner.toLowerCase();
+  if (EMOTIONS.includes(low)) return { kind: 'emotion', name: low };
+
   // 不带参数的动作也要认：[smile] [talk] 以前会原样漏进气泡，因为下面那个正则只认冒号
   const bareVerb = normVerb(inner);
   if (bareVerb === 'smile') return { kind: 'smile', seconds: 1.8 };

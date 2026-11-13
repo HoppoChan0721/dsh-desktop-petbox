@@ -32,6 +32,22 @@ test('裸动词现在也认：点头 / 歪头 / nod / tilt', () => {
   assert.equal(parseCues('[点头] 好呀').text, '好呀');
 });
 
+test('裸情绪词也认：[pout] 是情绪，不是留在台词里的括号', () => {
+  const r = parseCues('[pout][tilt:right]粉丝有安娜好看吗 主人只准夸我一个');
+  assert.equal(r.text, '粉丝有安娜好看吗 主人只准夸我一个');
+  assert.equal(r.emotion, 'pout');
+  assert.equal(r.moves.length, 1);
+  assert.equal(r.moves[0].kind, 'tilt');
+  assert.equal(r.moves[0].direction, 'right');
+});
+
+test('情绪词大小写不敏感，拼错的原样留着', () => {
+  assert.equal(parseCues('[POUT] 嗯').emotion, 'pout');
+  assert.equal(parseCues('[shy] 嗯').emotion, 'shy');
+  assert.equal(parseCues('[pouty] 嗯').emotion, null);
+  assert.equal(parseCues('[pouty] 嗯').text, '[pouty] 嗯');
+});
+
 test('像内容/像指令的括号绝不吞', () => {
   assert.equal(parseCues('see [1] for details').text, 'see [1] for details');
   assert.equal(parseCues('[at:1.5] 好').text, '好');          // 时间轴被消费掉

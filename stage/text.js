@@ -12,11 +12,19 @@
 const DIRECTION_MAX = 12;
 // ASCII 字母数字和这些符号一出现就说明它更像内容/指令/链接，不像舞台说明
 const CONTENTY = /[A-Za-z0-9@#$%^&*_=+<>{}|\\/:：]/;
+// 桥的情绪词表（跟 bridge/dsh-pet-bridge/lib/cues.js 的 EMOTIONS 对齐）。
+// 它们写在方括号里就是指令，可旧桥只认 [emotion:pout]，裸写 [pout] 会被当成认不出的括号留下来，
+// TTS 就照着念「pout」——2026-11-13 主人听到的就是这个。
+const EMOTION_WORDS = new Set([
+  'happy', 'shy', 'excited', 'thinking', 'sleepy', 'proud', 'sad', 'annoyed', 'surprised',
+  'greeting', 'playful', 'neutral', 'flustered', 'confused', 'pout',
+]);
 
 function looksLikeDirection(inner) {
   const s = String(inner == null ? '' : inner).trim();
   if (!s) return false;
   if (s.length > DIRECTION_MAX) return false;
+  if (EMOTION_WORDS.has(s.toLowerCase())) return true;   // [pout] 当指令剥，别念出来
   if (CONTENTY.test(s)) return false;
   if (/[[\]【】]/.test(s)) return false;
   return true;

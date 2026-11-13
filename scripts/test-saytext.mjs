@@ -27,6 +27,14 @@ eq('长中文句子不算说明', stripDirections('[这句子明显是个正常�
 eq('没括号就别动', stripDirections('主人回来啦'), '主人回来啦');
 eq('空串', stripDirections(''), '');
 
+// ---- 情绪词：桥那边认 [pout] 是情绪，不该念出来
+eq('裸情绪词当说明剥掉', stripDirections('[pout] 主人只准夸我一个'), '主人只准夸我一个');
+eq('大小写都认', stripDirections('[Pout] 嗯'), '嗯');
+eq('不是情绪词的英文照旧留着', stripDirections('[foo] 嗯'), '[foo] 嗯');
+ok('pout 算说明', looksLikeDirection('pout') === true);
+ok('happy 算说明', looksLikeDirection('happy') === true);
+ok('随便一个英文词不算', looksLikeDirection('whale') === false);
+
 // ---- 判据本身
 ok('纯中文短词算说明', looksLikeDirection('小声') === true);
 ok('带英文不算', looksLikeDirection('img') === false);
