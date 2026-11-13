@@ -1195,6 +1195,9 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.on('stage:menu', () => popupMenu());
+  // 页面说「我的指令监听挂好了」→ 把配置再推一遍。did-finish-load 那一枪有时会赶在
+  // 模型加载完、监听注册好之前发出，页面收不到，回复钮常驻就会掉回默认值。
+  ipcMain.on('stage:ready', () => { pushReplyConfig(); pushVolume(); pushSmart(); });
   ipcMain.on('stage:reply', (_e, text) => { sendReply(text).catch(() => {}); });
   ipcMain.on('panel:close', () => { if (panel && !panel.isDestroyed()) panel.close(); });
   ipcMain.handle('panel:state', () => ({ size: sizeInfo(), cfg: Cfg.load(), model: MODEL_DIR, controlPort: PORT, keepalive: keepAlive.status(), voice: voiceReady() }));

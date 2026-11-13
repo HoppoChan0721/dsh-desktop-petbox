@@ -78,6 +78,7 @@
     let cardOpen = false;
     let busy = false;
     let raf = 0;
+    let pos = null;
 
     const W = () => app.screen.width || 531;
     const H = () => app.screen.height || 950;
@@ -88,24 +89,45 @@
       return a || { x: W() / 2, y: H() * 0.14 };
     }
 
-    // 钮挂在头顶右侧：贴头发但不压脸，窗口缩放也跟着走
-    function placeBtn() {
-      const a = anchor();
-      const size = 30;
-      const x = Math.round(Math.max(6, Math.min(W() - size - 6, a.x + W() * 0.13)));
-      const y = Math.round(Math.max(6, Math.min(H() - size - 6, a.y + 6)));
-      btn.style.left = x + 'px';
-      btn.style.top = y + 'px';
+    // 脚边锚点：常驻时蹲在她脚下。压头顶那块的结果是「每次摸头都点到钮」，100% 误触。
+    function footAnchor() {
+      let a = null;
+      try { a = interaction && interaction.footAnchor ? interaction.footAnchor() : null; } catch (e) { a = null; }
+      return a || { x: W() * 0.7, y: H() * 0.9 };
     }
 
+    // 两个模式两个位置，别用一个凑合：
+    //   跟随（她说完话冒一下）→ 头顶右侧，离气泡近，顺手
+    //   常驻（一直在）→ 脚边，不占身上的热区
+    function placeBtn() {
+      const size = 30;
+      let x; let y;
+      if (always) {
+        const a = footAnchor();
+        x = Math.max(6, Math.min(W() - size - 6, a.x));
+        y = Math.max(6, Math.min(H() - size - 6, a.y));
+      } else {
+        const a = anchor();
+        x = Math.max(6, Math.min(W() - size - 6, a.x + W() * 0.13));
+        y = Math.max(6, Math.min(H() - size - 6, a.y + 6));
+      }
+      x = Math.round(x); y = Math.round(y);
+      btn.style.left = x + 'px';
+      btn.style.top = y + 'px';
+      pos = { x, y, w: size, h: size };
+    }
+
+    // 输入卡跟着钮走：默认贴钮上方，上面放不开就翻到下面
     function placeCard() {
       const w = Math.max(140, Math.min(W() - 20, 280));
-      const x = Math.round(Math.max(10, Math.min(W() - w - 10, anchor().x - w / 2)));
-      const maxTop = H() - 132;
-      const y = Math.round(Math.max(10, Math.min(maxTop, anchor().y + 46)));
       card.style.width = w + 'px';
+      const p = pos || { x: W() / 2, y: H() * 0.14, w: 30, h: 30 };
+      const h = Math.max(96, card.offsetHeight || 108);
+      const x = Math.round(Math.max(10, Math.min(W() - w - 10, p.x + p.w / 2 - w / 2)));
+      const above = p.y - h - 10;
+      const y = above >= 8 ? above : Math.min(H() - h - 10, p.y + p.h + 10);
       card.style.left = x + 'px';
-      card.style.top = y + 'px';
+      card.style.top = Math.round(Math.max(8, y)) + 'px';
       ta.style.fontSize = Math.max(12, Math.min(15, Math.round(W() * 0.021))) + 'px';
     }
 
@@ -131,6 +153,7 @@
       if (!enabled || cardOpen) return false;
       cardOpen = true;
       card.classList.add('on');
+      placeBtn();
       placeCard();
       start();
       sync();
@@ -211,6 +234,7 @@
       get enabled() { return enabled; },
       get always() { return always; },
       get busy() { return busy; },
+      get pos() { return pos; },
     };
   }
 
