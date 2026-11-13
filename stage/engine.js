@@ -152,7 +152,10 @@
       this.lookState = null;   // 「看一眼」的保持状态（见 look / applyLook）
       this.emotionTimer = null;
       this.emotionName = '';
-      this.expr = null;         // { name, params:[{id,value,blend}], at, until, loaded }
+      // 表情层是一张表，不是单个槽位：一句里写 [脸红][前倾] 该一起挂着。
+      // 以前只有一个 expr，后一条会把前一条顶掉，看着就是「前面那个标签没生效」。
+      // 每项：{ name, params:[{id,value,blend}], at, until, loaded }
+      this.exprs = [];
       this.formParams = [];     // 形态（换装）合成出来的参数：体型 + 裙子/鞋子/尾巴 叠起来
       this.formNames = [];
       this.exprCache = new Map();
@@ -377,28 +380,43 @@
     // 每帧都**没有**人把表达式的参数值写进 coreModel（ExpressionManager.update 没被调）。
     // 结果就是表情看着完全没反应——爱心眼不红、眯眼不眯、换装也穿不上。
     // 所以这里自己把 exp3 的参数解析出来，每帧按 blend 叠上去（applyExpression）。
+    // 换一个表情：整层换掉（点触反应、心情走这条，新反应不该和上一条叠着）
     emotion(name, ms) {
       clearTimeout(this.emotionTimer);
-      if (!name) {
-        this.emotionName = '';
-        this.expr = null;
-        return true;
-      }
+      this.emotionName = '';
+      this.exprs = [];
+      if (!name) return true;
+      return this.addExpression(name, ms);
+    }
+
+    // 往表情层再加一个，不清掉正在演的（一句台词里写了好几个表情时用）
+    addExpression(name, ms) {
+      const key = String(name || '').trim();
+      if (!key) return false;
       const span = num(ms, 0) > 0 ? num(ms, 0) : TUNE.expressionMs;
-      this.emotionName = name;
-      this.expr = { name, params: [], at: this.clock, until: this.clock + span / 1000 };
-      // 先把上一份表情撤掉，别让两个表情叠在一起
-      this.loadExpression(name).then((params) => {
-        // 加载完之前可能已经切到别的表情了，别把旧的盖上去
-        if (!params || !this.expr || this.expr.name !== name) return;
-        this.expr.params = params;
-        this.expr.loaded = true;
+      const item = { name: key, params: [], at: this.clock, until: this.clock + span / 1000, loaded: false };
+      this.exprs.push(item);
+      this.emotionName = key;
+      this.loadExpression(key).then((params) => {
+        // 加载完之前可能已经到期/被换掉了，别把旧的盖上去
+        if (!params || this.exprs.indexOf(item) < 0) return;
+        item.params = params;
+        item.loaded = true;
       }).catch(() => {});
-      this.emotionTimer = setTimeout(() => {
-        if (this.expr && this.expr.name === name) this.expr = null;
-        if (this.emotionName === name) this.emotionName = '';
-      }, span);
       return true;
+    }
+
+    // 一次挂一排表情，各带自己的时长
+    emotionList(list) {
+      clearTimeout(this.emotionTimer);
+      this.emotionName = '';
+      this.exprs = [];
+      for (const it of list || []) {
+        if (!it) continue;
+        if (typeof it === 'string') this.addExpression(it, 0);
+        else if (it.name) this.addExpression(it.name, it.ms);
+      }
+      return this.exprs.map((e) => e.name);
     }
 
     // exp3 里的参数表：{Id, Value, Blend}。Blend 有三种：Add / Multiply / Overwrite
@@ -426,8 +444,8 @@
     // 表情叠在最后一层：待机/指针/动作都写完，再由它盖上去，
     // 这样「眯眼」「脸红」不会被驱动层每帧擦掉。
     // 形态（换装）：这个模型把「体型1 / 体型2 / 体型默认 / 裙子切换 / 鞋子 / 胸衣 / 尾巴切换」
-    // 都做成表情文件，各自改几个 ClothesN 参数。表情层一次只能挂一个，但形态是**叠加**的，
-    // 所以要能把好几份表情的参数合起来一起挂着——同台的第二只靠它随机出一身不一样的。
+    // 都做成表情文件，各自改几个 ClothesN 参数。换装是**状态**不是动作：穿上就留在身上，
+    // 也不该被同一句里的脸红/前倾顶掉，所以它不进表情层，走这条叠加的形态层。
     setForm(names) {
       const list = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
       this.formNames = list;
@@ -466,19 +484,29 @@
     }
 
     applyExpression({ set }, target) {
-      const ex = this.expr;
-      if (!ex || !ex.params || !ex.params.length) return;
-      const life = this.clock - ex.at;
-      const left = ex.until - this.clock;
-      const w = Math.min(1, life / 0.15) * Math.min(1, Math.max(0, left / 0.2));
-      if (w <= 0) return;
-      for (const p of ex.params) {
-        if (!this.info.has(p.id)) continue;
-        const cur = num(target.get(p.id), this.info.get(p.id).default);
-        let v = cur + p.value * w;                       // Add
-        if (p.blend === 'Multiply') v = cur * (1 + (p.value - 1) * w);
-        else if (p.blend === 'Overwrite') v = cur + (p.value - cur) * w;
-        set(p.id, v);
+      if (!this.exprs || !this.exprs.length) return;
+      const keep = [];
+      for (const ex of this.exprs) {
+        if (this.clock >= ex.until) continue;          // 到期就撤
+        keep.push(ex);
+        if (!ex.params || !ex.params.length) continue;
+        const life = this.clock - ex.at;
+        const left = ex.until - this.clock;
+        const w = Math.min(1, life / 0.15) * Math.min(1, Math.max(0, left / 0.2));
+        if (w <= 0) continue;
+        for (const p of ex.params) {
+          if (!this.info.has(p.id)) continue;
+          const cur = num(target.get(p.id), this.info.get(p.id).default);
+          let v = cur + p.value * w;                       // Add
+          if (p.blend === 'Multiply') v = cur * (1 + (p.value - 1) * w);
+          else if (p.blend === 'Overwrite') v = cur + (p.value - cur) * w;
+          set(p.id, v);
+        }
+      }
+      if (keep.length !== this.exprs.length) {
+        this.exprs = keep;
+        if (!keep.length) this.emotionName = '';
+        else if (this.emotionName && !keep.some((e) => e.name === this.emotionName)) this.emotionName = keep[keep.length - 1].name;
       }
     }
 
@@ -726,6 +754,7 @@
         pointer: this.pointerInput,
         eye: { x: +num(this.gaze && this.gaze.x, 0).toFixed(3), y: +num(this.gaze && this.gaze.y, 0).toFixed(3) },
         emotion: this.emotionName || null,
+        expressions: (this.exprs || []).map((e) => e.name),
         managed: this.managed.size,
         missing: this.missing.slice(0, 40),
         idleCurves: this.idleMotion ? this.idleMotion.curves.length : 0,

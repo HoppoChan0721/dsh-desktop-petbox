@@ -17,6 +17,7 @@ const Text = require('./text');
 const Touch = require('./touch');
 const Mood = require('./mood');
 const Plan = require('./plan');
+const Forms = require('./forms');
 
 // 单实例：托盘图标点第二遍、开机自启和手动启动撞在一起时，别再开第二只。
 // 例外是「同台」的副实例（--role=peer）：它们本来就该多开，不抢这把锁。
@@ -413,6 +414,20 @@ app.whenReady().then(async () => {
     const hit = BODY_PRESETS.find((b) => b.form === f);
     return hit ? hit.key : 'standard';
   };
+  // 哪些表情其实是「换装」：exp3 里只动 ClothesN，一个 key* / Movement 参数都不碰。
+  // 这一类不能当临时表情演，两个原因：
+  //   1. 换装是状态，穿上就得留在身上，不该 2.6 秒后自己撤；
+  //   2. 表情层一句里只挂得住一条，[鞋子][脸红][前倾] 三连下发时前面两条被最后一条顶掉，
+  //      表现就是「标签没生效」（2026-11-13 主人报的问题）。
+  // 所以它们走形态层（跟右键菜单的体型预设同一条路），能叠加、也不占表情层。
+  // 归类逻辑在 stage/forms.js，那边有单测；这里只缓存一份表。
+  let formKindCache = null;
+  function formKinds() {
+    if (!formKindCache) formKindCache = Forms.formKinds(MODEL_DIR);
+    return formKindCache;
+  }
+  const formKindOf = (name) => formKinds().get(String(name || '').trim()) || null;
+
   // 主模型当前该挂哪份体型：标准身材就挂「体型默认」（Value 0，等于没改），
   // 好处是换回来的时候有人把 Clothes2 显式写回默认档——这个参数在引擎的 hold 集合里，
   // 不写就一直是上一次的体型。
@@ -703,6 +718,14 @@ app.whenReady().then(async () => {
   function pushEmotion(name, ms) {
     if (!name) return null;
     const key = String(name).trim();
+    // 换装名字走这条路（旧调用方把 [鞋子] 塞进 emotion 字段）：一样进形态层
+    const fk = formKindOf(key);
+    if (fk) {
+      const cmd = { type: 'form-add', body: [], outfit: [], align: true };
+      cmd[fk] = [key];
+      push(cmd);
+      return { form: key, kind: fk };
+    }
     const moodName = EMO_MOOD[key] || (Mood.names().includes(key) ? key : null);
     if (moodName) {
       const plan = Mood.plan(moodName, undefined);
@@ -743,7 +766,21 @@ app.whenReady().then(async () => {
     for (const a of (cues && cues.moves) || []) list.push(a);
     const applied = [];
     const skipped = [];
-    for (const a of list.slice(0, 16)) {
+    // 一句里可能同时写着换装（[鞋子]）、表情（[脸红]）、姿态（[前倾]），分三条道走：
+    //   换装 → 形态层（状态，能叠加，不占表情层，也不会演完自己撤）
+    //   表情 → 表情层一次挂一排（以前只有一个槽位，后写的把先写的顶掉）
+    //   其余 → 照旧按 at 排期
+    const split = Forms.splitMoves(list.slice(0, 16), formKindOf);
+    for (const a of split.body.concat(split.outfit)) applied.push('form:' + a);
+    // 表情先挂（同一帧），形态晚一点：换体型要重扫剪影对齐脚底，别让它挡着表情出场
+    if (split.exprs.length) {
+      push({ type: 'emotion', names: split.exprs });
+      for (const e of split.exprs) applied.push('expression:' + e.name);
+    }
+    if (split.body.length || split.outfit.length) {
+      push({ type: 'form-add', body: split.body, outfit: split.outfit, align: true });
+    }
+    for (const a of split.plain) {
       const cmd = Plan.commandOf(a);
       if (!cmd) { if (a && a.kind) skipped.push(a.kind + ':' + (a.name || '')); continue; }
       applied.push(a.kind + ':' + (cmd.name || a.name || cmd.type));
@@ -961,6 +998,14 @@ app.whenReady().then(async () => {
     '/emotion': (q) => {
       const name = q.get('name') || '';
       if (!name) throw new Error('缺 name');
+      // 换装名字（鞋子/裙子切换/体型X）别当临时表情演，走形态层
+      const fk = formKindOf(name);
+      if (fk) {
+        const cmd = { type: 'form-add', body: [], outfit: [], align: true };
+        cmd[fk] = [String(name)];
+        push(cmd);
+        return { pushed: true, name, form: fk };
+      }
       push({ type: 'emotion', name });
       return { pushed: true, name };
     },
@@ -1202,7 +1247,8 @@ app.whenReady().then(async () => {
     '/page': async () => {
       const js = '({ reply: window.__stageReply ? { enabled: window.__stageReply.enabled, always: window.__stageReply.always, cls: (document.getElementById("reply-btn") || {}).className || "" } : null,'
         + ' form: window.__petEngine ? (window.__petEngine.emotionName || null) : null,'
-        + ' body: { forms: window.__stageBody || [], baseline: +(window.__stageFeetBaseline || 0).toFixed(4), offset: window.__stageBodyOffset || 0 },'
+        + ' body: { forms: window.__stageBody || [], outfit: window.__stageOutfit || [], baseline: +(window.__stageFeetBaseline || 0).toFixed(4), offset: window.__stageBodyOffset || 0 },'
+        + ' expressions: window.__petEngine ? (window.__petEngine.exprs || []).map((e) => e.name) : [],'
         + ' feet: window.__stageInteraction ? window.__stageInteraction.feetAnchor() : null,'
         + ' swayAngle: window.__petEngine ? +(window.__petEngine.swayAngle || 0).toFixed(2) : null })';
       return await win.webContents.executeJavaScript(js);

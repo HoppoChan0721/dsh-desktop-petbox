@@ -174,7 +174,8 @@
     // 所以开局先按标准身材记一条「脚底基线」（归一化 0~1），换体型后把模型整体上下挪，
     // 让新剪影的底边落回那条线上。只动 model.position.y，绝不动 pivot——动 pivot 会让 Live2D 画不出来。
     window.__stageFeetBaseline = 0;
-    window.__stageBody = [];
+    window.__stageBody = [];      // 体型（菜单「外观 → 体型预设」，一次只站一档）
+    window.__stageOutfit = [];    // 换装（标签点出来的：鞋子/胸衣/裙子切换/尾巴切换，可叠加）
     window.__stageBodyOffset = 0;
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     async function scanSilhouette(waitMs) {
@@ -195,12 +196,32 @@
       return window.__stageFeetBaseline;
     }
     let bodySeq = 0;
+    // 体型 + 换装合成一份形态参数，交给引擎的形态层（它会叠着写，不会互相顶掉）
     async function applyBody(names, align) {
-      const seq = ++bodySeq;
       const list = (Array.isArray(names) ? names : (names ? [names] : [])).map(String).filter(Boolean);
       window.__stageBody = list;
+      return applyForm(align);
+    }
+    // 标签带出来的换装：体型换一档，其余往换装列表里加（已经有的不重复加）
+    async function applyFormAdd(bodyNames, outfitNames) {
+      const b = (Array.isArray(bodyNames) ? bodyNames : (bodyNames ? [bodyNames] : [])).map(String).filter(Boolean);
+      const o = (Array.isArray(outfitNames) ? outfitNames : (outfitNames ? [outfitNames] : [])).map(String).filter(Boolean);
+      if (b.length) window.__stageBody = [b[b.length - 1]];
+      if (o.length) {
+        const merged = (window.__stageOutfit || []).slice();
+        for (const n of o) if (merged.indexOf(n) < 0) merged.push(n);
+        window.__stageOutfit = merged;
+      }
+      return applyForm(true);
+    }
+    async function applyForm(align) {
+      const seq = ++bodySeq;
+      const list = (window.__stageBody || []).concat(window.__stageOutfit || []);
       const res = engine.setForm(list) || {};
-      if (!align || !list.length) return { ...res, aligned: null };
+      if (!align || !list.length) {
+        window.__stageForm = list;
+        return { ...res, aligned: null };
+      }
       await wait(420);                       // 等表情参数真写进 core 再量，不然量到的是上一档
       const bbox = await scanSilhouette(120);
       const H = app.screen.height;
@@ -241,7 +262,11 @@
       window.petStage.onCommand((cmd) => {
         if (!cmd || !cmd.type) return;
         if (cmd.type === 'motion') engine.motion(cmd.name, { hold: !!cmd.hold }).catch((e) => err('动作失败：' + ((e && e.message) || e)));
-        else if (cmd.type === 'emotion') engine.emotion(cmd.name, cmd.ms);
+        else if (cmd.type === 'emotion') {
+          // 一句里带了好几个表情（[脸红][前倾]）：一起挂上，别只剩最后一个
+          if (Array.isArray(cmd.names) && cmd.names.length) engine.emotionList(cmd.names);
+          else engine.emotion(cmd.name, cmd.ms);
+        }
         else if (cmd.type === 'say') {
           // ms 给了就按它停留，reveal 给了就按它摊平逐字速度（有语音时 = 音频时长）
           bubble.say(cmd.text, cmd.ms, cmd.reveal);
@@ -266,6 +291,8 @@
         else if (cmd.type === 'talk') engine.talk(cmd.ms);
         else if (cmd.type === 'sway-tilt') engine.setSwayTilt(cmd.value, cmd.period);
         else if (cmd.type === 'form') applyBody(cmd.names || cmd.name, !!cmd.align);
+        // 标签带出来的换装（[鞋子] [裙子切换] …）：形态是状态，走形态层不占表情层
+        else if (cmd.type === 'form-add') applyFormAdd(cmd.body, cmd.outfit);
         // 部件名表（partId → cdi3 里的中文名）：点触要按真部件分区，主进程读好推过来
         else if (cmd.type === 'parts') interaction.setParts(cmd.names || null);
         else if (cmd.type === 'voice') {
@@ -276,8 +303,10 @@
           const ids = engine.resetOutfit();
           bubble.tick('衣服复原了', 2200);
           window.__lastOutfitReset = ids;
-          // 复原服装会把所有 Clothes 参数摁回默认，Clothes2 就是体型——主人挑过的那档要重新挂回去
+          // 复原 = 所有换装都撤：标签带出来的那些先清掉，再只把主人挑的那档体型挂回去
+          window.__stageOutfit = [];
           if (window.__stageBody && window.__stageBody.length) applyBody(window.__stageBody, true);
+          else applyForm(true);
         }
         else if (cmd.type === 'error') err(cmd.text);
         else if (cmd.type === 'wait') bubble.wait(cmd.ms);

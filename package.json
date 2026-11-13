@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "doctor": "node scripts/doctor.mjs",
-    "test": "node scripts/test-gaze.mjs && node scripts/test-touch.mjs && node scripts/test-mood.mjs && node scripts/test-plan.mjs && node scripts/test-keepalive.mjs && node scripts/test-saytext.mjs"
+    "test": "node scripts/test-gaze.mjs && node scripts/test-touch.mjs && node scripts/test-mood.mjs && node scripts/test-plan.mjs && node scripts/test-forms.mjs && node scripts/test-keepalive.mjs && node scripts/test-saytext.mjs"
   },
   "keywords": [
     "live2d",
