@@ -347,8 +347,18 @@ app.whenReady().then(async () => {
     console.log(JSON.stringify({ tap: r.ev, react: { emotion: react.emotion, text: react.text, tone: react.tone, many: react.many } }));
   });
 
-  const modelFile = fs.readdirSync(MODEL_DIR).find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
+  // 模型目录没配、或者根本不存在时，不能把启动链带崩：别人 git clone 下来就是这个状态（仓库不带模型）。
+  // 以前这里直接 readdirSync，ENOENT 让后面的建窗、监听全部 reject，表现是「窗口空白 + 控制台只有一句 ENOENT」，
+  // 控制口也不起，等于连 /status 都没得查。现在读不到就当空目录，照常起，缺什么在日志里直说。
+  const listModelDir = () => {
+    try { return fs.readdirSync(MODEL_DIR); } catch (e) { return []; }
+  };
+  const modelFile = listModelDir().find((f) => f.toLowerCase().endsWith('.model3.json')) || '';
   console.log(JSON.stringify({ modelDir: MODEL_DIR, modelFile: modelFile ? '(found)' : 'MISSING', core: CORE_FILE ? '(found)' : 'MISSING' }));
+  if (!modelFile) {
+    console.log('[棉花糖] 没找到模型：把 .model3.json 和配套文件放进 ' + MODEL_DIR
+      + '，或者用 --model=/路径、环境变量 WHALE_MODEL_DIR、data\\stage-config.json 的 modelDir 指过去');
+  }
   // 舞台页的启动参数：帧率上限、头部摆动倍数都从配置来，托盘/面板改完就重载一遍。
   // 优先级：命令行参数 > 配置 > 默认。
   const stageUrl = () => {
