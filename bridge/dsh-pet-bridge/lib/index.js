@@ -122,8 +122,9 @@ const DEFAULTS = {
 };
 
 const ZONE_LABEL = {
-  hair: '头发', head: '脑袋', neck: '脖子', chest: '胸口',
-  waist: '腰', skirt: '裙摆', leg: '腿', foot: '脚', body: '身子',
+  hair: '头发', head: '脑袋', ear: '耳朵', neck: '脖子', chest: '胸口',
+  waist: '腰', skirt: '裙摆', leg: '腿', foot: '脚', tail: '尾巴',
+  hand: '手', arm: '手臂', body: '身子',
 };
 
 function pickSession(items) {
@@ -531,7 +532,9 @@ export function apply(ctx, config = {}) {
   }
 
   function describe(ev) {
-    const label = ZONE_LABEL[ev.zone] || ev.zone || '身子';
+    // 桌宠那边现在按模型真部件判定部位，会顺手带一个中文 zoneLabel；
+    // 老版本桌宠没有这个字段，照旧查表兜住
+    const label = String(ev.zoneLabel || '').trim() || ZONE_LABEL[ev.zone] || ev.zone || '身子';
     const where = (ev.nx != null && ev.ny != null) ? `（位置 ${ev.nx}, ${ev.ny}）` : '';
     const nth = zoneCount >= 2 ? `，第 ${zoneCount} 下` : '';
     const who = address();

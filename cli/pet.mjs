@@ -2,7 +2,7 @@
 // ============================================================================
 // 大肥鱼桌宠 · 指挥台（pet.mjs）
 //
-// 给「我」用的：把鲸语的语义动作语言包装成可以在任何会话里直接调的命令。
+// 给「我」用的：把这套语义动作语言包装成可以在任何会话里直接调的命令。
 // 61942 = 舞台（/api/compile /api/execute /api/stop）
 // 61943 = 外壳（/mood /say /sway /status）—— 气泡、语音、口型、待机摇摆
 //
@@ -481,6 +481,32 @@ async function main() {
     return;
   }
 
+  if (cmd === 'watch') {
+    // 会话联动：node pet.mjs watch | on | off | restart
+    // 所有 DSH 会话在干什么 → 她身上冒阶段小泡（表情也跟着换）
+    const a = String(F._[0] || '').toLowerCase();
+    const r = a === 'on' ? await jget(`${SHELL}/watch?on=1`)
+      : a === 'off' ? await jget(`${SHELL}/watch?on=0`)
+        : a === 'restart' ? await jget(`${SHELL}/watch?restart=1`)
+          : await jget(`${SHELL}/watch`);
+    console.log(JSON.stringify(r.data, null, 2));
+    return;
+  }
+
+  if (cmd === 'keepalive') {
+    // TTS 服务保活：node pet.mjs keepalive | now | warm | on | off | 3（分钟）
+    // 冷启动那句要 27 秒，保活就是让服务一直热着。状态活在舞台主进程里。
+    const a = String(F._[0] || '').toLowerCase();
+    const r = a === 'now' ? await jget(`${SHELL}/keepalive?now=1`)
+      : a === 'warm' ? await jget(`${SHELL}/keepalive?warm=1`)
+        : a === 'on' ? await jget(`${SHELL}/keepalive?on=1`)
+          : a === 'off' ? await jget(`${SHELL}/keepalive?on=0`)
+            : /^\d+$/.test(a) ? await jget(`${SHELL}/keepalive?minutes=${a}`)
+              : await jget(`${SHELL}/keepalive`);
+    console.log(JSON.stringify(r.data, null, 2));
+    return;
+  }
+
   if (cmd === 'stop') {
     await jpost(`${STAGE}/api/stop`, {});
     console.log('{"ok":true}');
@@ -531,6 +557,8 @@ const USAGE = `
   fit <full|portrait>            全身 / 近景
   cursor [on|off]                指针追踪（眼睛+头+身子跟着鼠标；不带参数=读）
   volume [0..1 或 0..100]        语音音量（不带参数=读）
+  keepalive [now|warm|on|off|分钟] 语音服务保活：探活 / 现在就热身 / 开关 / 间隔
+  watch [on|off|restart]          会话联动：所有 DSH 会话在干什么都冒阶段小泡
   peek [on|off|now|persona <档>] 窥屏：隔一阵自己瞄屏幕再搭话；persona 换她盯得多紧（不用重启）
   mood [calm|reset|restore|urge|intensity <档>]  心情 / 哄好（只清不开心）/ 彻底重来 / 从备份恢复 / 立刻问她想不想开口 / 换浓度的档
   stop                           停住并回待机

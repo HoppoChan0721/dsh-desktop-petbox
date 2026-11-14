@@ -1,20 +1,26 @@
 {
   "name": "whale-pet-shell",
-  "version": "0.3.2",
-  "description": "把鲸语 Live2D 舞台变成桌面透明桌宠的 Electron 外壳：托盘菜单、像素级穿透、尺寸面板、指针追踪、情绪端口",
-  "main": "src/main.js",
+  "version": "1.0.0",
+  "description": "棉花糖（Marshmallow）：把任意 Live2D 模型放到 Windows 桌面上当桌宠的自渲染舞台——气泡、语音口型、表情动作、点触反应、整身摇摆、托盘与设置面板",
+  "main": "stage/main.js",
   "scripts": {
     "start": "electron .",
-    "doctor": "electron scripts/doctor.js",
-    "test": "node scripts/test-pet.mjs",
-    "patch": "node patch/apply-jingyu.mjs",
-    "patch:check": "node patch/apply-jingyu.mjs --check"
+    "doctor": "node scripts/doctor.mjs",
+    "test": "node scripts/test-gaze.mjs && node scripts/test-touch.mjs && node scripts/test-mood.mjs && node scripts/test-plan.mjs && node scripts/test-forms.mjs && node scripts/test-keepalive.mjs && node scripts/test-saytext.mjs"
   },
-  "keywords": ["live2d", "desktop-pet", "electron", "jingyu", "whale"],
+  "keywords": [
+    "live2d",
+    "desktop-pet",
+    "electron",
+    "marshmallow",
+    "whale"
+  ],
   "author": "",
   "license": "MIT",
   "private": true,
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
     "electron": "45.2.1"
   }

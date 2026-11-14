@@ -1,16 +1,25 @@
-whale-pet-shell · 第三方组件与素材声明
-=====================================
+棉花糖（whale-pet-shell）· 第三方组件与素材声明
+===============================================
 
-本仓库只包含「桌宠外壳」本身的代码（窗口、托盘、控制面板、指针追踪、玩法层、可选联动）。
-它**不包含**任何 Live2D 模型、贴图、Cubism Core 运行时，也不包含鲸语（Jingyu Live2D Agent）本体。
+本仓库只包含**棉花糖自己的代码**：Live2D 舞台（渲染、气泡、语音口型、表情动作、点触、摇摆）、
+托盘与设置面板、控制口、命令行。它**不包含**任何 Live2D 模型、贴图、Cubism Core 运行时。
 
 运行时依赖
 ----------
 Electron  ^45.2.0            MIT            https://github.com/electron/electron
 Node.js   >=20               MIT            https://nodejs.org/
 
-由鲸语一侧加载、本仓库不附带的组件
-----------------------------------
+自建舞台（stage/）实际打包的两个库
+--------------------------------
+stage/vendor/pixi.min.js      PixiJS 6.5.10                 MIT   https://github.com/pixijs/pixijs
+stage/vendor/cubism4.colors.min.js  pixi-live2d-display 0.4.0 的改造构建   MIT
+  https://github.com/guansss/pixi-live2d-display
+  为什么不用官方原版：官方构建下这套模型鼻梁会出现黑色方块，换成这份改造构建就正常。
+  这份改造来自上游项目的公开分发物，改造内容上游未公开说明，升级时留意。
+  两者均为 MIT，可随仓库分发。
+
+不在仓库内、由使用者自备
+------------------------
 PixiJS 6.x                   MIT            https://github.com/pixijs/pixijs
 pixi-live2d-display          MIT            https://github.com/guansss/pixi-live2d-display
 Live2D Cubism Web Framework  Live2D Open Software License
@@ -18,17 +27,19 @@ Live2D Cubism Web Framework  Live2D Open Software License
 Live2D Cubism Core           Live2D 专有软件许可（不随任何仓库分发，需从官方 SDK 获取）
                                             https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html
 
-第三方项目
-----------
-鲸语 Jingyu Live2D Agent     https://www.bilibili.com/video/BV1KmxY66EZ3/
-  本外壳通过 HTTP 调用它的舞台与动作编译接口（/api/compile、/api/execute、/api/stop），
-  并在 patch/apply-jingyu.mjs 里对其 web/app.mjs、web/engine.mjs 做最小插入。
-  该项目的代码、文档与发布方式归原作者所有；本仓库不复制其源码。
+署名（不是依赖）
+----------------
+Jingyu Live2D Agent          https://www.bilibili.com/video/BV1KmxY66EZ3/
+  棉花糖的前身是一个给这个项目的舞台打补丁的外壳，2026-11-13 已把那套外壳与补丁脚本整体移除。
+  现在代码层面零依赖：运行时不调用它的任何接口，也不需要它的任何文件。
+  保留这条署名有两个原因：一是上面那份被改造过的 pixi-live2d-display 构建出自它的分发物；
+  二是这段历史写在 CHANGELOG / stage/HANDOFF.md 里，署名要跟它对得上。
+  该项目的代码、文档与发布方式归原作者所有。
 
 模型与角色素材
 --------------
 不随本仓库分发。模型的使用、修改、再分发受原作者与 Live2D 建模者各自的条款约束；
-下载本仓库或安装本外壳**不会**获得任何角色素材的分发权利。请向原作者渠道获取。
+下载本仓库或安装棉花糖**不会**获得任何角色素材的分发权利。
 
 备注
 ----

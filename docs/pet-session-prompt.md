@@ -297,5 +297,5 @@ ctx.tools.restrict({ allow?: string[], deny?: string[] })
 
 - **expression 不带 `strength` 会被按 0.6 编译**，结果是新旧两张脸各半透明叠在一起。下发时统一补满档
 - **同一参数被两条动作同时驱动会 400**，所以 `PARAM_OF` 要先算占用，撞了就自动把后一条往后挪
-- **换装是单向的**，只有「变成」没有「变回」。舞台的 pose 白名单也不收 `Clothes*`，想复位得从外壳直接改引擎参数，见 `src/main.js` 里的 `__petResetOutfit`
+- **换装是单向的**，只有「变成」没有「变回」。舞台的 pose 白名单也不收 `Clothes*`，想复位得从外壳直接改引擎参数，见 `stage/engine.js` 的 `resetOutfit()`
 - **引擎每帧会平滑回默认值**，只改模型核心不够，得同时改引擎的 `current` 缓存

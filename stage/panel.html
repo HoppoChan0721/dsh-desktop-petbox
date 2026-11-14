@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>棉花糖 · 设置</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font: 13px/1.5 system-ui, "Microsoft YaHei";
+      color: #d7ecf7;
+      background: linear-gradient(165deg, #13212c 0%, #0c1721 100%);
+      border: 1px solid rgba(120, 190, 235, .28);
+      border-radius: 14px;
+      padding: 14px 16px 16px;
+      user-select: none;
+    }
+    /* 标题栏就是拖动条：无边框窗口靠 -webkit-app-region 让系统接管拖拽，
+       比自己算 mousemove 稳（不会一抖一抖）。里面的按钮必须标回 no-drag，不然点不着。 */
+    h1 {
+      font-size: 14px; font-weight: 600; letter-spacing: .5px; color: #9fd8f5;
+      display: flex; justify-content: space-between; align-items: center;
+      margin: -14px -16px 0; padding: 14px 16px 8px;
+      -webkit-app-region: drag; cursor: move;
+    }
+    #x { width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: #7fa9bd; font-size: 15px; cursor: pointer; -webkit-app-region: no-drag; }
+    #x:hover { background: rgba(120, 190, 235, .14); color: #d7ecf7; }
+    section { margin-top: 14px; }
+    h2 { font-size: 12px; font-weight: 600; color: #6fa8c4; letter-spacing: .8px; margin-bottom: 8px; }
+    .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .row label { flex: 0 0 88px; color: #a9c8d8; }
+    .row .val { flex: 0 0 96px; text-align: right; color: #7fd6ff; font-variant-numeric: tabular-nums; }
+    input[type=range] { -webkit-appearance: none; flex: 1; height: 6px; border-radius: 3px; background: #2f4b5c; outline: none; }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+      background: #7fd6ff; box-shadow: 0 0 0 3px rgba(127, 214, 255, .22); cursor: pointer;
+    }
+    select { flex: 1; background: #182734; color: #d7ecf7; border: 1px solid #2f4b5c; border-radius: 7px; padding: 4px 6px; font: inherit; }
+    .check { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; cursor: pointer; }
+    .check input { accent-color: #4aa8ff; width: 14px; height: 14px; }
+    .hint { color: #6f8b9b; font-size: 12px; }
+    .good { color: #7fe0b0; }
+    .bad { color: #ff9a9a; }
+    footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    button.ghost {
+      border: 1px solid rgba(120, 190, 235, .35); background: transparent; color: #a9c8d8;
+      border-radius: 8px; padding: 6px 14px; font: inherit; cursor: pointer;
+    }
+    button.ghost:hover { background: rgba(120, 190, 235, .12); color: #d7ecf7; }
+    #status { flex: 1; align-self: center; font-size: 12px; color: #6f8b9b; }
+  </style>
+</head>
+<body>
+  <h1>棉花糖 · 设置 <button id="x" title="关闭">×</button></h1>
+
+  <section>
+    <h2>尺寸</h2>
+    <div class="row">
+      <label>大小</label>
+      <input id="size" type="range" min="420" max="1400" step="10" value="1182">
+      <span class="val" id="sizeVal">671 × 1182</span>
+    </div>
+    <div class="hint">按高度调，宽度跟着当前比例走，脚底钉住往上长。Ctrl + 滚轮也能微调。</div>
+  </section>
+
+  <section>
+    <h2>舞台</h2>
+    <div class="row">
+      <label>帧率</label>
+      <select id="fps">
+        <option value="30">30 fps · 省电</option>
+        <option value="60">60 fps · 默认</option>
+        <option value="90">90 fps · 顺滑</option>
+        <option value="0">不限</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>头部摆动</label>
+      <input id="sway" type="range" min="0.6" max="3" step="0.1" value="1.6">
+      <span class="val" id="swayVal">1.6 ×</span>
+    </div>
+    <div class="row">
+      <label>整身摇摆</label>
+      <input id="tilt" type="range" min="0" max="3" step="0.1" value="0.8">
+      <span class="val" id="tiltVal">0.8°</span>
+    </div>
+    <div class="row">
+      <label>摇摆周期</label>
+      <select id="tiltPeriod">
+        <option value="5">5 秒 · 快</option>
+        <option value="7">7 秒 · 默认</option>
+        <option value="9">9 秒 · 慢</option>
+        <option value="12">12 秒 · 很慢</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>绕圈发晕</label>
+      <select id="spin">
+        <option value="2">2 圈</option>
+        <option value="3">3 圈</option>
+        <option value="4">4 圈 · 默认</option>
+        <option value="6">6 圈</option>
+        <option value="8">8 圈</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>语音音量</label>
+      <input id="volume" type="range" min="0" max="1" step="0.05" value="0.6">
+      <span class="val" id="volumeVal">60%</span>
+    </div>
+    <div class="hint">头部摆动是头和上半身那层参数晃动，整身摇摆是整个人绕脚底轻转，两层叠着一起用。改帧率或头部摆动要重新载入舞台，位置不变；整身摇摆和音量是即时生效的。</div>
+  </section>
+
+  <section>
+    <h2>语音</h2>
+    <label class="check"><input id="ttsKeepAlive" type="checkbox"> 服务保活（冷了就拉起来热身，别让第一句等 27 秒）</label>
+    <div class="row">
+      <label>探活间隔</label>
+      <select id="ttsKeepMinutes">
+        <option value="1">1 分钟</option>
+        <option value="3">3 分钟</option>
+        <option value="5">5 分钟 · 默认</option>
+        <option value="10">10 分钟</option>
+        <option value="20">20 分钟</option>
+      </select>
+    </div>
+    <div class="hint" id="ttsState">正在看语音服务…</div>
+  </section>
+
+  <section>
+    <h2>开关</h2>
+    <label class="check"><input id="interactive" type="checkbox"> 分区互动（点她按部位反应）</label>
+    <label class="check"><input id="cursorTrack" type="checkbox"> 指针追踪（视线和身体跟着鼠标）</label>
+    <label class="check"><input id="smartIgnore" type="checkbox"> 智能穿透（只在角色身上吃鼠标）</label>
+    <label class="check"><input id="bridge" type="checkbox"> 点触叫醒 DSH 会话</label>
+    <label class="check"><input id="onTop" type="checkbox"> 置顶显示</label>
+    <label class="check"><input id="tickBubble" type="checkbox"> 阶段气泡（会话进度）</label>
+    <label class="check"><input id="replyBtn" type="checkbox"> 回复钮（说完话冒出来）</label>
+    <label class="check"><input id="replyAlways" type="checkbox"> 回复钮常驻（一直挂着，不用等她开口）</label>
+    <label class="check"><input id="sessionWatch" type="checkbox"> 会话联动（任何会话在跑都冒小泡）</label>
+  </section>
+
+  <footer>
+    <span id="status"></span>
+    <button class="ghost" id="close">关闭</button>
+  </footer>
+
+  <script src="panel.js"></script>
+</body>
+</html>
