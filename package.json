@@ -1,6 +1,6 @@
 {
   "name": "whale-pet-shell",
-  "version": "0.3.2",
+  "version": "1.0.0",
   "description": "棉花糖（Marshmallow）：把任意 Live2D 模型放到 Windows 桌面上当桌宠的自渲染舞台——气泡、语音口型、表情动作、点触反应、整身摇摆、托盘与设置面板",
   "main": "stage/main.js",
   "scripts": {

@@ -1271,6 +1271,8 @@ app.whenReady().then(async () => {
     // 桥（dsh-pet-bridge，61944）现在的配置是 petSayUrl=61943/say、petStageUrl=61942，
     // 所以控制口额外监听这两个端口，桥不用改一行配置就能连上新舞台。
     '/status': () => ({
+      // 版本号从 package.json 来（Electron 自己读的），1.0.0 之后对外报版本就看这个
+      version: app.getVersion(),
       port: ACTUAL_PORT || PORT,
       ports: listenPorts(),
       role: ROLE,
