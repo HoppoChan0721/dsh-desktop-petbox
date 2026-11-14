@@ -143,6 +143,16 @@
       this.swayTiltPeriod = Number(options.swayTiltPeriod) > 0.5 ? Number(options.swayTiltPeriod) : 7;
       this.swayAngle = 0;      // 当前这一帧的倾角（度），气泡 / 回复钮要拿它补坐标
 
+      // 个体差异（只有同台的副实例会开）：主人那只必须一个模子刻出来的稳定，
+      // 但桌上站三四只的时候，如果都用同一份待机曲线、同一个相位，看起来就是一群机器人同步摇头。
+      // 开了之后：待机曲线相位错开、幅度各不相同、呼吸快慢不同、整身摇摆错拍，
+      // 外加自己会随手眨眼/歪头/看旁边/换个表情。
+      this.persona = null;
+      this.personaNext = 0;        // 下一次小动作倒计时（秒）
+      this.personaExprNext = 0;    // 下一次换表情倒计时（秒）
+      this.personaCurveScale = new Map();
+      this.personaExprPool = [];
+
       this.mouth = 0;
       this.mouthTarget = 0;
       this.mouthUntil = 0;
@@ -525,6 +535,7 @@
       }
       const target = this.buildTarget();
       this.commit(target, dt);
+      this.tickPersona(dt);
       this.applyWholeSway();
     }
 
@@ -551,7 +562,8 @@
       const period = Number(this.swayTiltPeriod) > 0.5 ? Number(this.swayTiltPeriod) : 7;
       const w = (Math.PI * 2) / period;
       // 用 sin 而不是三角波：两头自然减速，看着像重心在挪，不像被谁推着晃
-      this.swayAngle = amp * Math.sin(this.clock * w);
+      // 相位也带个体偏移：几只并排站的时候，错开摇摆的节拍才不会像连在一根轴上
+      this.swayAngle = amp * Math.sin((this.clock + (this.persona ? this.persona.swayPhase : 0)) * w);
       let feet = null;
       try { feet = this.swayPivotFn ? this.swayPivotFn() : null; } catch (err) { feet = null; }
       try {
@@ -626,10 +638,14 @@
 
     applyIdle({ set }) {
       if (!this.idle) return;
-      const phase = this.clock;
+      const pe = this.persona;
+      // 个体差异只影响相位/幅度，不影响主人那只（persona 为 null 时全是 0/1）
+      const phase = this.clock + (pe ? pe.idlePhase : 0);
       const env = this.moodEnv();
-      const k = this.swayScale * (env ? 1 + (env.sway - 1) * env.w : 1);
-      set('ParamBreath', TUNE.breathBase + TUNE.breathAmp * Math.sin(phase * TUNE.breathHz));
+      const k = this.swayScale * (pe ? pe.swayScale : 1) * (env ? 1 + (env.sway - 1) * env.w : 1);
+      const breathHz = TUNE.breathHz * (pe ? pe.breathHz : 1);
+      const breathAmp = TUNE.breathAmp * (pe ? pe.breathAmp : 1);
+      set('ParamBreath', TUNE.breathBase + breathAmp * Math.sin(phase * breathHz));
       // 摆动频率都提到 4~7 秒一个来回：以前是 11~17 秒一轮，慢到看不出「在晃」，
       // 再加上幅度只有 1~3 度，主人试了两次都说「没生效」。
       set('AngleX', TUNE.swayX * k * Math.sin(phase * 1.1));
@@ -645,7 +661,65 @@
       const idle = this.idleMotion;
       if (idle && idle.curves.length) {
         const t = idle.duration > 0 ? phase % idle.duration : 0;
-        for (const c of idle.curves) set(c.id, sampleCurve(c.segments, t));
+        for (const c of idle.curves) {
+          // 每条曲线的幅度也各给一个固定倍率：同一份待机动作在她身上做大一半、在另一只身上收一点，
+          // 站在一起就不像放录像了（倍率按参数 id 缓存，别每帧重掷，会抖）
+          let sc = 1;
+          if (pe) {
+            sc = this.personaCurveScale.get(c.id);
+            if (sc === undefined) { sc = pe.curveScale[0] + Math.random() * (pe.curveScale[1] - pe.curveScale[0]); this.personaCurveScale.set(c.id, sc); }
+          }
+          set(c.id, sampleCurve(c.segments, t) * sc);
+        }
+      }
+    }
+
+    // ---- 个体差异（同台的副实例用）-------------------------------------------
+    // opts: { expressions: [...], idlePhase, swayScale, breathHz, breathAmp, curveScale:[lo,hi],
+    //         actionGap:[lo,hi], exprGap:[lo,hi], swayPhase }
+    setPersona(opts) {
+      const o = opts || {};
+      const rnd = (a, b) => a + Math.random() * (b - a);
+      const gap = (v, d) => (Array.isArray(v) && v.length === 2 && v[0] > 0 && v[1] > v[0] ? v : d);
+      this.persona = {
+        idlePhase: Number.isFinite(Number(o.idlePhase)) ? Number(o.idlePhase) : rnd(0, 6.5),
+        swayScale: Number.isFinite(Number(o.swayScale)) ? Number(o.swayScale) : rnd(0.62, 1.32),
+        breathHz: Number.isFinite(Number(o.breathHz)) ? Number(o.breathHz) : rnd(0.85, 1.2),
+        breathAmp: Number.isFinite(Number(o.breathAmp)) ? Number(o.breathAmp) : rnd(0.82, 1.22),
+        curveScale: gap(o.curveScale, [0.78, 1.18]),
+        actionGap: gap(o.actionGap, [rnd(3.5, 6.5), rnd(8, 15)]),
+        exprGap: gap(o.exprGap, [rnd(9, 16), rnd(20, 38)]),
+        swayPhase: Number.isFinite(Number(o.swayPhase)) ? Number(o.swayPhase) : rnd(0, 7),
+      };
+      this.personaCurveScale.clear();
+      this.personaExprPool = Array.isArray(o.expressions) ? o.expressions.filter(Boolean).slice() : [];
+      this.personaNext = rnd(1.5, 4);
+      this.personaExprNext = rnd(4, 12);
+      return this.persona;
+    }
+
+    // 自己找点事做：眨眼、歪头、看旁边、偶尔点头，再偶尔换个表情。
+    // 间隔用各自随机出来的，不是固定节拍——固定节拍就是「一群机器人」的来源。
+    tickPersona(dt) {
+      const pe = this.persona;
+      if (!pe) return;
+      this.personaNext -= dt;
+      this.personaExprNext -= dt;
+      if (this.personaNext <= 0) {
+        this.personaNext = pe.actionGap[0] + Math.random() * (pe.actionGap[1] - pe.actionGap[0]);
+        const pick = Math.random();
+        if (pick < 0.34) this.blink();
+        else if (pick < 0.56) this.tilt(Math.random() < 0.5 ? 'left' : 'right');
+        else if (pick < 0.74) {
+          const dirs = ['left', 'right', 'up', 'down'];
+          this.look(dirs[Math.floor(Math.random() * dirs.length)], 1200 + Math.random() * 1200);
+        } else if (pick < 0.88) this.nod();
+        else this.smile();
+      }
+      if (this.personaExprNext <= 0) {
+        this.personaExprNext = pe.exprGap[0] + Math.random() * (pe.exprGap[1] - pe.exprGap[0]);
+        const pool = this.personaExprPool;
+        if (pool.length) this.emotion(pool[Math.floor(Math.random() * pool.length)], 2000 + Math.random() * 1400);
       }
     }
 
@@ -763,6 +837,14 @@
         swayTilt: +Number(this.swayTiltDeg).toFixed(2),
         swayAngle: +Number(this.swayAngle).toFixed(3),
         mood: this.moodState ? this.moodState.name : null,
+        // 个体差异（只有同台副实例有）：排查「几只看起来还是同步」时看这几个数
+        persona: this.persona ? {
+          idlePhase: +this.persona.idlePhase.toFixed(2),
+          swayScale: +this.persona.swayScale.toFixed(2),
+          breathHz: +this.persona.breathHz.toFixed(2),
+          swayPhase: +this.persona.swayPhase.toFixed(2),
+          pool: this.personaExprPool.length,
+        } : null,
       };
     }
   }

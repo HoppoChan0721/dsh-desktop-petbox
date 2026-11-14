@@ -384,6 +384,21 @@
       } catch (e) { return { motions: [], expressions: [], error: String(e) }; }
     })();
     window.__stageInfo = { modelFile, fit: fitInfo, ...groups, engine: engine.state() };
+
+    // ---- 同台每只的「脾气」（只有副实例开）------------------------------------
+    // 主人在 2026-11-13 晚上说：几只小伙伴动作幅度一样、摇头时机也同步，像一群机器人。
+    // 原因是它们跑的是同一份待机曲线、同一个相位、同一套摆动参数。
+    // 这里给每只随机一份：相位错开、幅度不同、呼吸快慢不同、整身摇摆错拍，
+    // 还会自己随手眨眼/歪头/看旁边，偶尔换个表情。主人那只（role=main）一点都不动。
+    if (qs.get('persona') === '1') {
+      // 只用「脸」上的表情：换装（ClothesN）、道具（钢盆/单片眼镜）、姿势（前倾/食指）都不该随机套，
+      // 不然每隔半分钟脑袋上就多一个铁盆。模型没做的名字会被下面这层过滤掉，换模型也不炸。
+      const FACE_EXPR = ['眯眼', '屑屑眼', '＞＜', '爱心眼', '圈圈眼', '流冷汗', '流泪', '黑脸', '脸红'];
+      const have = groups.expressions || [];
+      const pool = FACE_EXPR.filter((n) => have.indexOf(n) >= 0);
+      engine.setPersona({ expressions: pool });
+      window.__stagePersona = () => engine.persona;
+    }
     // 帧率：真实节拍看 `__stagePace()`（屏幕是几 Hz、分频几帧、实际多少 fps）。
     // 模型每秒更新几次 = fps ÷ 1，因为渲染和模型更新同一个循环。
     window.__stageStats = () => ({ rawRafFps: Math.round(1000 / frameMs), maxFps: Math.round(1000 / stepMs), pace: window.__stagePace(), size: { w: app.screen.width, h: app.screen.height } });

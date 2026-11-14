@@ -369,6 +369,9 @@ app.whenReady().then(async () => {
     const volArg = arg('volume', '');
     const vol = volArg !== '' ? Number(volArg) : Number(cfg.voiceVolume);
     if (Number.isFinite(vol)) q.set('volume', String(Math.min(1, Math.max(0, vol))));
+    // 副实例：让页面给自己随机一份「脾气」（待机相位/幅度/小动作节奏），几只站一起才不会像机器人军团。
+    // 主人那只不传，保持原来的手感。
+    if (IS_PEER) q.set('persona', '1');
     return 'pet://stage/index.html?' + q.toString();
   };
   const loadStage = () => win.loadURL(stageUrl()).catch(() => {});

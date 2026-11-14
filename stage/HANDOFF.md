@@ -327,6 +327,23 @@ node stage\cli.mjs menu                        # 把菜单结构拍平成文字�
 - 自检：CDP 里 `__stageReply.open()` 后读 `#reply-card` 的 `getBoundingClientRect()`，y 必须 ≥ 脚底；
   `interaction.ignored` 在卡上应为 false、在透明处 true。截图看 `F:\DaFeiYu\out\stage\reply-bottom.png`。
 
+同台的每只各有各的脾气（2026-11-14，主人报「动作幅度一样、摇头还同步，像一群机器人」）：
+
+- 根因：副实例和主人那只跑的是同一份 Idle 曲线、同一套摆动参数；`clock` 虽然各走各的，但几只同时起来
+  相位也差不了多少，站一起就是复制粘贴。
+- 做法：`engine.setPersona(opts)` 给一只随机一份个体参数（**只有副实例开**，主人那只 `persona` 恒为 null）：
+  - `idlePhase`（0~6.5s）：`applyIdle` 里 `phase = clock + idlePhase`，待机曲线整体错开；
+  - `curveScale`（0.78~1.18）：每条 Idle 曲线按参数 id 缓存一个固定倍率（**别每帧重掷，会抖**）；
+  - `swayScale`（0.62~1.32）× 呼吸 `breathHz`/`breathAmp`，头摆和呼吸快慢都不一样；
+  - `swayPhase`（0~7s）：`applyWholeSway` 的 sin 相位偏移，整身摇摆错拍。
+- 小动作：`tickPersona(dt)` 每 3.5~15 秒随机一个（眨眼 / 歪头 / 看旁边 / 点头 / 笑），
+  每 20~38 秒随机换个表情。间隔也是各自随机出来的——固定节拍就是「机器人感」的来源。
+- 表情池只放「脸」那一档（眯眼/屑屑眼/＞＜/爱心眼/圈圈眼/流冷汗/流泪/黑脸/脸红），
+  换装和道具（钢盆/单片眼镜/食指/前倾）不参与，不然隔半分钟脑袋上多个铁盆。
+  池子是从 `settings.expressions` 里求交集，换模型没有这些名字也不会炸。
+- 开关：`stageUrl()` 里只有 `IS_PEER` 才带 `persona=1`，页面 `qs.get('persona') === '1'` 才 `setPersona`。
+- 自检：`/state.persona`（主实例必须 null）；peer 的端口在 `/peer/list`，直接 curl 它的 `/state` 比参数。
+
 同台不设数量上限（2026-11-13，主人要「按各自机器性能叫，别设上限」）：
 
 - 以前 `peerChild` 是单个进程句柄，`spawnPeer()` 见它有 pid 就直接返回 `already`，第二次点等于空转。
