@@ -1,5 +1,14 @@
 # 变更记录
 
+## 未发布
+
+### 没配模型时不再把启动流程带崩
+- 别人 `git clone` 下来仓库里没有 `models\`，老代码在启动链最前面直接 `readdirSync(MODEL_DIR)`，
+  `ENOENT` 让后面的建窗、监听全部 reject：窗口空白、控制台只有一句 `ENOENT`、控制口也不起，连 `/status` 都没得查。
+- 现在目录读不到就当空表，照常起，日志里打 `modelFile: MISSING` 和一行怎么指路的提示（`--model` / `WHALE_MODEL_DIR` / `data\stage-config.json`）。
+- 实测：把 v1.0.0 的包解到空目录、`node_modules` 复用，不给模型 → 启动后 `/status` 正常返回、tray 正常；
+  给上模型目录和 Cubism Core → 画面和本机一致（55fps 节拍、体型预设、表情、同台都在）。
+
 ## 1.0.0 — 2026-11-14
 
 > 第一个正式版本：从 0.3.2 之后这一整批改动收进来，也是**不再依赖旧外壳**的第一版。
